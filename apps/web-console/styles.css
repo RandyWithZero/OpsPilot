@@ -837,6 +837,111 @@ tr:hover td {
   margin-bottom: 14px;
 }
 
+.workflow-run-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 16px 0;
+}
+
+.run-list,
+.run-timeline {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.run-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.run-list li,
+.run-step {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-soft);
+}
+
+.run-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.run-list li.active {
+  border-color: rgba(23, 93, 220, 0.35);
+  background: #f5f9ff;
+}
+
+.run-list strong,
+.run-list small,
+.run-step strong,
+.run-step small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-step {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.run-step.completed {
+  border-color: rgba(22, 163, 106, 0.32);
+}
+
+.run-step.failed {
+  border-color: rgba(191, 45, 45, 0.38);
+}
+
+.step-main {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+}
+
+.step-index {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.gate-copy {
+  min-width: 0;
+  margin: 0;
+  border-left: 3px solid var(--line-strong);
+  padding-left: 10px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.gate-copy.ok {
+  border-color: var(--green);
+}
+
+.gate-copy.blocked {
+  border-color: var(--gold);
+  color: #6f5600;
+}
+
+.error-block {
+  color: var(--red);
+}
+
 .workflow-builder {
   display: grid;
   gap: 18px;

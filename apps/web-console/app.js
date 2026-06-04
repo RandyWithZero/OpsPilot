@@ -182,7 +182,7 @@ const seed = {
   ],
   workflowVersions: {
     wfl_mock_release: [
-      { id: "wfv_mock_release_v1", workflow_id: "wfl_mock_release", version: "1", status: "active", nodes: [{ id: "trigger", type: "trigger", name: "发布触发" }, { id: "agent-check", type: "agent_task", name: "智能体巡检", agent_id: "agt_mock_ops", skill_id: "skl_mock_release", model_provider_id: "mdl_mock_deepseek" }, { id: "approval", type: "approval", name: "人工确认" }], edges: [{ from_node_id: "trigger", to_node_id: "agent-check" }, { from_node_id: "agent-check", to_node_id: "approval" }], created_at: "2026-06-04T08:07:00Z", updated_at: "2026-06-04T08:07:00Z" },
+      { id: "wfv_mock_release_v1", workflow_id: "wfl_mock_release", version: "1", status: "active", nodes: [{ id: "trigger", type: "trigger", name: "发布触发" }, { id: "agent-check", type: "agent_task", name: "智能体巡检", agent_id: "agt_mock_ops", skill_id: "skl_mock_release", model_provider_id: "mdl_mock_deepseek" }, { id: "approval", type: "approval", name: "人工确认" }, { id: "release-result", type: "result", name: "发布结论" }], edges: [{ from_node_id: "trigger", to_node_id: "agent-check" }, { from_node_id: "agent-check", to_node_id: "approval" }, { from_node_id: "approval", to_node_id: "release-result" }], created_at: "2026-06-04T08:07:00Z", updated_at: "2026-06-04T08:07:00Z" },
     ],
   },
   workflowRuns: [
@@ -217,6 +217,25 @@ const seed = {
         { node_id: "approval", name: "人工确认", type: "approval", status: "blocked", assignee_role: "Operator", output: "上游失败，审批未开放。" },
       ],
       error_output: "Connection refused: qa-runner-03:22\n建议先恢复资产连通性后重跑。",
+    },
+    {
+      id: "wfr_mock_release_1",
+      workflow_id: "wfl_mock_release",
+      workflow_version_id: "wfv_mock_release_v1",
+      project_id: "prj_mock_core",
+      trigger_type: "manual",
+      triggered_by: "manual:web-console",
+      status: "running",
+      started_at: "2026-06-04T08:22:00Z",
+      created_at: "2026-06-04T08:20:00Z",
+      updated_at: "2026-06-04T08:24:00Z",
+      steps: [
+        { id: "wfs_mock_trigger", workflow_run_id: "wfr_mock_release_1", workflow_id: "wfl_mock_release", workflow_version_id: "wfv_mock_release_v1", node_id: "trigger", node_type: "trigger", step_type: "trigger", sequence: 1, name: "发布触发", predecessor_node_ids: [], status: "completed", output: { trigger: "manual" }, created_at: "2026-06-04T08:20:00Z", updated_at: "2026-06-04T08:22:00Z", started_at: "2026-06-04T08:22:00Z", completed_at: "2026-06-04T08:22:00Z" },
+        { id: "wfs_mock_agent", workflow_run_id: "wfr_mock_release_1", workflow_id: "wfl_mock_release", workflow_version_id: "wfv_mock_release_v1", node_id: "agent-check", node_type: "agent_task", step_type: "agent", sequence: 2, name: "智能体巡检", agent_id: "agt_mock_ops", skill_id: "skl_mock_release", model_provider_id: "mdl_mock_deepseek", predecessor_node_ids: ["trigger"], status: "completed", output: { summary: "QA 环境就绪，质量门禁通过。" }, created_at: "2026-06-04T08:20:00Z", updated_at: "2026-06-04T08:23:00Z", started_at: "2026-06-04T08:22:20Z", completed_at: "2026-06-04T08:23:00Z" },
+        { id: "wfs_mock_approval", workflow_run_id: "wfr_mock_release_1", workflow_id: "wfl_mock_release", workflow_version_id: "wfv_mock_release_v1", node_id: "approval", node_type: "approval", step_type: "manual", sequence: 3, name: "人工确认", predecessor_node_ids: ["agent-check"], status: "pending", created_at: "2026-06-04T08:20:00Z", updated_at: "2026-06-04T08:24:00Z" },
+        { id: "wfs_mock_result", workflow_run_id: "wfr_mock_release_1", workflow_id: "wfl_mock_release", workflow_version_id: "wfv_mock_release_v1", node_id: "release-result", node_type: "result", step_type: "result", sequence: 4, name: "发布结论", predecessor_node_ids: ["approval"], status: "pending", created_at: "2026-06-04T08:20:00Z", updated_at: "2026-06-04T08:24:00Z" },
+      ],
+      error_output: "",
     },
   ],
   auditEvents: [
@@ -268,7 +287,7 @@ function showApp() {
 
 async function loadData(forceToast = false) {
   try {
-    const [users, projects, assets, environments, gitlabProfiles, vcsOperations, vcsWebhooks, files, testCases, testSuites, testRuns, reports, qualityGates, agents, skills, credentials, modelProviders, workflows, auditEvents] = await Promise.all([
+    const [users, projects, assets, environments, gitlabProfiles, vcsOperations, vcsWebhooks, files, testCases, testSuites, testRuns, reports, qualityGates, agents, skills, credentials, modelProviders, workflows, workflowRuns, auditEvents] = await Promise.all([
       apiGet("/v1/users"),
       apiGet("/v1/projects"),
       apiGet("/v1/assets"),
@@ -287,6 +306,7 @@ async function loadData(forceToast = false) {
       apiGet("/v1/credentials"),
       apiGet("/v1/model-providers"),
       apiGet("/v1/workflows"),
+      apiGet("/v1/workflow-runs"),
       apiGet("/v1/audit-events"),
     ]);
     const workflowVersions = {};
@@ -321,7 +341,7 @@ async function loadData(forceToast = false) {
     state.modelProviders = modelProviders;
     state.workflows = workflows;
     state.workflowVersions = workflowVersions;
-    state.workflowRuns = [];
+    state.workflowRuns = workflowRuns;
     state.auditEvents = auditEvents;
     if (forceToast) toast("基础服务数据已刷新。");
   } catch (error) {
@@ -651,7 +671,7 @@ function renderWorkflowRuns() {
     <div class="metric-grid">
       ${metric("运行记录", state.workflowRuns.length, "mock adapter: /v1/workflow-runs")}
       ${metric("执行中", state.workflowRuns.filter((run) => ["queued", "running"].includes(run.status)).length, "智能体或 Skill 正在处理")}
-      ${metric("待人工", state.workflowRuns.filter((run) => run.status === "pending_manual").length, "审批节点需人工复核")}
+      ${metric("待人工", state.workflowRuns.filter((run) => run.status === "pending_manual" || (run.steps || []).some((step) => workflowRunStepManual(step) && ["pending", "waiting_approval"].includes(step.status))).length, "审批节点需人工复核")}
       ${metric("失败", state.workflowRuns.filter((run) => run.status === "failed").length, "查看错误输出")}
     </div>
     <div class="toolbar">
@@ -773,10 +793,10 @@ function bindFileToolbar() {
 function filteredWorkflowRuns() {
   const query = [state.query, state.filters.localQuery].filter(Boolean).join(" ").toLowerCase();
   return state.workflowRuns.filter((run) => {
-    const text = JSON.stringify({ ...run, workflow: workflowName(run.workflow_id), project: projectName(run.project_id) }).toLowerCase();
+    const text = JSON.stringify({ ...run, workflow: workflowName(run.workflow_id), project: projectName(workflowRunProjectId(run)), trigger: workflowRunTrigger(run), error: workflowRunError(run) }).toLowerCase();
     if (query && !query.split(/\s+/).every((token) => text.includes(token))) return false;
     if (state.filters.status && state.filters.status !== "all" && run.status !== state.filters.status) return false;
-    if (state.filters.project_id && state.filters.project_id !== "all" && run.project_id !== state.filters.project_id) return false;
+    if (state.filters.project_id && state.filters.project_id !== "all" && workflowRunProjectId(run) !== state.filters.project_id) return false;
     return true;
   });
 }
@@ -786,8 +806,8 @@ function workflowRunTable(runs) {
   return `<table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${runs.map((run) => `<tr>
     <td><span class="row-title"><button data-run-id="${escapeAttr(run.id)}">${escapeHtml(run.id)}</button><small>${escapeHtml(run.workflow_version_id)}</small></span></td>
     <td>${workflowName(run.workflow_id)}</td>
-    <td>${projectName(run.project_id)}</td>
-    <td>${escapeHtml(run.triggered_by)}</td>
+    <td>${projectName(workflowRunProjectId(run))}</td>
+    <td>${escapeHtml(workflowRunTrigger(run))}</td>
     <td>${statusPill(run.status)}</td>
     <td>${date(run.updated_at)}</td>
   </tr>`).join("")}</tbody></table>`;
@@ -796,11 +816,11 @@ function workflowRunTable(runs) {
 function workflowRunDetail(run) {
   return `
     <div class="detail-heading">
-      <div><h2>${escapeHtml(run.id)}</h2><p class="muted">${workflowName(run.workflow_id)} · ${projectName(run.project_id)}</p></div>
+      <div><h2>${escapeHtml(run.id)}</h2><p class="muted">${workflowName(run.workflow_id)} · ${projectName(workflowRunProjectId(run))}</p></div>
       ${statusPill(run.status)}
     </div>
     <dl class="kv">
-      <dt>触发源</dt><dd>${escapeHtml(run.triggered_by)}</dd>
+      <dt>触发源</dt><dd>${escapeHtml(workflowRunTrigger(run))}</dd>
       <dt>开始时间</dt><dd>${date(run.started_at)}</dd>
       <dt>更新时间</dt><dd>${date(run.updated_at)}</dd>
       <dt>接口边界</dt><dd><span class="pill">mock /v1/workflow-runs</span></dd>
@@ -808,21 +828,49 @@ function workflowRunDetail(run) {
     <h3>步骤状态</h3>
     <ol class="run-step-list">${(run.steps || []).map((step, index) => workflowRunStep(step, index)).join("")}</ol>
     <h3>错误输出</h3>
-    ${run.error_output ? jsonBlock(run.error_output) : `<div class="empty-state compact">暂无错误输出。</div>`}
+    ${workflowRunError(run) ? jsonBlock(workflowRunError(run)) : `<div class="empty-state compact">暂无错误输出。</div>`}
   `;
 }
 
 function workflowRunStep(step, index) {
-  const manual = ["approval", "manual"].includes(step.type) || ["waiting_approval", "blocked"].includes(step.status);
+  const type = workflowRunStepType(step);
+  const manual = workflowRunStepManual(step);
   return `<li class="${manual ? "manual-step" : ""}">
     <span>${index + 1}</span>
     <div>
       <div class="step-head"><strong>${escapeHtml(step.name)}</strong>${statusPill(step.status)}</div>
-      <small>${workflowNodeTypeLabel(step.type)}${step.assignee_role ? ` · ${displayRole(step.assignee_role)}` : ""}</small>
-      <p>${escapeHtml(step.output || "暂无输出。")}</p>
+      <small>${workflowNodeTypeLabel(type)}${step.assignee_role ? ` · ${displayRole(step.assignee_role)}` : ""}</small>
+      <p>${escapeHtml(workflowRunStepOutput(step))}</p>
       ${manual ? `<div class="permission-denied compact"><strong>人工控制节点</strong><span>该步骤必须等待授权角色处理，不能自动跳过。</span></div>` : ""}
     </div>
   </li>`;
+}
+
+function workflowRunProjectId(run) {
+  return run.project_id || state.workflows.find((workflow) => workflow.id === run.workflow_id)?.project_id || "";
+}
+
+function workflowRunTrigger(run) {
+  return run.triggered_by || run.trigger_type || "manual";
+}
+
+function workflowRunError(run) {
+  const stepErrors = (run.steps || []).map((step) => redactSensitiveString(step.error || "")).filter(Boolean);
+  return run.error_output || run.error || stepErrors.join("\n");
+}
+
+function workflowRunStepType(step) {
+  return step.type || step.node_type || step.step_type || "";
+}
+
+function workflowRunStepManual(step) {
+  return ["approval", "manual"].includes(workflowRunStepType(step)) || step.step_type === "manual" || ["waiting_approval", "blocked"].includes(step.status);
+}
+
+function workflowRunStepOutput(step) {
+  if (typeof step.output === "string") return step.output || "暂无输出。";
+  const output = redactClientPayload(step.output || {});
+  return Object.keys(output).length ? JSON.stringify(output) : "暂无输出。";
 }
 
 function bindWorkflowRunToolbar() {
@@ -1060,7 +1108,7 @@ function tableFor(type, rows) {
     skills: ["Skill", "运行时", "能力", "包文件", "状态", "操作"],
     credentials: ["模型 Key", "密钥引用", "指纹", "状态", "操作"],
     modelProviders: ["供应商", "凭据", "模型", "Base URL", "状态", "操作"],
-    workflows: ["流程", "项目", "版本", "节点", "状态", "操作"],
+    workflows: ["流程", "项目", "版本", "节点", "运行", "状态", "操作"],
   }[type];
   return `<table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => rowFor(type, row)).join("")}</tbody></table>`;
 }
@@ -1087,13 +1135,14 @@ function rowFor(type, row) {
   if (type === "credentials") return `<tr><td>${titleCell(row.id, row.name, "provider:model_provider")}</td><td>${escapeHtml(row.secret_ref || "安全引用")}</td><td>${escapeHtml(row.secret_fingerprint || "未生成")}</td><td>${statusPill(row.status)}</td><td>${rowActions(type, row)}</td></tr>`;
   if (type === "modelProviders") return `<tr><td>${titleCell(row.id, row.name, row.provider)}</td><td>${credentialName(row.credential_ref_id)}</td><td>${tags(row.models)}</td><td>${escapeHtml(row.base_url || "默认")}</td><td>${statusPill(row.status)}</td><td>${rowActions(type, row)}</td></tr>`;
   const versions = state.workflowVersions[row.id] || [];
-  return `<tr><td>${titleCell(row.id, row.name, row.description)}</td><td>${projectName(row.project_id)}</td><td>${versions.length} 个版本</td><td>${workflowNodeCount(row.id)} 个节点</td><td>${statusPill(row.status)}</td><td>${rowActions(type, row)}</td></tr>`;
+  return `<tr><td>${titleCell(row.id, row.name, row.description)}</td><td>${projectName(row.project_id)}</td><td>${versions.length} 个版本</td><td>${workflowNodeCount(row.id)} 个节点</td><td>${workflowRunsFor(row.id).length} 次</td><td>${statusPill(row.status)}</td><td>${rowActions(type, row)}</td></tr>`;
 }
 
 function rowActions(type, row) {
   const statusLabel = statusActionLabel(type, row);
   if (type === "workflows") return `<div class="action-row">
     ${actionButton("open", "详情", "ghost-button small", `open-${type}-${row.id}`, { id: row.id, type })}
+    ${actionButton("link", "创建并启动", "ghost-button small", `run-${row.id}`, { actionName: "create-start-workflow-run", id: row.id })}
     ${actionButton("link", "编辑画布", "primary-button small", `builder-${row.id}`, { actionName: "open-workflow-builder", id: row.id })}
     ${actionButton("edit", "编辑", "ghost-button small", `edit-${type}-${row.id}`, { type, id: row.id })}
     ${statusLabel ? actionButton("status", statusLabel, "ghost-button small", `status-${type}-${row.id}`, { type, id: row.id }) : ""}
@@ -1162,7 +1211,7 @@ function detailPairs(type, row) {
   if (type === "credentials") return [["Provider", escapeHtml(row.provider)], ["Secret Ref", escapeHtml(row.secret_ref || "安全引用")], ["指纹", escapeHtml(row.secret_fingerprint || "未生成")], ...common];
   if (type === "modelProviders") return [["Provider", escapeHtml(row.provider)], ["Credential", credentialName(row.credential_ref_id)], ["Base URL", escapeHtml(row.base_url || "默认")], ["模型", tags(row.models)], ...common];
   const versions = state.workflowVersions[row.id] || [];
-  return [["项目", projectName(row.project_id)], ["说明", escapeHtml(row.description || "暂无说明")], ["当前版本", escapeHtml(row.active_version_id || "未激活")], ["版本数", String(versions.length)], ["节点总数", String(workflowNodeCount(row.id))], ...common];
+  return [["项目", projectName(row.project_id)], ["说明", escapeHtml(row.description || "暂无说明")], ["当前版本", escapeHtml(row.active_version_id || "未激活")], ["版本数", String(versions.length)], ["节点总数", String(workflowNodeCount(row.id))], ["运行次数", String(workflowRunsFor(row.id).length)], ...common];
 }
 
 function relationshipControls(type, row) {
@@ -1240,7 +1289,7 @@ function relationshipList(type, row) {
   if (type === "skills") return listItems(state.agents.filter((agent) => agent.skill_ids?.includes(row.id)).map((agent) => `智能体 ${escapeHtml(agent.name)}`));
   if (type === "credentials") return listItems(state.modelProviders.filter((provider) => provider.credential_ref_id === row.id).map((provider) => `供应商 ${escapeHtml(provider.name)}`));
   if (type === "modelProviders") return listItems(state.agents.filter((agent) => agent.model_provider_id === row.id).map((agent) => `智能体 ${escapeHtml(agent.name)}`));
-  if (type === "workflows") return workflowVersionList(row.id);
+  if (type === "workflows") return `${workflowVersionList(row.id)}${workflowRunPanel(row)}`;
   return listItems(state.projects.filter((project) => project.member_ids?.includes(row.id) || project.owner_id === row.id).map((project) => `项目 ${escapeHtml(project.key)}`));
 }
 
@@ -1809,7 +1858,10 @@ function workflowVersionPanel(workflow) {
     <div class="action-row workflow-panel-actions">
       ${actionButton("link", "编辑画布", "primary-button", `detail-builder-${workflow.id}`, { actionName: "open-workflow-builder", id: workflow.id })}
       ${actionButton("link", "运行预览", "ghost-button", `detail-preview-${workflow.id}`, { actionName: "open-workflow-builder-preview", id: workflow.id })}
+      ${actionButton("link", "创建运行", "ghost-button", `detail-create-run-${workflow.id}`, { actionName: "create-workflow-run", id: workflow.id })}
+      ${actionButton("link", "创建并启动", "primary-button", `detail-create-start-run-${workflow.id}`, { actionName: "create-start-workflow-run", id: workflow.id })}
     </div>
+    ${workflowRunPanel(workflow)}
     ${can("create") ? `<form class="form-grid" data-action="create-workflow-version" data-id="${workflow.id}">
       <label>版本号<input name="version" value="${latest}" required /></label>
       <label>状态<select name="status">${selectedOptions(["draft", "active", "deprecated"], "draft")}</select></label>
@@ -1828,6 +1880,136 @@ function workflowVersionList(workflowId) {
     const validationStatus = validation.errors.length ? "failed" : validation.warnings.length ? "warning" : "passed";
     return `<li><span>版本 ${escapeHtml(version.version)} · ${statusPill(version.status)} · ${version.nodes?.length || 0} 节点 / ${version.edges?.length || 0} 边 · ${statusPill(validationStatus)}</span></li>`;
   }).join("")}</ul>` : `<div class="empty-state compact">暂无流程版本。</div>`;
+}
+
+function workflowRunPanel(workflow) {
+  const runs = workflowRunsFor(workflow.id);
+  const activeVersion = activeWorkflowVersion(workflow);
+  const latestRun = runs[0];
+  return `
+    <section class="workflow-run-panel">
+      <div class="detail-heading">
+        <div>
+          <p class="eyebrow">执行控制</p>
+          <h4>运行实例</h4>
+          <p class="muted">${activeVersion ? `激活版本 ${escapeHtml(activeVersion.version)} · ${activeVersion.nodes?.length || 0} 节点` : "当前流程未激活版本，无法创建运行。"}</p>
+        </div>
+        <span>${latestRun ? statusPill(latestRun.status) : statusPill("pending")}</span>
+      </div>
+      ${runs.length ? `<ul class="run-list">${runs.map((run) => workflowRunListItem(run, latestRun?.id === run.id)).join("")}</ul>` : `<div class="empty-state compact">暂无运行实例。创建运行后会从激活版本快照生成步骤。</div>`}
+      ${latestRun ? workflowRunTimeline(latestRun) : ""}
+    </section>
+  `;
+}
+
+function workflowRunListItem(run, isLatest) {
+  return `<li class="${isLatest ? "active" : ""}">
+    <div>
+      <strong>${escapeHtml(run.id)}</strong>
+      <small>版本 ${escapeHtml(run.workflow_version_id)} · ${date(run.created_at)} · ${run.steps?.length || 0} 步骤</small>
+    </div>
+    <div class="action-row">
+      ${statusPill(run.status)}
+      ${workflowRunStartButton(run)}
+    </div>
+  </li>`;
+}
+
+function workflowRunStartButton(run) {
+  if (run.status !== "created") return "";
+  return actionButton("link", "启动运行", "ghost-button small", `start-run-${run.id}`, { actionName: "start-workflow-run", id: run.id });
+}
+
+function workflowRunTimeline(run) {
+  const steps = [...(run.steps || [])].sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
+  return `
+    <div class="run-timeline">
+      <h4>步骤时间线</h4>
+      ${steps.length ? steps.map((step) => workflowStepCard(run, step)).join("") : `<div class="empty-state compact">运行尚未生成步骤。</div>`}
+    </div>
+  `;
+}
+
+function workflowStepCard(run, step) {
+  const gate = workflowStepGateState(run, step);
+  return `<article class="run-step ${step.status}">
+    <div class="step-main">
+      <span class="step-index">${Number(step.sequence || 0)}</span>
+      <div>
+        <strong>${escapeHtml(step.name || step.node_id)}</strong>
+        <small>${workflowStepTypeLabel(step.step_type)} · 节点 ${escapeHtml(step.node_id)} · ${statusPill(step.status)}</small>
+      </div>
+    </div>
+    <p class="gate-copy ${gate.ready ? "ok" : "blocked"}">${gate.message}</p>
+    ${workflowStepActions(run, step, gate)}
+    ${workflowStepOutputBlock(step)}
+    ${workflowStepErrorBlock(step)}
+  </article>`;
+}
+
+function workflowStepOutputBlock(step) {
+  const output = redactClientPayload(step.output || {});
+  return output && Object.keys(output).length ? `<h5>输出</h5>${jsonBlock(output)}` : "";
+}
+
+function workflowStepErrorBlock(step) {
+  const error = redactSensitiveString(step.error || "");
+  return error ? `<h5>错误</h5><pre class="json-block error-block">${escapeHtml(error)}</pre>` : "";
+}
+
+function workflowStepActions(run, step, gate) {
+  const statuses = workflowAllowedStepStatuses(run, step, gate);
+  if (!statuses.length) return `<div class="muted">当前步骤暂无可执行流转。</div>`;
+  return `<div class="action-row">${statuses.map((status) => actionButton("link", workflowStepActionLabel(step, status), `ghost-button small ${status === "failed" ? "danger" : ""}`, `step-${step.id}-${status}`, { actionName: "update-workflow-step", id: run.id, targetId: `${step.id}|${status}` })).join("")}</div>`;
+}
+
+function workflowAllowedStepStatuses(run, step, gate = workflowStepGateState(run, step)) {
+  if (run.status !== "running" || step.step_type === "trigger" || !gate.ready) return [];
+  if (["completed", "failed", "skipped"].includes(step.status)) return [];
+  const statuses = step.status === "pending" ? ["running", "completed", "failed", "skipped"] : ["completed", "failed", "skipped"];
+  return step.step_type === "manual" ? statuses.filter((status) => status !== "skipped") : statuses;
+}
+
+function workflowStepGateState(run, step) {
+  const predecessorIds = step.predecessor_node_ids || [];
+  if (!predecessorIds.length) return { ready: true, message: "无前置约束，可直接流转。" };
+  const stepsByNode = Object.fromEntries((run.steps || []).map((candidate) => [candidate.node_id, candidate]));
+  const waiting = [];
+  for (const predecessorId of predecessorIds) {
+    const predecessor = stepsByNode[predecessorId];
+    if (!predecessor) {
+      waiting.push(`${predecessorId} 缺失`);
+      continue;
+    }
+    if (predecessor.step_type === "manual") {
+      if (predecessor.status !== "completed") waiting.push(`${predecessor.name || predecessor.node_id} 需人工确认完成（当前${translateStatus(predecessor.status)}）`);
+      continue;
+    }
+    if (!["completed", "skipped"].includes(predecessor.status)) waiting.push(`${predecessor.name || predecessor.node_id} 需完成或跳过（当前${translateStatus(predecessor.status)}）`);
+  }
+  return waiting.length ? { ready: false, message: `等待前置节点：${escapeHtml(waiting.join("；"))}` } : { ready: true, message: `前置约束已满足：${escapeHtml(predecessorIds.join("、"))}` };
+}
+
+function workflowStepActionLabel(step, status) {
+  if (status === "running") return "标记执行中";
+  if (status === "completed" && step.step_type === "manual") return "人工确认完成";
+  if (status === "completed") return "标记完成";
+  if (status === "failed" && step.step_type === "manual") return "人工拒绝";
+  if (status === "failed") return "标记失败";
+  return "跳过";
+}
+
+function workflowStepTypeLabel(type) {
+  return { trigger: "触发器", agent: "智能体步骤", manual: "人工步骤", result: "结果步骤" }[type] || escapeHtml(type || "未知步骤");
+}
+
+function workflowRunsFor(workflowId) {
+  return [...(state.workflowRuns || [])].filter((run) => run.workflow_id === workflowId).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+}
+
+function activeWorkflowVersion(workflow) {
+  const versions = state.workflowVersions[workflow.id] || [];
+  return versions.find((version) => version.id === workflow.active_version_id) || versions.find((version) => version.status === "active") || versions.at(-1);
 }
 
 function linkedList(ids, source, action, ownerId) {
@@ -2040,6 +2222,9 @@ async function handleRelationship(actionName, id, targetId, form) {
   if (actionName === "open-workflow-builder") return openWorkflowBuilder(id);
   if (actionName === "open-workflow-builder-preview") return openWorkflowBuilder(id, { preview: true });
   if (actionName === "create-workflow-version") return createWorkflowVersion(id, new FormData(form));
+  if (actionName === "create-workflow-run" || actionName === "create-start-workflow-run") return createWorkflowRun(id, actionName === "create-start-workflow-run");
+  if (actionName === "start-workflow-run") return startWorkflowRun(id);
+  if (actionName === "update-workflow-step") return updateWorkflowStep(id, targetId);
   if (actionName?.startsWith("create-upload-") || actionName === "complete-upload-session" || actionName === "create-download-grant") return handleFileAction(actionName, id);
   const value = targetId || new FormData(form).get(actionValueKey(actionName));
   if (!value) return showError("请先选择需要绑定的记录。");
@@ -2141,6 +2326,203 @@ async function createWorkflowVersion(workflowId, form) {
   }
   await afterMutation("workflows", workflowId);
   toast("流程版本已创建。");
+}
+
+async function createWorkflowRun(workflowId, start = false) {
+  const workflow = state.workflows.find((row) => row.id === workflowId);
+  if (!workflow) return showError("未找到流程定义。");
+  const activeVersion = activeWorkflowVersion(workflow);
+  if (!activeVersion) return showError("当前流程没有激活版本，无法创建运行。");
+  if (state.apiOnline) {
+    await apiRequest("POST", `/v1/workflows/${workflowId}/runs`, { workflow_version_id: activeVersion.id, trigger_type: "manual", start });
+    state.detail = { type: "workflows", id: workflowId };
+    await loadData();
+  } else {
+    const run = localWorkflowRun(workflow, activeVersion);
+    state.workflowRuns = [run, ...state.workflowRuns];
+    if (start) localStartWorkflowRun(run.id);
+    state.detail = { type: "workflows", id: workflowId };
+    render();
+  }
+  toast(start ? "运行已创建并启动。" : "运行已创建，等待手动启动。");
+}
+
+async function startWorkflowRun(runId) {
+  const run = state.workflowRuns.find((item) => item.id === runId);
+  if (!run) return showError("未找到运行实例。");
+  if (state.apiOnline) {
+    await apiRequest("POST", `/v1/workflow-runs/${runId}/start`);
+    state.detail = { type: "workflows", id: run.workflow_id };
+    await loadData();
+  } else {
+    localStartWorkflowRun(runId);
+    state.detail = { type: "workflows", id: run.workflow_id };
+    render();
+  }
+  toast("运行已启动。");
+}
+
+async function updateWorkflowStep(runId, target) {
+  const [stepRunId, status] = String(target || "").split("|");
+  if (!stepRunId || !status) return showError("缺少步骤流转参数。");
+  const run = state.workflowRuns.find((item) => item.id === runId);
+  if (!run) return showError("未找到运行实例。");
+  const step = (run.steps || []).find((item) => item.id === stepRunId);
+  if (!step) return showError("未找到步骤实例。");
+  const payload = workflowStepUpdatePayload(step, status);
+  if (state.apiOnline) {
+    await apiRequest("PATCH", `/v1/workflow-runs/${runId}/steps/${stepRunId}`, payload);
+    state.detail = { type: "workflows", id: run.workflow_id };
+    await loadData();
+  } else {
+    localUpdateWorkflowStep(runId, stepRunId, payload);
+    state.detail = { type: "workflows", id: run.workflow_id };
+    render();
+  }
+  toast(`步骤已${translateStatus(status)}。`);
+}
+
+function workflowStepUpdatePayload(step, status) {
+  const payload = { status };
+  if (status === "completed") payload.output = { message: "前端控制台确认完成", step_type: step.step_type, node_id: step.node_id };
+  if (status === "failed") payload.error = step.step_type === "manual" ? "人工拒绝，流程停止。" : "前端控制台标记失败。";
+  if (status === "skipped") payload.output = { reason: "前端控制台跳过该步骤", step_type: step.step_type };
+  return payload;
+}
+
+function localWorkflowRun(workflow, version) {
+  const now = new Date().toISOString();
+  const runId = `wfr_local_${Date.now()}`;
+  const predecessors = workflowPredecessorSnapshot(version);
+  const steps = workflowOrderedNodes(version).map((node, index) => ({
+    id: `wfs_local_${Date.now()}_${index + 1}`,
+    workflow_run_id: runId,
+    workflow_id: workflow.id,
+    workflow_version_id: version.id,
+    node_id: String(node.id),
+    node_type: String(node.type),
+    step_type: workflowNodeStepType(node.type),
+    sequence: index + 1,
+    name: String(node.name || workflowNodeTypeLabel(node.type)),
+    agent_id: node.agent_id || "",
+    skill_id: node.skill_id || "",
+    model_provider_id: node.model_provider_id || "",
+    predecessor_node_ids: predecessors[String(node.id)] || [],
+    input: Object.fromEntries(Object.entries(node).filter(([key]) => !["id", "type", "name"].includes(key))),
+    status: "pending",
+    created_at: now,
+    updated_at: now,
+  }));
+  return { id: runId, workflow_id: workflow.id, workflow_version_id: version.id, trigger_type: "manual", status: "created", steps, created_at: now, updated_at: now };
+}
+
+function localStartWorkflowRun(runId) {
+  const run = state.workflowRuns.find((item) => item.id === runId);
+  if (!run) throw new Error("workflow run not found");
+  if (run.status !== "created") throw new Error("workflow run cannot be started from current status");
+  const now = new Date().toISOString();
+  run.status = "running";
+  run.started_at = now;
+  run.updated_at = now;
+  (run.steps || []).forEach((step) => {
+    if (step.step_type === "trigger") {
+      step.status = "completed";
+      step.started_at = now;
+      step.completed_at = now;
+      step.updated_at = now;
+      step.output = step.output || { trigger: "manual" };
+    }
+  });
+  localRefreshWorkflowRunStatus(run);
+}
+
+function localUpdateWorkflowStep(runId, stepRunId, payload) {
+  const run = state.workflowRuns.find((item) => item.id === runId);
+  if (!run) throw new Error("workflow run not found");
+  if (run.status !== "running") throw new Error("workflow run is not active");
+  const step = (run.steps || []).find((item) => item.id === stepRunId);
+  if (!step) throw new Error("workflow step run not found");
+  if (step.step_type === "trigger") throw new Error("trigger step runs are managed by workflow start");
+  const gate = workflowStepGateState(run, step);
+  const allowed = workflowAllowedStepStatuses(run, step, gate);
+  if (!allowed.includes(payload.status)) {
+    if (!gate.ready) throw new Error("前置节点尚未满足，不能流转该步骤。");
+    throw new Error("workflow step cannot transition from current status");
+  }
+  const now = new Date().toISOString();
+  if (payload.status === "running" && !step.started_at) step.started_at = now;
+  if (["completed", "failed", "skipped"].includes(payload.status)) {
+    step.completed_at = now;
+    step.started_at = step.started_at || now;
+  }
+  step.status = payload.status;
+  if ("output" in payload) step.output = payload.output;
+  if ("error" in payload) step.error = payload.error;
+  step.updated_at = now;
+  localRefreshWorkflowRunStatus(run);
+}
+
+function localRefreshWorkflowRunStatus(run) {
+  const now = new Date().toISOString();
+  const executableSteps = (run.steps || []).filter((step) => step.step_type !== "trigger");
+  if (executableSteps.some((step) => step.status === "failed")) {
+    run.status = "failed";
+    run.completed_at = run.completed_at || now;
+    run.updated_at = run.completed_at;
+    return;
+  }
+  if (executableSteps.length && executableSteps.every((step) => ["completed", "skipped"].includes(step.status))) {
+    run.status = "completed";
+    run.completed_at = run.completed_at || now;
+    run.updated_at = run.completed_at;
+    return;
+  }
+  if (run.status !== "created") {
+    run.status = "running";
+    run.updated_at = now;
+  }
+}
+
+function workflowOrderedNodes(version) {
+  const nodes = (version.nodes || []).map((node) => ({ ...node }));
+  const byId = Object.fromEntries(nodes.map((node) => [String(node.id), node]));
+  const incoming = Object.fromEntries(nodes.map((node) => [String(node.id), 0]));
+  const outgoing = Object.fromEntries(nodes.map((node) => [String(node.id), []]));
+  for (const edge of version.edges || []) {
+    const from = String(edge.from_node_id);
+    const to = String(edge.to_node_id);
+    if (!byId[from] || !byId[to]) continue;
+    outgoing[from].push(to);
+    incoming[to] += 1;
+  }
+  const queue = nodes.filter((node) => incoming[String(node.id)] === 0).map((node) => String(node.id));
+  const ordered = [];
+  while (queue.length) {
+    const id = queue.shift();
+    ordered.push(byId[id]);
+    for (const target of outgoing[id] || []) {
+      incoming[target] -= 1;
+      if (incoming[target] === 0) queue.push(target);
+    }
+  }
+  return ordered.length === nodes.length ? ordered : workflowExecutionOrder(version);
+}
+
+function workflowPredecessorSnapshot(version) {
+  const predecessors = Object.fromEntries((version.nodes || []).map((node) => [String(node.id), []]));
+  for (const edge of version.edges || []) {
+    const from = String(edge.from_node_id);
+    const to = String(edge.to_node_id);
+    if (predecessors[to] && Object.prototype.hasOwnProperty.call(predecessors, from)) predecessors[to].push(from);
+  }
+  return predecessors;
+}
+
+function workflowNodeStepType(type) {
+  if (type === "trigger") return "trigger";
+  if (type === "agent_task") return "agent";
+  if (["approval", "manual", "manual_task"].includes(type)) return "manual";
+  return "result";
 }
 
 async function patchEnvironment(id, changeFn) {
@@ -2351,7 +2733,7 @@ function readiness(env) {
 }
 
 function statusPill(status = "active") {
-  const tone = ["active", "available", "in_use", "done", "completed", "passed", "available"].includes(status) ? "ok" : ["inactive", "maintenance", "archived", "warning", "pending", "queued", "low", "medium", "draft", "deprecated", "pending_upload", "open", "received", "pending_manual", "waiting_approval"].includes(status) ? "warn" : ["high", "retired", "failed", "cancelled", "rejected", "blocked"].includes(status) ? "bad" : status === "running" ? "" : "";
+  const tone = ["active", "available", "in_use", "done", "completed", "passed", "skipped", "available"].includes(status) ? "ok" : ["inactive", "maintenance", "archived", "warning", "pending", "created", "queued", "low", "medium", "draft", "deprecated", "pending_upload", "open", "received", "pending_manual", "waiting_approval"].includes(status) ? "warn" : ["high", "retired", "failed", "cancelled", "rejected", "blocked"].includes(status) ? "bad" : status === "running" ? "" : "";
   return `<span class="pill ${tone}">${escapeHtml(translateStatus(status))}</span>`;
 }
 
@@ -2703,7 +3085,15 @@ function redactClientPayload(value) {
       return [key, sensitive ? "[REDACTED]" : redactClientPayload(item)];
     }));
   }
-  return value;
+  return typeof value === "string" ? redactSensitiveString(value) : value;
+}
+
+function redactSensitiveString(value) {
+  return String(value || "")
+    .replace(/\b(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi, "$1[REDACTED]")
+    .replace(/\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?token|token|secret|password)\s*[:=]\s*)[^\s,;&]+/gi, "$1[REDACTED]")
+    .replace(/\b(cookie\s*[:=]\s*)[^\n]+/gi, "$1[REDACTED]")
+    .replace(/(\b(?:session|sid|csrf|xsrf|jwt|auth|token)[A-Za-z0-9_.-]*=)[^;\s]+/gi, "$1[REDACTED]");
 }
 
 function formatBytes(value) {
@@ -2852,7 +3242,9 @@ function translateStatus(status) {
     rejected: "已拒绝",
     open: "打开",
     published: "已发布",
-    running: "智能体执行中",
+    running: "运行中",
+    created: "已创建",
+    skipped: "已跳过",
     pending: "等待人工处理",
     done: "已完成",
     queued: "待分配",
