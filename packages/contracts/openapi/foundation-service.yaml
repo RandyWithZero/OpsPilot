@@ -2015,6 +2015,7 @@ components:
       properties:
         status:
           enum: [running, completed, failed, skipped]
+          description: Manual/approval step runs cannot be skipped; downstream steps require predecessors to be terminal in an allowed state.
         output:
           type: object
           additionalProperties: true

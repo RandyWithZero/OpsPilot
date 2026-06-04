@@ -515,6 +515,16 @@ class FoundationSliceTest(unittest.TestCase):
         running = self.store.update_workflow_step_run("usr_test_actor", run["id"], agent_step["id"], {"status": "running"})
         self.assertEqual(next(step for step in running["steps"] if step["id"] == agent_step["id"])["status"], "running")
         self.store.update_workflow_step_run("usr_test_actor", run["id"], agent_step["id"], {"status": "completed", "output": {"deployment_id": "dep-1"}})
+
+        with self.assertRaises(Exception) as skipped_gate:
+            self.store.update_workflow_step_run("usr_test_actor", run["id"], manual_step["id"], {"status": "skipped"})
+        self.assertEqual(getattr(skipped_gate.exception, "code", ""), "invalid_input")
+
+        with self.assertRaises(Exception) as downstream_bypass:
+            self.store.update_workflow_step_run("usr_test_actor", run["id"], result_step["id"], {"status": "completed", "output": {"summary": "bypassed"}})
+        self.assertEqual(getattr(downstream_bypass.exception, "code", ""), "conflict")
+        self.assertEqual(self.store.list_workflow_runs(workflow["id"])[0]["status"], "running")
+
         self.store.update_workflow_step_run("usr_test_actor", run["id"], manual_step["id"], {"status": "completed", "output": {"approved_by": "qa"}})
         completed = self.store.update_workflow_step_run("usr_test_actor", run["id"], result_step["id"], {"status": "completed", "output": {"summary": "ok"}})
 

@@ -907,6 +907,7 @@ class MemoryStore:
             if not next_status:
                 raise InvalidInput("workflow step updates require status")
             self._validate_step_transition(step, next_status)
+            self._validate_step_predecessors(run, step)
             stamp_time = now_utc()
             if next_status == "running" and not step.started_at:
                 step.started_at = stamp_time
@@ -1200,6 +1201,8 @@ class MemoryStore:
     def _validate_step_transition(self, step: WorkflowStepRun, next_status: str) -> None:
         if next_status not in {"running", "completed", "failed", "skipped"}:
             raise InvalidInput("unsupported workflow step status")
+        if step.step_type == "manual" and next_status == "skipped":
+            raise InvalidInput("manual workflow step runs cannot be skipped")
         allowed = {
             "pending": {"running", "completed", "failed", "skipped"},
             "running": {"completed", "failed", "skipped"},
@@ -1209,6 +1212,23 @@ class MemoryStore:
         }
         if next_status not in allowed[step.status]:
             raise Conflict("workflow step cannot transition from current status")
+
+    def _validate_step_predecessors(self, run: WorkflowRun, step: WorkflowStepRun) -> None:
+        version = self._workflow_version(run.workflow_version_id)
+        predecessor_node_ids = {str(edge["from_node_id"]) for edge in version.edges if str(edge["to_node_id"]) == step.node_id}
+        if not predecessor_node_ids:
+            return
+        steps_by_node_id = {candidate.node_id: candidate for candidate in self._steps_for_run(run.id)}
+        for predecessor_node_id in predecessor_node_ids:
+            predecessor = steps_by_node_id.get(predecessor_node_id)
+            if predecessor is None:
+                raise Conflict("workflow step predecessor is missing")
+            if predecessor.step_type == "manual":
+                if predecessor.status != "completed":
+                    raise Conflict("manual predecessor step must be completed before downstream transition")
+                continue
+            if predecessor.status not in {"completed", "skipped"}:
+                raise Conflict("predecessor step must be terminal before downstream transition")
 
     def _refresh_workflow_run_status(self, run: WorkflowRun) -> None:
         steps = self._steps_for_run(run.id)
