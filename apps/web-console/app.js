@@ -1,5 +1,5 @@
 const API_BASE = localStorage.getItem("opspilot_api_base") || "http://localhost:8080";
-const ACTOR_ID = "web-console";
+const DEFAULT_ACTOR_ID = "web-console";
 const navItems = [
   ["dashboard", "工作台"],
   ["bigscreen", "Dashboard 大屏"],
@@ -73,7 +73,8 @@ const state = {
   detail: null,
   apiOnline: false,
   user: sessionStorage.getItem("opspilot_user") || "",
-  role: sessionStorage.getItem("opspilot_role") || "Admin",
+  role: normalizeConsoleRole(sessionStorage.getItem("opspilot_role") || "Admin"),
+  actorId: sessionStorage.getItem("opspilot_actor_id") || DEFAULT_ACTOR_ID,
   users: [],
   projects: [],
   assets: [],
@@ -212,6 +213,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#sign-out").addEventListener("click", signOut);
   $("#modal-close").addEventListener("click", () => modal.close());
   $("#refresh").addEventListener("click", () => loadData(true));
+  $("#actor-role").addEventListener("change", () => updateActorContext({ role: $("#actor-role").value }));
+  $("#actor-id").addEventListener("change", () => updateActorContext({ actorId: $("#actor-id").value.trim() || DEFAULT_ACTOR_ID }));
   $("#global-search").addEventListener("input", (event) => {
     state.query = event.target.value.trim().toLowerCase();
     render();
@@ -224,14 +227,17 @@ async function signIn(event) {
   event.preventDefault();
   state.user = $("#login-email").value.trim();
   state.role = roleFromEmail(state.user);
+  state.actorId = state.user || DEFAULT_ACTOR_ID;
   sessionStorage.setItem("opspilot_user", state.user);
   sessionStorage.setItem("opspilot_role", state.role);
+  sessionStorage.setItem("opspilot_actor_id", state.actorId);
   showApp();
 }
 
 function signOut() {
   sessionStorage.removeItem("opspilot_user");
   sessionStorage.removeItem("opspilot_role");
+  sessionStorage.removeItem("opspilot_actor_id");
   state.user = "";
   $("#app").classList.add("hidden");
   $("#login").classList.remove("hidden");
@@ -240,7 +246,27 @@ function signOut() {
 function showApp() {
   $("#login").classList.add("hidden");
   $("#app").classList.remove("hidden");
+  syncActorControls();
   loadData();
+}
+
+function updateActorContext({ role = state.role, actorId = state.actorId } = {}) {
+  state.role = normalizeConsoleRole(role);
+  state.actorId = actorId || DEFAULT_ACTOR_ID;
+  sessionStorage.setItem("opspilot_role", state.role);
+  sessionStorage.setItem("opspilot_actor_id", state.actorId);
+  syncActorControls();
+  if (!canRoute(state.route)) {
+    state.route = "dashboard";
+    state.detail = null;
+    state.workflowBuilder = null;
+  }
+  loadData(true);
+}
+
+function syncActorControls() {
+  $("#actor-role").value = normalizeConsoleRole(state.role);
+  $("#actor-id").value = state.actorId || DEFAULT_ACTOR_ID;
 }
 
 async function loadData(forceToast = false) {
@@ -261,11 +287,11 @@ async function loadData(forceToast = false) {
       apiGet("/v1/quality-gates"),
       apiGet("/v1/agents"),
       apiGet("/v1/skills"),
-      apiGet("/v1/credentials"),
+      apiGet("/v1/credentials", { permissionFallback: [] }),
       apiGet("/v1/model-providers"),
       apiGet("/v1/workflows"),
       apiGet("/v1/workflow-runs"),
-      apiGet("/v1/audit-events"),
+      apiGet("/v1/audit-events", { permissionFallback: [] }),
     ]);
     const workflowVersions = {};
     await Promise.all(workflows.map(async (workflow) => {
@@ -332,16 +358,20 @@ async function loadData(forceToast = false) {
   render();
 }
 
-async function apiGet(path) {
-  const response = await fetch(`${API_BASE}${path}`);
-  if (!response.ok) throw new Error(path);
+async function apiGet(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, { headers: actorHeaders() });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({ error: "request_failed" }));
+    if (options.permissionFallback !== undefined && response.status === 403 && data.error === "permission_denied") return options.permissionFallback;
+    throw new Error(data.error || path);
+  }
   return response.json();
 }
 
 async function apiRequest(method, path, payload) {
   const options = {
     method,
-    headers: { "Content-Type": "application/json", "X-Actor-ID": ACTOR_ID },
+    headers: { "Content-Type": "application/json", ...actorHeaders() },
   };
   if (payload !== undefined) options.body = JSON.stringify(payload);
   const response = await fetch(`${API_BASE}${path}`, options);
@@ -352,11 +382,19 @@ async function apiRequest(method, path, payload) {
   return response.json();
 }
 
+function actorHeaders() {
+  return { "X-Actor-ID": state.actorId || DEFAULT_ACTOR_ID, "X-Actor-Role": normalizeConsoleRole(state.role) };
+}
+
 function renderNav() {
-  $("#nav").innerHTML = navItems.map(([key, label]) => `<button data-route="${key}"><span>${label}</span><small>${countFor(key)}</small></button>`).join("");
+  $("#nav").innerHTML = navItems.map(([key, label]) => {
+    const allowed = canRoute(key);
+    return `<button data-route="${key}" ${allowed ? "" : "disabled aria-disabled=\"true\" title=\"当前角色无权访问\""}><span>${label}</span><small>${allowed ? countFor(key) : "受限"}</small></button>`;
+  }).join("");
   $("#nav").onclick = (event) => {
     const button = event.target.closest("button[data-route]");
     if (!button) return;
+    if (!canRoute(button.dataset.route)) return deny("访问该模块");
     state.route = button.dataset.route;
     state.filters = {};
     state.detail = null;
@@ -366,6 +404,11 @@ function renderNav() {
 }
 
 function render() {
+  if (!canRoute(state.route)) {
+    state.route = "dashboard";
+    state.detail = null;
+    state.workflowBuilder = null;
+  }
   document.body.classList.toggle("bigscreen-mode", state.route === "bigscreen");
   document.body.classList.toggle("builder-mode", state.route === "workflows" && Boolean(state.workflowBuilder));
   $("#api-state").innerHTML = `${state.apiOnline ? "基础服务在线" : "本地模拟模式"} <span class="role-badge">${displayRole(state.role)}</span>`;
@@ -513,6 +556,10 @@ function renderTasks() {
 }
 
 function renderResource(type) {
+  if (!canRoute(type)) {
+    content.innerHTML = permissionDeniedPage(type);
+    return;
+  }
   const config = resourceConfig(type);
   const rows = filteredRows(type);
   content.innerHTML = `
@@ -788,7 +835,7 @@ function rowActions(type, row) {
     ${actionButton("link", "创建并启动", "ghost-button small", `run-${row.id}`, { actionName: "create-start-workflow-run", id: row.id })}
     ${actionButton("link", "编辑画布", "primary-button small", `builder-${row.id}`, { actionName: "open-workflow-builder", id: row.id })}
     ${actionButton("edit", "编辑", "ghost-button small", `edit-${type}-${row.id}`, { type, id: row.id })}
-    ${statusLabel ? actionButton("status", statusLabel, "ghost-button small", `status-${type}-${row.id}`, { type, id: row.id }) : ""}
+    ${statusLabel ? actionButton("status", statusLabel, "ghost-button small", `status-${type}-${row.id}`, { type, id: row.id, nextStatus: nextStatusFor(type, row) }) : ""}
     ${supportsDelete(type) ? actionButton("delete", "删除", "ghost-button small danger", `delete-${type}-${row.id}`, { type, id: row.id }) : ""}
   </div>`;
   if (type === "files") return `<div class="action-row">
@@ -801,7 +848,7 @@ function rowActions(type, row) {
   if (!supportsEdit(type) && !supportsDelete(type) && !statusLabel) return `<div class="action-row">${actionButton("open", "详情", "ghost-button small", `open-${type}-${row.id}`, { id: row.id, type })}</div>`;
   return `<div class="action-row">
     ${actionButton("edit", "编辑", "ghost-button small", `edit-${type}-${row.id}`, { type, id: row.id })}
-    ${statusLabel ? actionButton("status", statusLabel, "ghost-button small", `status-${type}-${row.id}`, { type, id: row.id }) : ""}
+    ${statusLabel ? actionButton("status", statusLabel, "ghost-button small", `status-${type}-${row.id}`, { type, id: row.id, nextStatus: nextStatusFor(type, row) }) : ""}
     ${supportsDelete(type) ? actionButton("delete", "删除", "ghost-button small danger", `delete-${type}-${row.id}`, { type, id: row.id }) : ""}
   </div>`;
 }
@@ -1005,7 +1052,7 @@ function renderWorkflowBuilder() {
         <div class="action-row">
           <button class="ghost-button" data-builder-action="validate">校验</button>
           <button class="ghost-button" data-builder-action="preview" ${validation.errors.length ? "disabled title=\"请先修复 Error\"" : ""}>运行预览</button>
-          <button class="primary-button" data-builder-action="save">保存版本</button>
+          <button class="primary-button" data-builder-action="save" ${can("link", { actionName: "create-workflow-version" }) ? "" : `disabled title="${escapeAttr(deniedReason("link", { actionName: "create-workflow-version" }))}"`}>保存版本</button>
           <button class="ghost-button" data-builder-action="exit">退出画布</button>
         </div>
       </header>
@@ -1304,6 +1351,7 @@ function addWorkflowEdge(fromNodeId, toNodeId) {
 }
 
 async function saveWorkflowBuilderVersion() {
+  if (!can("link", { actionName: "create-workflow-version" })) return deny("保存流程版本");
   const builder = state.workflowBuilder;
   builder.validation = validateWorkflowDraft(builder.draft);
   if (builder.validation.errors.length) {
@@ -1505,7 +1553,7 @@ function workflowVersionPanel(workflow) {
       ${actionButton("link", "创建并启动", "primary-button", `detail-create-start-run-${workflow.id}`, { actionName: "create-start-workflow-run", id: workflow.id })}
     </div>
     ${workflowRunPanel(workflow)}
-    ${can("create") ? `<form class="form-grid" data-action="create-workflow-version" data-id="${workflow.id}">
+    ${can("link", { actionName: "create-workflow-version" }) ? `<form class="form-grid" data-action="create-workflow-version" data-id="${workflow.id}">
       <label>版本号<input name="version" value="${latest}" required /></label>
       <label>状态<select name="status">${selectedOptions(["draft", "active", "deprecated"], "draft")}</select></label>
       <label>智能体<select name="agent_id">${agentOptions}</select></label>
@@ -1661,12 +1709,12 @@ function linkedList(ids, source, action, ownerId) {
 }
 
 function openCreate(type) {
-  if (!can("create")) return deny("create records");
+  if (!can("create", { type })) return deny("创建该记录");
   openFormModal({ mode: "create", type });
 }
 
 function openEdit(type, id) {
-  if (!can("edit")) return deny("edit records");
+  if (!can("edit", { type })) return deny("编辑该记录");
   const row = collectionFor(type).find((item) => item.id === id);
   if (row) openFormModal({ mode: "edit", type, row });
 }
@@ -1719,6 +1767,7 @@ function formFor(type, row, mode) {
 
 async function submitForm(event, type, id) {
   event.preventDefault();
+  if (!can(id ? "edit" : "create", { type })) return deny(id ? "编辑该记录" : "创建该记录");
   try {
     const payload = payloadFromForm(new FormData(event.target), type);
     if (type === "gitlabProfiles" && !id) {
@@ -1820,6 +1869,7 @@ function payloadFromForm(form, type) {
 }
 
 async function createGitLabProfile(payload) {
+  if (!can("create", { type: "gitlabProfiles" })) return deny("创建 GitLab Profile");
   const profilePayload = { ...payload };
   const secret = profilePayload.gitlab_secret;
   delete profilePayload.gitlab_secret;
@@ -1841,17 +1891,17 @@ async function createGitLabProfile(payload) {
 }
 
 async function handleStatus(type, id) {
-  if (!can("delete")) return deny("change lifecycle state");
   const item = collectionFor(type).find((row) => row.id === id);
   if (!item) return;
   const nextStatus = nextStatusFor(type, item);
+  if (!can("status", { type, nextStatus })) return deny("变更生命周期状态");
   await mutate("PATCH", `${endpoints[type]}/${id}`, { status: nextStatus }, type, id, (row) => ({ ...row, status: nextStatus, updated_at: new Date().toISOString() }));
   await afterMutation(type, id);
   toast(`${resourceConfig(type).title}已标记为${translateStatus(nextStatus)}。`);
 }
 
 async function handleDelete(type, id) {
-  if (!can("delete")) return deny("delete records");
+  if (!can("delete", { type })) return deny("删除记录");
   const item = collectionFor(type).find((row) => row.id === id);
   if (!item || !confirm(`确认删除 ${item.name || item.key || item.email}？删除后只能重新创建。`)) return;
   await mutate("DELETE", `${endpoints[type]}/${id}`, undefined, type, id, () => null);
@@ -1861,7 +1911,7 @@ async function handleDelete(type, id) {
 }
 
 async function handleRelationship(actionName, id, targetId, form) {
-  if (!can("link")) return deny("change bindings");
+  if (!can("link", { actionName })) return deny("执行该关系或运行操作");
   if (actionName === "open-workflow-builder") return openWorkflowBuilder(id);
   if (actionName === "open-workflow-builder-preview") return openWorkflowBuilder(id, { preview: true });
   if (actionName === "create-workflow-version") return createWorkflowVersion(id, new FormData(form));
@@ -1892,6 +1942,7 @@ async function handleRelationship(actionName, id, targetId, form) {
 }
 
 async function handleFileAction(actionName, fileId) {
+  if (!can("link", { actionName })) return deny("执行文件授权操作");
   if (!fileId) return showError("缺少文件 ID。");
   if (actionName === "create-upload-grant") {
     const grant = state.apiOnline ? await apiRequest("POST", `/v1/files/${fileId}/upload-grants`, {}) : localFileGrant(fileId, "PUT", "uploads");
@@ -1941,6 +1992,7 @@ async function handleFileAction(actionName, fileId) {
 }
 
 async function createWorkflowVersion(workflowId, form) {
+  if (!can("link", { actionName: "create-workflow-version" })) return deny("创建流程版本");
   const version = form.get("version");
   if (!version) return showError("请填写流程版本号。");
   const agentId = form.get("agent_id") || "";
@@ -1972,6 +2024,7 @@ async function createWorkflowVersion(workflowId, form) {
 }
 
 async function createWorkflowRun(workflowId, start = false) {
+  if (!can("link", { actionName: start ? "create-start-workflow-run" : "create-workflow-run" })) return deny("创建流程运行");
   const workflow = state.workflows.find((row) => row.id === workflowId);
   if (!workflow) return showError("未找到流程定义。");
   const activeVersion = activeWorkflowVersion(workflow);
@@ -1991,6 +2044,7 @@ async function createWorkflowRun(workflowId, start = false) {
 }
 
 async function startWorkflowRun(runId) {
+  if (!can("link", { actionName: "start-workflow-run" })) return deny("启动流程运行");
   const run = state.workflowRuns.find((item) => item.id === runId);
   if (!run) return showError("未找到运行实例。");
   if (state.apiOnline) {
@@ -2006,6 +2060,7 @@ async function startWorkflowRun(runId) {
 }
 
 async function updateWorkflowStep(runId, target) {
+  if (!can("link", { actionName: "update-workflow-step" })) return deny("流转流程步骤");
   const [stepRunId, status] = String(target || "").split("|");
   if (!stepRunId || !status) return showError("缺少步骤流转参数。");
   const run = state.workflowRuns.find((item) => item.id === runId);
@@ -2326,24 +2381,78 @@ function filterControl(filter) {
 }
 
 function actionButton(permission, label, className, id, dataset = {}) {
-  const allowed = can(permission);
+  const allowed = can(permission, dataset);
   const attrs = Object.entries(dataset).map(([key, value]) => `data-${kebab(key)}="${escapeAttr(value)}"`).join(" ");
-  return `<button class="${className}" data-action="${permission}" ${attrs} ${allowed ? "" : "disabled aria-disabled=\"true\" title=\"无操作权限\""}>${label}</button>`;
+  return `<button class="${className}" data-action="${permission}" ${attrs} ${allowed ? "" : `disabled aria-disabled="true" title="${escapeAttr(deniedReason(permission, dataset))}"`}>${label}</button>`;
 }
 
 function permissionBanner() {
-  return state.role === "Viewer" ? `<section class="permission-denied"><strong>无写入权限</strong><span>查看者可浏览工作台、清单、关系与审计上下文，但创建、编辑、绑定、归档、删除操作已禁用。</span></section>` : "";
+  if (state.role === "Viewer") return `<section class="permission-denied"><strong>只读权限</strong><span>查看者只能浏览允许读取的模块；凭据与审计等高风险模块不可访问，创建、编辑、运行、归档、删除均已禁用。</span></section>`;
+  if (state.role === "Operator") return `<section class="permission-denied"><strong>运维权限受控</strong><span>运维人员可执行文件、VCS、流程运行等操作；用户、凭据、GitLab Profile、模型供应商、智能体/Skill 控制面和归档/删除需管理员处理。</span></section>`;
+  return "";
+}
+
+function permissionDeniedPage(type) {
+  const title = resourceConfig(type)?.title || "该模块";
+  return `<section class="permission-denied panel">
+    <strong>权限不足：无法访问${title}</strong>
+    <span>${displayRole(state.role)}没有该模块的读取权限。请切换到管理员角色，或联系管理员处理。</span>
+  </section>`;
 }
 
 function deny(action) {
-  toast(`无操作权限：${displayRole(state.role)}不能${action}。`);
+  toast(`权限不足：${displayRole(state.role)}不能${action}。`);
 }
 
-function can(permission) {
-  if (permission === "open") return true;
-  if (state.role === "Admin") return true;
-  if (state.role === "Operator") return ["create", "edit", "link"].includes(permission);
-  return false;
+function can(permission, context = {}) {
+  const required = requiredPermission(permission, context);
+  if (required === "read" && !canRoute(context.type || state.route)) return false;
+  return rolePermissions(state.role).includes(required);
+}
+
+function canRoute(route) {
+  if (route === "credentials") return rolePermissions(state.role).includes("admin");
+  return rolePermissions(state.role).includes("read");
+}
+
+function requiredPermission(permission, context = {}) {
+  if (permission === "open") return "read";
+  if (permission === "delete") return "admin";
+  if (permission === "create") return adminWriteTypes().includes(context.type) ? "admin" : "operate";
+  if (permission === "edit") return adminWriteTypes().includes(context.type) ? "admin" : "operate";
+  if (permission === "status") {
+    if (adminWriteTypes().includes(context.type) || ["archived", "retired", "deleted"].includes(String(context.nextStatus || "").toLowerCase())) return "admin";
+    return "operate";
+  }
+  if (permission === "link") return requiredPermissionForRelationship(context.actionName);
+  return "admin";
+}
+
+function requiredPermissionForRelationship(actionName = "") {
+  if (["unlink-project-asset", "unlink-project-environment", "unlink-project-repository"].includes(actionName)) return "admin";
+  if (actionName === "open-workflow-builder-preview") return "read";
+  if (actionName === "open-workflow-builder") return "operate";
+  return "operate";
+}
+
+function adminWriteTypes() {
+  return ["identity", "gitlabProfiles", "agents", "skills", "credentials", "modelProviders"];
+}
+
+function rolePermissions(role) {
+  if (role === "Admin") return ["read", "operate", "admin"];
+  if (role === "Operator") return ["read", "operate"];
+  if (role === "Viewer") return ["read"];
+  return [];
+}
+
+function deniedReason(permission, context = {}) {
+  const required = requiredPermission(permission, context);
+  return `${displayRole(state.role)}缺少${{ read: "读取", operate: "操作", admin: "管理员" }[required] || "对应"}权限`;
+}
+
+function normalizeConsoleRole(role) {
+  return ["Admin", "Operator", "Viewer"].includes(role) ? role : "Viewer";
 }
 
 function emptyStateFor(type) {
@@ -2820,7 +2929,7 @@ function actionValueKey(actionName) {
 }
 
 function addAudit(action, resourceType, resourceId) {
-  state.auditEvents.unshift({ id: `aud_local_${Date.now()}`, actor_id: ACTOR_ID, action, resource_type: resourceType, resource_id: resourceId, occurred_at: new Date().toISOString(), metadata: {} });
+  state.auditEvents.unshift({ id: `aud_local_${Date.now()}`, actor_id: state.actorId || DEFAULT_ACTOR_ID, action, resource_type: resourceType, resource_id: resourceId, occurred_at: new Date().toISOString(), metadata: {} });
 }
 
 function unique(values) {
@@ -2840,6 +2949,10 @@ function toast(message) {
 }
 
 function showError(message) {
+  if (message === "permission_denied") {
+    toast(`权限不足：${displayRole(state.role)}不能执行该操作。`);
+    return;
+  }
   toast(`错误：${message}`);
 }
 

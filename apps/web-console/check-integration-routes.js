@@ -102,7 +102,51 @@ const result = vm.runInContext(`
     detail: null,
   });
 
+  state.role = "Admin";
+  state.actorId = "admin-console";
+  if (!canRoute("credentials") || !can("create", { type: "identity" }) || !can("delete", { type: "projects" })) throw new Error("Admin role did not receive high-risk permissions");
+  let capturedRequest = null;
+  fetch = async (path, init = {}) => {
+    capturedRequest = { path, init };
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  await apiRequest("POST", "/v1/files/file_mock/download-grants", {});
+  if (capturedRequest.init.headers["X-Actor-ID"] !== "admin-console" || capturedRequest.init.headers["X-Actor-Role"] !== "Admin") throw new Error("apiRequest did not send Admin actor headers");
+
+  state.role = "Operator";
+  state.actorId = "operator-console";
+  fetch = async (path, init = {}) => {
+    capturedRequest = { path, init };
+    return { ok: false, status: 403, json: async () => ({ error: "permission_denied" }) };
+  };
+  const credentialFallback = await apiGet("/v1/credentials", { permissionFallback: [] });
+  if (!Array.isArray(credentialFallback) || credentialFallback.length) throw new Error("permission fallback did not preserve live-empty credentials for Operator");
+  if (capturedRequest.init.headers["X-Actor-ID"] !== "operator-console" || capturedRequest.init.headers["X-Actor-Role"] !== "Operator") throw new Error("apiGet did not send Operator actor headers");
+  if (canRoute("credentials")) throw new Error("Operator could access credentials route");
+  if (can("create", { type: "gitlabProfiles" }) || can("create", { type: "agents" }) || can("create", { type: "skills" }) || can("create", { type: "modelProviders" })) throw new Error("Operator could create Admin control-plane resources");
+  if (can("delete", { type: "projects" }) || can("status", { type: "projects", nextStatus: "archived" })) throw new Error("Operator could delete or archive high-risk resources");
+  if (!can("link", { actionName: "create-download-grant" }) || !can("link", { actionName: "create-workflow-run" }) || !can("create", { type: "vcsOperations" })) throw new Error("Operator lost expected operate permissions");
+
+  state.route = "credentials";
+  renderNav();
+  if (!document.querySelector("#nav").innerHTML.includes("受限")) throw new Error("permission-aware nav did not mark restricted credentials route");
+  renderResource("credentials");
+  if (!content.innerHTML.includes("权限不足") || !content.innerHTML.includes("无法访问模型 Key")) throw new Error("credentials route did not render Chinese permission-denied state");
+
+  state.role = "Viewer";
+  if (!can("open", { type: "files" }) || can("create", { type: "projects" }) || can("link", { actionName: "create-workflow-run" }) || can("edit", { type: "identity" })) throw new Error("Viewer permission matrix is incorrect");
+  state.fileGrants = {};
+  await handleFileAction("create-download-grant", "file_mock");
+  if (Object.keys(state.fileGrants).length) throw new Error("Viewer direct file grant action mutated offline state");
+  const beforeViewerRuns = state.workflowRuns.length;
+  await createWorkflowRun("wfl_mock_release", true);
+  if (state.workflowRuns.length !== beforeViewerRuns) throw new Error("Viewer direct workflow run action mutated offline state");
+  const beforeProfiles = state.gitlabProfiles.length;
+  await createGitLabProfile({ name: "Viewer GitLab", base_url: "https://gitlab.viewer.local", gitlab_secret: "viewer-secret" });
+  if (state.gitlabProfiles.length !== beforeProfiles) throw new Error("Viewer direct GitLab profile action mutated offline state");
+
   for (const route of newRoutes) {
+    state.role = "Admin";
     state.route = route;
     render();
     if (!content.innerHTML.includes(resourceConfig(route).title)) throw new Error("route title missing: " + route);
