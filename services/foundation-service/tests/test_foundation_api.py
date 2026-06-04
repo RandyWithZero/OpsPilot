@@ -308,6 +308,56 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertIn("agent.created", audit)
         self.assertNotIn("sk-secret-value", audit)
 
+    def test_agent_workflow_security_boundaries(self) -> None:
+        first_credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key 1", "secret": "sk-one"})
+        second_credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key 2", "secret": "sk-two"})
+        first_provider = self.store.create_model_provider("usr_test_actor", {"provider": "openai", "name": "Provider 1", "credential_ref_id": first_credential["id"]})
+        second_provider = self.store.create_model_provider("usr_test_actor", {"provider": "anthropic", "name": "Provider 2", "credential_ref_id": second_credential["id"]})
+        allowed_skill = self.store.create_skill("usr_test_actor", {"name": "Allowed Skill", "version": "1.0.0", "runtime": "python"})
+        other_skill = self.store.create_skill("usr_test_actor", {"name": "Other Skill", "version": "1.0.0", "runtime": "python"})
+        agent = self.store.create_agent(
+            "usr_test_actor",
+            {"name": "Guarded Agent", "kind": "automation", "skill_ids": [allowed_skill["id"]], "model_provider_id": first_provider["id"]},
+        )
+
+        with self.assertRaises(Exception) as credential_delete_error:
+            self.store.delete_credential("usr_test_actor", first_credential["id"])
+        self.assertEqual(getattr(credential_delete_error.exception, "code", ""), "conflict")
+        self.assertEqual(self.store.list_credentials()[0]["id"], first_credential["id"])
+
+        first_workflow = self.store.create_workflow("usr_test_actor", {"name": "Workflow A"})
+        second_workflow = self.store.create_workflow("usr_test_actor", {"name": "Workflow B"})
+        first_version = self.store.create_workflow_version(
+            "usr_test_actor",
+            first_workflow["id"],
+            {"version": "1", "nodes": [{"id": "start", "type": "trigger"}]},
+        )
+        with self.assertRaises(Exception) as cross_workflow_error:
+            self.store.update_workflow("usr_test_actor", second_workflow["id"], {"active_version_id": first_version["id"]})
+        self.assertEqual(getattr(cross_workflow_error.exception, "code", ""), "conflict")
+
+        with self.assertRaises(Exception) as skill_policy_error:
+            self.store.create_workflow_version(
+                "usr_test_actor",
+                first_workflow["id"],
+                {
+                    "version": "bad-skill",
+                    "nodes": [{"id": "task", "type": "agent_task", "agent_id": agent["id"], "skill_id": other_skill["id"], "model_provider_id": first_provider["id"]}],
+                },
+            )
+        self.assertEqual(getattr(skill_policy_error.exception, "code", ""), "conflict")
+
+        with self.assertRaises(Exception) as provider_policy_error:
+            self.store.create_workflow_version(
+                "usr_test_actor",
+                first_workflow["id"],
+                {
+                    "version": "bad-provider",
+                    "nodes": [{"id": "task", "type": "agent_task", "agent_id": agent["id"], "skill_id": allowed_skill["id"], "model_provider_id": second_provider["id"]}],
+                },
+            )
+        self.assertEqual(getattr(provider_policy_error.exception, "code", ""), "conflict")
+
 
 if __name__ == "__main__":
     unittest.main()

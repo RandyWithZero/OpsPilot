@@ -417,12 +417,12 @@ class MemoryStore:
 
     def delete_credential(self, actor_id: str, credential_id: str) -> dict[str, str]:
         with self._lock:
-            credential = self.credentials.pop(credential_id, None)
-            if credential is None:
-                raise NotFound("credential not found")
+            credential = self._credential(credential_id)
             if any(profile.credential_ref_id == credential_id for profile in self.gitlab_profiles.values()):
-                self.credentials[credential_id] = credential
                 raise Conflict("credential is used by a gitlab profile")
+            if any(provider.credential_ref_id == credential_id for provider in self.model_providers.values()):
+                raise Conflict("credential is used by a model provider")
+            self.credentials.pop(credential_id, None)
             self.secret_store.delete(credential.secret_ref)
             self._audit(actor_id, "credential.deleted", "credential", credential_id, {"provider": credential.provider})
             return {"status": "deleted"}
@@ -654,8 +654,10 @@ class MemoryStore:
             for key in ("name", "description", "project_id", "status", "active_version_id"):
                 if key in data:
                     setattr(workflow, key, data[key])
-            if workflow.active_version_id and workflow.active_version_id not in self.workflow_versions:
-                raise NotFound("workflow version not found")
+            if workflow.active_version_id:
+                active_version = self._workflow_version(workflow.active_version_id)
+                if active_version.workflow_id != workflow.id:
+                    raise Conflict("active version belongs to another workflow")
             workflow.validate()
             workflow.updated_at = now_utc()
             self._audit(actor_id, "workflow.updated", "workflow", workflow.id, {"status": workflow.status})
@@ -773,15 +775,24 @@ class MemoryStore:
 
     def _validate_workflow_version_refs(self, version: WorkflowVersion) -> None:
         for node in version.nodes:
+            node_type = str(node.get("type", "")).strip()
             agent_id = str(node.get("agent_id", "")).strip()
             skill_id = str(node.get("skill_id", "")).strip()
             model_provider_id = str(node.get("model_provider_id", "")).strip()
-            if agent_id and agent_id not in self.agents:
+            if node_type == "agent_task" and not agent_id:
+                raise InvalidInput("agent_task nodes require agent_id")
+            agent = self.agents.get(agent_id) if agent_id else None
+            if agent_id and agent is None:
                 raise NotFound("agent not found")
             if skill_id and skill_id not in self.skills:
                 raise NotFound("skill not found")
             if model_provider_id and model_provider_id not in self.model_providers:
                 raise NotFound("model provider not found")
+            if agent is not None:
+                if skill_id and skill_id not in agent.skill_ids:
+                    raise Conflict("workflow node skill is not allowed by agent")
+                if model_provider_id and model_provider_id != agent.model_provider_id:
+                    raise Conflict("workflow node model provider is not allowed by agent")
 
     def _id(self, prefix: str) -> str:
         self._ids += 1
