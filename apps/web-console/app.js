@@ -167,6 +167,7 @@ function renderNav() {
 }
 
 function render() {
+  document.body.classList.toggle("bigscreen-mode", state.route === "bigscreen");
   $("#api-state").innerHTML = `${state.apiOnline ? "基础服务在线" : "本地模拟模式"} <span class="role-badge">${displayRole(state.role)}</span>`;
   $(".status-dot").classList.toggle("live", state.apiOnline);
   $("#project-switcher").innerHTML = `<option>全部项目</option>${state.projects.map((p) => `<option>${escapeHtml(p.key)} · ${escapeHtml(p.name)}</option>`).join("")}`;
@@ -234,7 +235,10 @@ function renderBigscreen() {
     <section class="command-center">
       <div class="command-header">
         <h1>OpsPilot 运营指挥中心</h1>
-        <span>${new Date().toLocaleString("zh-CN", { hour12: false })}</span>
+        <div class="command-actions">
+          <span>${new Date().toLocaleString("zh-CN", { hour12: false })}</span>
+          <button class="ghost-button" data-action="return-dashboard">返回控制台</button>
+        </div>
       </div>
       <div class="command-grid">
         ${commandCard("项目健康度", "94.8%", "实时")}
@@ -262,6 +266,10 @@ function renderBigscreen() {
       </div>
     </section>
   `;
+  content.querySelector("[data-action='return-dashboard']").addEventListener("click", () => {
+    state.route = "dashboard";
+    render();
+  });
 }
 
 function renderTasks() {
@@ -275,7 +283,7 @@ function renderTasks() {
       <button class="primary-button">批量处理</button>
     </div>
     <div class="task-layout">
-      <section class="table-wrap">${taskTable()}</section>
+      <section class="table-wrap task-table-wrap">${taskTable()}</section>
       <aside class="detail-panel">
         <h2>任务详情</h2>
         <p class="muted">右侧面板展示上下文、处理建议、智能体结论、执行日志和提交动作</p>
@@ -925,7 +933,7 @@ function taskTable() {
     ["GitLab Key 轮换", "凭据管理", "P2", "执行中"],
     ["流程失败复核", "运维流程", "P1", "待复核"],
   ];
-  return `<table><thead><tr>${["任务", "来源", "优先级", "状态"].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  return `<table class="task-table"><thead><tr>${["任务", "来源", "优先级", "状态"].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
 }
 
 function commandCard(label, value, tag) {

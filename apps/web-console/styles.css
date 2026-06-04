@@ -351,6 +351,36 @@ small {
   padding: 0 12px;
 }
 
+.search-icon {
+  position: relative;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.search-icon::before,
+.search-icon::after {
+  position: absolute;
+  content: "";
+}
+
+.search-icon::before {
+  inset: 2px 4px 4px 2px;
+  border: 2px solid var(--muted);
+  border-radius: 50%;
+}
+
+.search-icon::after {
+  right: 1px;
+  bottom: 1px;
+  width: 7px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--muted);
+  transform: rotate(45deg);
+  transform-origin: center;
+}
+
 .search-wrap input {
   border: 0;
   background: transparent;
@@ -703,12 +733,44 @@ dialog::backdrop {
   transform: translateY(0);
 }
 
+.bigscreen-mode {
+  overflow-x: hidden;
+  background: #0f1522;
+}
+
+.bigscreen-mode .app-shell {
+  display: block;
+  min-height: 100vh;
+}
+
+.bigscreen-mode .sidebar,
+.bigscreen-mode .topbar {
+  display: none;
+}
+
+.bigscreen-mode .main {
+  min-height: 100vh;
+}
+
+.bigscreen-mode .content {
+  display: block;
+  padding: 0;
+}
+
 .command-center {
   min-height: calc(100vh - 72px);
   margin: -40px -32px;
   padding: 48px 72px;
   background: #0f1522;
   color: #fff;
+}
+
+.bigscreen-mode .command-center {
+  width: 100%;
+  min-height: 100vh;
+  margin: 0;
+  overflow: hidden;
+  padding: 32px clamp(24px, 4vw, 56px);
 }
 
 .command-header {
@@ -722,6 +784,18 @@ dialog::backdrop {
 .command-header h1 {
   color: #fff;
   font-size: 42px;
+}
+
+.command-actions {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.command-actions .ghost-button {
+  border-color: #334155;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
 }
 
 .command-grid {
@@ -807,6 +881,23 @@ dialog::backdrop {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;
   gap: 30px;
+}
+
+.task-table {
+  min-width: 0;
+  table-layout: auto;
+}
+
+.task-table th,
+.task-table td {
+  padding: 12px 14px;
+  white-space: nowrap;
+}
+
+.task-table th:first-child,
+.task-table td:first-child {
+  width: 42%;
+  white-space: normal;
 }
 
 @media (max-width: 1080px) {
