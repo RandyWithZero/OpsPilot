@@ -172,12 +172,12 @@ class RepositoryBinding:
     provider: str
     profile_id: str
     repository_id: str
-    path: str
+    path: str = ""
     web_url: str = ""
 
     def validate(self) -> None:
-        if not self.provider or not self.profile_id or not self.repository_id or not self.path:
-            raise InvalidInput("repository bindings require provider, profile_id, repository_id, and path")
+        if not self.provider or not self.profile_id or not self.repository_id:
+            raise InvalidInput("repository bindings require provider, profile_id, and repository_id")
 
 
 @dataclass

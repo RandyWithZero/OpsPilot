@@ -967,7 +967,7 @@ components:
               format: date-time
     RepositoryBinding:
       type: object
-      required: [provider, profile_id, repository_id, path]
+      required: [provider, profile_id, repository_id]
       properties:
         provider:
           enum: [gitlab]
@@ -977,6 +977,7 @@ components:
           type: string
         path:
           type: string
+          description: Optional request field. The service infers and returns the selected repository path.
         web_url:
           type: string
     AuditEvent:

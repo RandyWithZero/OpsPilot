@@ -169,9 +169,10 @@ class FoundationSliceTest(unittest.TestCase):
         linked = self.store.link_project_repository(
             "usr_test_actor",
             project["id"],
-            {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100", "path": "platform/opspilot"},
+            {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100"},
         )
         self.assertEqual(linked["repository_bindings"][0]["repository_id"], "100")
+        self.assertEqual(linked["repository_bindings"][0]["path"], "platform/opspilot")
 
         unlinked = self.store.unlink_project_repository("usr_test_actor", project["id"], profile["id"], "100")
         self.assertEqual(unlinked["repository_bindings"], [])
