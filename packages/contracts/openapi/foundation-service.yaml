@@ -1,0 +1,396 @@
+openapi: 3.1.0
+info:
+  title: OpsPilot Foundation Service API
+  version: 0.1.0
+  description: First backend slice for identity, projects, assets, environments, and audit events.
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: Service is healthy.
+  /v1/users:
+    get:
+      summary: List identity users
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+    post:
+      summary: Create identity user
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserCreate"
+      responses:
+        "201":
+          description: Created user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/projects:
+    get:
+      summary: List projects
+      responses:
+        "200":
+          description: Projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+    post:
+      summary: Create project
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectCreate"
+      responses:
+        "201":
+          description: Created project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+  /v1/projects/{projectID}/assets/{assetID}:
+    post:
+      summary: Link an asset to a project
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: assetID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+  /v1/projects/{projectID}/environments/{environmentID}:
+    post:
+      summary: Link an environment to a project
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+  /v1/assets:
+    get:
+      summary: List assets
+      responses:
+        "200":
+          description: Assets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Asset"
+    post:
+      summary: Create asset
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetCreate"
+      responses:
+        "201":
+          description: Created asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+  /v1/environments:
+    get:
+      summary: List environments
+      responses:
+        "200":
+          description: Environments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Environment"
+    post:
+      summary: Create environment
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvironmentCreate"
+      responses:
+        "201":
+          description: Created environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+  /v1/audit-events:
+    get:
+      summary: List audit events, newest first
+      responses:
+        "200":
+          description: Audit events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditEvent"
+components:
+  parameters:
+    ActorID:
+      name: X-Actor-ID
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Actor ID recorded on audit events. Auth middleware will replace this development header.
+  responses:
+    Conflict:
+      description: Resource conflicts with an existing value.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    Role:
+      type: object
+      required: [scope, name]
+      properties:
+        scope:
+          type: string
+          examples: [platform, project]
+        name:
+          type: string
+          examples: [Admin, Operator, Viewer]
+    UserCreate:
+      type: object
+      required: [email, name]
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Role"
+    User:
+      allOf:
+        - $ref: "#/components/schemas/UserCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            status:
+              enum: [active, inactive]
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    ProjectCreate:
+      type: object
+      required: [key, name, owner_id]
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        owner_id:
+          type: string
+        member_ids:
+          type: array
+          items:
+            type: string
+    Project:
+      allOf:
+        - $ref: "#/components/schemas/ProjectCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            status:
+              enum: [active, archived]
+            asset_ids:
+              type: array
+              items:
+                type: string
+            environment_ids:
+              type: array
+              items:
+                type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    AssetCreate:
+      type: object
+      required: [category, name]
+      properties:
+        category:
+          type: string
+          examples: [server, workstation, vm, gpu, memory]
+        name:
+          type: string
+        status:
+          enum: [available, in_use, maintenance, retired]
+        owner_id:
+          type: string
+        location:
+          type: string
+        parent_id:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        properties:
+          type: object
+          additionalProperties: true
+    Asset:
+      allOf:
+        - $ref: "#/components/schemas/AssetCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    Endpoint:
+      type: object
+      required: [name, url]
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+    EnvironmentCreate:
+      type: object
+      required: [project_id, name, type, owner_id]
+      properties:
+        project_id:
+          type: string
+        name:
+          type: string
+        type:
+          enum: [DEV, QA, QE]
+        status:
+          enum: [active, inactive]
+        owner_id:
+          type: string
+        member_ids:
+          type: array
+          items:
+            type: string
+        asset_ids:
+          type: array
+          items:
+            type: string
+        endpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/Endpoint"
+    Environment:
+      allOf:
+        - $ref: "#/components/schemas/EnvironmentCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    AuditEvent:
+      type: object
+      required: [id, actor_id, action, resource_type, resource_id, occurred_at]
+      properties:
+        id:
+          type: string
+        actor_id:
+          type: string
+        action:
+          type: string
+        resource_type:
+          type: string
+        resource_id:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
