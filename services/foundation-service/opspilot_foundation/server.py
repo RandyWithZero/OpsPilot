@@ -29,12 +29,19 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/files": self.store.list_file_objects,
             "/v1/credentials": self.store.list_credentials,
             "/v1/gitlab/profiles": self.store.list_gitlab_profiles,
+            "/v1/agents": self.store.list_agents,
+            "/v1/skills": self.store.list_skills,
+            "/v1/model-providers": self.store.list_model_providers,
+            "/v1/workflows": self.store.list_workflows,
             "/v1/audit-events": self.store.list_audit_events,
         }
         path = urlparse(self.path).path
         parts = [part for part in path.split("/") if part]
         if len(parts) == 5 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories":
             self._call(lambda: self.store.list_gitlab_repositories(parts[3]))
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
+            self._call(lambda: self.store.list_workflow_versions(parts[2]))
             return
         if path in routes:
             self._call(routes[path])
@@ -71,6 +78,18 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if path == "/v1/gitlab/profiles":
             self._call(lambda: self.store.create_gitlab_profile(actor_id, body), HTTPStatus.CREATED)
             return
+        if path == "/v1/agents":
+            self._call(lambda: self.store.create_agent(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/skills":
+            self._call(lambda: self.store.create_skill(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/model-providers":
+            self._call(lambda: self.store.create_model_provider(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/workflows":
+            self._call(lambda: self.store.create_workflow(actor_id, body), HTTPStatus.CREATED)
+            return
 
         parts = [part for part in path.split("/") if part]
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "upload-grants":
@@ -87,6 +106,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 4 and parts[:2] == ["v1", "projects"] and parts[3] == "repositories":
             self._call(lambda: self.store.link_project_repository(actor_id, parts[2], body))
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
+            self._call(lambda: self.store.create_workflow_version(actor_id, parts[2], body), HTTPStatus.CREATED)
             return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
@@ -119,6 +141,21 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if len(parts) == 4 and parts[:3] == ["v1", "gitlab", "profiles"]:
             self._call(lambda: self.store.update_gitlab_profile(actor_id, parts[3], body))
             return
+        if len(parts) == 3 and parts[:2] == ["v1", "agents"]:
+            self._call(lambda: self.store.update_agent(actor_id, parts[2], body))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "skills"]:
+            self._call(lambda: self.store.update_skill(actor_id, parts[2], body))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "model-providers"]:
+            self._call(lambda: self.store.update_model_provider(actor_id, parts[2], body))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "workflows"]:
+            self._call(lambda: self.store.update_workflow(actor_id, parts[2], body))
+            return
+        if len(parts) == 5 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
+            self._call(lambda: self.store.update_workflow_version(actor_id, parts[2], parts[4], body))
+            return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
 
@@ -144,6 +181,18 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 4 and parts[:3] == ["v1", "gitlab", "profiles"]:
             self._call(lambda: self.store.delete_gitlab_profile(actor_id, parts[3]))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "agents"]:
+            self._call(lambda: self.store.delete_agent(actor_id, parts[2]))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "skills"]:
+            self._call(lambda: self.store.delete_skill(actor_id, parts[2]))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "model-providers"]:
+            self._call(lambda: self.store.delete_model_provider(actor_id, parts[2]))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "workflows"]:
+            self._call(lambda: self.store.delete_workflow(actor_id, parts[2]))
             return
         if len(parts) == 5 and parts[:2] == ["v1", "projects"] and parts[3] == "assets":
             self._call(lambda: self.store.unlink_project_asset(actor_id, parts[2], parts[4]))
@@ -179,6 +228,8 @@ class FoundationHandler(BaseHTTPRequestHandler):
             self._json({"error": "invalid_json"}, HTTPStatus.BAD_REQUEST)
         except DomainError as exc:
             self._json({"error": exc.code}, exc.status)
+        except TypeError:
+            self._json({"error": "invalid_input"}, HTTPStatus.BAD_REQUEST)
 
     def _json(self, payload: Any, status: int | HTTPStatus) -> None:
         data = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")

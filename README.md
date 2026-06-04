@@ -13,6 +13,9 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 - file metadata with local upload/download grant stubs
 - credential references with redacted secret handling
 - GitLab API profiles, repository listing stubs, and project-to-repository bindings
+- agent registry and skill catalog metadata
+- model provider configuration through safe credential references
+- workflow definitions with versioned node/edge models
 - audit events for create/link actions
 
 API contracts are kept in `packages/contracts/openapi/foundation-service.yaml`.

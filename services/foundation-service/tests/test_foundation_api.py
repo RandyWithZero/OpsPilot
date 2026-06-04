@@ -240,6 +240,126 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertNotIn("glpat-token", serialized)
         self.assertNotIn("oauth2", serialized)
 
+    def test_agent_skill_model_provider_and_workflow_slice(self) -> None:
+        credential = self.store.create_credential(
+            "usr_test_actor",
+            {"provider": "model_provider", "name": "OpenAI Ops", "secret": "sk-secret-value"},
+        )
+        provider = self.store.create_model_provider(
+            "usr_test_actor",
+            {
+                "provider": "openai",
+                "name": "OpenAI Default",
+                "credential_ref_id": credential["id"],
+                "base_url": "https://api.openai.example.com/v1?utm_source=setup",
+                "models": ["gpt-4.1", "gpt-4.1", "gpt-4.1-mini"],
+            },
+        )
+        self.assertEqual(provider["base_url"], "https://api.openai.example.com/v1")
+        self.assertEqual(provider["models"], ["gpt-4.1", "gpt-4.1-mini"])
+        self.assertNotIn("sk-secret-value", json.dumps(provider))
+
+        skill = self.store.create_skill(
+            "usr_test_actor",
+            {"name": "Incident Triage", "version": "1.0.0", "runtime": "python", "capabilities": ["triage", "summarize"]},
+        )
+        agent = self.store.create_agent(
+            "usr_test_actor",
+            {
+                "name": "Ops Copilot",
+                "kind": "automation",
+                "capabilities": ["triage", "triage"],
+                "skill_ids": [skill["id"]],
+                "model_provider_id": provider["id"],
+            },
+        )
+        self.assertEqual(agent["capabilities"], ["triage"])
+
+        workflow = self.store.create_workflow("usr_test_actor", {"name": "Incident response", "description": "Triage and summarize"})
+        version = self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "start", "type": "trigger", "name": "Alert received"},
+                    {"id": "triage", "type": "agent_task", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"]},
+                ],
+                "edges": [{"from_node_id": "start", "to_node_id": "triage"}],
+            },
+        )
+        self.assertEqual(version["workflow_id"], workflow["id"])
+        self.assertEqual(self.store.list_workflows()[0]["active_version_id"], version["id"])
+
+        with self.assertRaises(Exception) as raised:
+            self.store.create_workflow_version(
+                "usr_test_actor",
+                workflow["id"],
+                {
+                    "version": "bad",
+                    "nodes": [{"id": "start", "type": "trigger"}],
+                    "edges": [{"from_node_id": "start", "to_node_id": "missing"}],
+                },
+            )
+        self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+
+        audit = json.dumps(self.store.list_audit_events())
+        self.assertIn("workflow.version.created", audit)
+        self.assertIn("agent.created", audit)
+        self.assertNotIn("sk-secret-value", audit)
+
+    def test_agent_workflow_security_boundaries(self) -> None:
+        first_credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key 1", "secret": "sk-one"})
+        second_credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key 2", "secret": "sk-two"})
+        first_provider = self.store.create_model_provider("usr_test_actor", {"provider": "openai", "name": "Provider 1", "credential_ref_id": first_credential["id"]})
+        second_provider = self.store.create_model_provider("usr_test_actor", {"provider": "anthropic", "name": "Provider 2", "credential_ref_id": second_credential["id"]})
+        allowed_skill = self.store.create_skill("usr_test_actor", {"name": "Allowed Skill", "version": "1.0.0", "runtime": "python"})
+        other_skill = self.store.create_skill("usr_test_actor", {"name": "Other Skill", "version": "1.0.0", "runtime": "python"})
+        agent = self.store.create_agent(
+            "usr_test_actor",
+            {"name": "Guarded Agent", "kind": "automation", "skill_ids": [allowed_skill["id"]], "model_provider_id": first_provider["id"]},
+        )
+
+        with self.assertRaises(Exception) as credential_delete_error:
+            self.store.delete_credential("usr_test_actor", first_credential["id"])
+        self.assertEqual(getattr(credential_delete_error.exception, "code", ""), "conflict")
+        self.assertEqual(self.store.list_credentials()[0]["id"], first_credential["id"])
+
+        first_workflow = self.store.create_workflow("usr_test_actor", {"name": "Workflow A"})
+        second_workflow = self.store.create_workflow("usr_test_actor", {"name": "Workflow B"})
+        first_version = self.store.create_workflow_version(
+            "usr_test_actor",
+            first_workflow["id"],
+            {"version": "1", "nodes": [{"id": "start", "type": "trigger"}]},
+        )
+        with self.assertRaises(Exception) as cross_workflow_error:
+            self.store.update_workflow("usr_test_actor", second_workflow["id"], {"active_version_id": first_version["id"]})
+        self.assertEqual(getattr(cross_workflow_error.exception, "code", ""), "conflict")
+        workflow_after_rejected_update = next(workflow for workflow in self.store.list_workflows() if workflow["id"] == second_workflow["id"])
+        self.assertEqual(workflow_after_rejected_update["active_version_id"], "")
+
+        with self.assertRaises(Exception) as skill_policy_error:
+            self.store.create_workflow_version(
+                "usr_test_actor",
+                first_workflow["id"],
+                {
+                    "version": "bad-skill",
+                    "nodes": [{"id": "task", "type": "agent_task", "agent_id": agent["id"], "skill_id": other_skill["id"], "model_provider_id": first_provider["id"]}],
+                },
+            )
+        self.assertEqual(getattr(skill_policy_error.exception, "code", ""), "conflict")
+
+        with self.assertRaises(Exception) as provider_policy_error:
+            self.store.create_workflow_version(
+                "usr_test_actor",
+                first_workflow["id"],
+                {
+                    "version": "bad-provider",
+                    "nodes": [{"id": "task", "type": "agent_task", "agent_id": agent["id"], "skill_id": allowed_skill["id"], "model_provider_id": second_provider["id"]}],
+                },
+            )
+        self.assertEqual(getattr(provider_policy_error.exception, "code", ""), "conflict")
+
 
 if __name__ == "__main__":
     unittest.main()

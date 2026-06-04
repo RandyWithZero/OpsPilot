@@ -181,6 +181,105 @@ class RepositoryBinding:
 
 
 @dataclass
+class Agent:
+    name: str
+    kind: str
+    description: str = ""
+    status: str = "active"
+    capabilities: list[str] = field(default_factory=list)
+    skill_ids: list[str] = field(default_factory=list)
+    model_provider_id: str = ""
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.name or not self.kind:
+            raise InvalidInput("agents require name and kind")
+
+
+@dataclass
+class Skill:
+    name: str
+    version: str
+    runtime: str
+    description: str = ""
+    status: str = "active"
+    capabilities: list[str] = field(default_factory=list)
+    package_file_id: str = ""
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.name or not self.version or not self.runtime:
+            raise InvalidInput("skills require name, version, and runtime")
+
+
+@dataclass
+class ModelProvider:
+    provider: str
+    name: str
+    credential_ref_id: str
+    base_url: str = ""
+    models: list[str] = field(default_factory=list)
+    status: str = "active"
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.provider or not self.name or not self.credential_ref_id:
+            raise InvalidInput("model providers require provider, name, and credential_ref_id")
+        if self.base_url:
+            self.base_url = sanitize_public_url(self.base_url, allow_path=True)
+
+
+@dataclass
+class WorkflowDefinition:
+    name: str
+    description: str = ""
+    project_id: str = ""
+    status: str = "draft"
+    active_version_id: str = ""
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.name:
+            raise InvalidInput("workflows require name")
+
+
+@dataclass
+class WorkflowVersion:
+    workflow_id: str
+    version: str
+    nodes: list[dict[str, Any]] = field(default_factory=list)
+    edges: list[dict[str, Any]] = field(default_factory=list)
+    status: str = "draft"
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.workflow_id or not self.version:
+            raise InvalidInput("workflow versions require workflow_id and version")
+        node_ids = set()
+        for node in self.nodes:
+            node_id = str(node.get("id", "")).strip()
+            node_type = str(node.get("type", "")).strip()
+            if not node_id or not node_type:
+                raise InvalidInput("workflow nodes require id and type")
+            if node_id in node_ids:
+                raise Conflict("workflow node ids must be unique")
+            node_ids.add(node_id)
+        for edge in self.edges:
+            if edge.get("from_node_id") not in node_ids or edge.get("to_node_id") not in node_ids:
+                raise InvalidInput("workflow edges must reference existing nodes")
+
+
+@dataclass
 class AuditEvent:
     actor_id: str
     action: str
