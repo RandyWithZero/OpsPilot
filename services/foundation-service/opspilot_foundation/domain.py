@@ -480,7 +480,7 @@ def redact_sensitive_payload(value: Any) -> Any:
         for key, item in value.items():
             key_string = str(key)
             key_lower = key_string.lower()
-            if key_lower in SENSITIVE_FIELD_NAMES or "token" in key_lower or "secret" in key_lower or "password" in key_lower:
+            if key_lower in SENSITIVE_FIELD_NAMES or "token" in key_lower or "secret" in key_lower or "password" in key_lower or "key" in key_lower:
                 redacted[key_string] = "[REDACTED]"
             else:
                 redacted[key_string] = redact_sensitive_payload(item)

@@ -323,7 +323,7 @@ class FoundationSliceTest(unittest.TestCase):
                 "repository_id": "100",
                 "event_type": "merge_request",
                 "authenticity_token": "glpat-secret-value",
-                "payload": {"iid": 12, "token": "leaked", "nested": {"private_token": "nested-leak"}},
+                "payload": {"iid": 12, "token": "leaked", "nested": {"private_token": "nested-leak", "private_key": "private-key-should-redact", "safe": "value"}},
             },
         )
 
@@ -332,10 +332,13 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertEqual(webhook["status"], "received")
         self.assertEqual(webhook["payload"]["token"], "[REDACTED]")
         self.assertEqual(webhook["payload"]["nested"]["private_token"], "[REDACTED]")
+        self.assertEqual(webhook["payload"]["nested"]["private_key"], "[REDACTED]")
+        self.assertEqual(webhook["payload"]["nested"]["safe"], "value")
         serialized = json.dumps({"operations": self.store.list_vcs_operations(), "webhooks": self.store.list_vcs_webhook_events(), "audit": self.store.list_audit_events()})
         self.assertIn("vcs.operation.created", serialized)
         self.assertNotIn("glpat-secret-value", serialized)
         self.assertNotIn("leaked", serialized)
+        self.assertNotIn("private-key-should-redact", serialized)
 
         with self.assertRaises(Exception) as raised:
             self.store.create_vcs_operation(
