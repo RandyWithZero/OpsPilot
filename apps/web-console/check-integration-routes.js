@@ -19,6 +19,10 @@ assertStyle(".kv dd", ["min-width: 0", "overflow-wrap: anywhere"]);
 assertStyle(".link-list", ["min-width: 0"]);
 assertStyle(".link-list li", ["min-width: 0", "overflow-wrap: anywhere"]);
 assertStyle(".json-block", ["max-width: 100%", "white-space: pre-wrap", "overflow-wrap: anywhere"]);
+assertStyle(".builder-mode .sidebar,\n.builder-mode .topbar", ["display: none"]);
+assertStyle(".builder-shell", ["grid-template-columns: 220px minmax(520px, 1fr) 300px", "min-width: 0"]);
+assertStyle(".workflow-canvas", ["overflow: auto"]);
+assertStyle(".workflow-list-fallback", ["display: none"]);
 
 function createNode() {
   return {
@@ -165,6 +169,45 @@ const result = vm.runInContext(`
   const vcsDetails = detailPairs("vcsOperations", state.vcsOperations[0]).map(([, value]) => value).join(" ");
   const vcsRelationships = relationshipControls("vcsOperations", state.vcsOperations[0]);
   if (!vcsDetails.includes("json-block") || !vcsRelationships.includes("json-block")) throw new Error("long VCS detail JSON is not rendered in contained blocks");
+
+  openWorkflowBuilder("wfl_mock_release");
+  if (!content.innerHTML.includes("节点 Palette") || !content.innerHTML.includes("workflow-canvas") || !content.innerHTML.includes("移动端节点列表")) throw new Error("workflow builder shell missing MVP regions");
+  addWorkflowNode("result");
+  addWorkflowEdge("approval", state.workflowBuilder.draft.nodes.at(-1).id);
+  state.workflowBuilder.draft.nodes[1].input = "读取测试报告并输出发布风险。";
+  state.workflowBuilder.draft.nodes[1].failure_strategy = "stop";
+  const validBuilder = validateWorkflowDraft(state.workflowBuilder.draft);
+  if (validBuilder.errors.length) throw new Error("valid workflow builder draft produced errors: " + validBuilder.errors.map((item) => item.message).join(","));
+  const payload = workflowVersionPayload(state.workflowBuilder.draft);
+  if (!payload.nodes.length || !payload.edges.length || JSON.stringify(payload).includes('"x"') || JSON.stringify(payload).includes('"y"')) throw new Error("workflow builder payload does not match version nodes/edges contract");
+
+  state.skills.push({ id: "skl_forbidden", name: "未授权 Skill", version: "1.0.0", runtime: "python", status: "active", capabilities: [] });
+  state.workflowBuilder.draft.nodes[1].skill_id = "skl_forbidden";
+  const invalidBinding = validateWorkflowDraft(state.workflowBuilder.draft);
+  if (!invalidBinding.errors.some((item) => item.message.includes("Skill 不属于所选智能体"))) throw new Error("workflow builder did not catch invalid agent/Skill binding");
+  state.workflowBuilder.draft.nodes[1].skill_id = "skl_mock_release";
+  const beforeVersions = state.workflowVersions.wfl_mock_release.length;
+  await saveWorkflowBuilderVersion();
+  if (state.workflowVersions.wfl_mock_release.length !== beforeVersions + 1) throw new Error("offline workflow builder save did not append a version");
+  const saved = state.workflowVersions.wfl_mock_release.at(-1);
+  if (!saved.nodes.some((node) => node.type === "result") || !saved.edges.some((edge) => edge.to_node_id === saved.nodes.at(-1).id)) throw new Error("saved workflow builder version lost node/edge edits");
+
+  state.workflowVersions.wfl_mock_release.push({
+    id: "wfv_injection",
+    workflow_id: "wfl_mock_release",
+    version: "inj",
+    status: "draft",
+    nodes: [
+      { id: "node1\\" autofocus onfocus=alert(2) x=\\"", type: "<img src=x onerror=alert(1)>", name: "恶意节点" },
+      { id: "safe-node", type: "approval", name: "安全节点" },
+    ],
+    edges: [{ from_node_id: "node1\\" autofocus onfocus=alert(2) x=\\"", to_node_id: "safe-node" }],
+  });
+  state.workflows[0].active_version_id = "wfv_injection";
+  openWorkflowBuilder("wfl_mock_release");
+  if (content.innerHTML.includes("<img src=x") || content.innerHTML.includes("onfocus=alert")) throw new Error("unsafe saved workflow node type/id rendered into builder HTML");
+  const injectedPayload = workflowVersionPayload(state.workflowBuilder.draft);
+  if (JSON.stringify(injectedPayload).includes("onfocus=alert") || !injectedPayload.nodes.every((node) => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(node.id))) throw new Error("unsafe workflow node ids were not normalized before save payload");
 })()
 `, context);
 
