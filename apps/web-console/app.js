@@ -21,6 +21,7 @@ const navItems = [
   ["credentials", "模型 Key"],
   ["modelProviders", "模型供应商"],
   ["workflows", "运维流程"],
+  ["workflowRuns", "流程运行"],
   ["identity", "用户权限"],
 ];
 
@@ -83,6 +84,7 @@ const state = {
   vcsOperations: [],
   vcsWebhooks: [],
   files: [],
+  fileContexts: {},
   fileGrants: {},
   uploadSessions: [],
   testCases: [],
@@ -96,6 +98,7 @@ const state = {
   modelProviders: [],
   workflows: [],
   workflowVersions: {},
+  workflowRuns: [],
   workflowBuilder: null,
   auditEvents: [],
 };
@@ -107,7 +110,7 @@ const seed = {
     { id: "usr_mock_view", name: "陈敏", email: "viewer@opspilot.cn", status: "inactive", roles: [{ scope: "project", name: "Viewer" }], updated_at: "2026-06-04T07:20:00Z" },
   ],
   projects: [
-    { id: "prj_mock_core", key: "OPS", name: "智能运营中台", description: "统一纳管项目、资产、环境与智能流程。", owner_id: "usr_mock_admin", member_ids: ["usr_mock_admin", "usr_mock_ops"], asset_ids: ["ast_mock_ws", "ast_mock_gpu"], environment_ids: ["env_mock_dev", "env_mock_qa"], status: "active", updated_at: "2026-06-04T07:21:00Z" },
+    { id: "prj_mock_core", key: "OPS", name: "智能运营中台", description: "统一纳管项目、资产、环境与智能流程。", owner_id: "usr_mock_admin", member_ids: ["usr_mock_admin", "usr_mock_ops"], asset_ids: ["ast_mock_ws", "ast_mock_gpu"], environment_ids: ["env_mock_dev", "env_mock_qa"], repository_bindings: [{ provider: "gitlab", profile_id: "glp_mock_primary", repository_id: "100", path: "platform/opspilot", web_url: "https://gitlab.example.com/platform/opspilot" }], status: "active", updated_at: "2026-06-04T07:21:00Z" },
     { id: "prj_mock_lab", key: "LAB", name: "自动化测试平台", description: "QA/QE 自动化执行与质量报告归档。", owner_id: "usr_mock_ops", member_ids: ["usr_mock_ops"], asset_ids: ["ast_mock_vm"], environment_ids: ["env_mock_qe"], status: "active", updated_at: "2026-06-04T07:22:00Z" },
   ],
   assets: [
@@ -137,7 +140,12 @@ const seed = {
   ],
   files: [
     { id: "fil_mock_report", filename: "qa-regression-report.pdf", content_type: "application/pdf", size_bytes: 524288, owner_id: "usr_mock_ops", status: "available", checksum: "sha256:mock", created_at: "2026-06-04T08:12:00Z", updated_at: "2026-06-04T08:12:00Z" },
+    { id: "fil_mock_log", filename: "release-check-output.log", content_type: "text/plain", size_bytes: 18432, owner_id: "usr_mock_admin", status: "available", checksum: "sha256:logmock", created_at: "2026-06-04T08:18:00Z", updated_at: "2026-06-04T08:18:00Z" },
   ],
+  fileContexts: {
+    fil_mock_report: { project_id: "prj_mock_core", asset_id: "ast_mock_vm", environment_id: "env_mock_qa", asset_kind: "report" },
+    fil_mock_log: { project_id: "prj_mock_core", asset_id: "ast_mock_ws", environment_id: "env_mock_dev", asset_kind: "workflow-output" },
+  },
   fileGrants: {},
   uploadSessions: [],
   testCases: [
@@ -177,6 +185,40 @@ const seed = {
       { id: "wfv_mock_release_v1", workflow_id: "wfl_mock_release", version: "1", status: "active", nodes: [{ id: "trigger", type: "trigger", name: "发布触发" }, { id: "agent-check", type: "agent_task", name: "智能体巡检", agent_id: "agt_mock_ops", skill_id: "skl_mock_release", model_provider_id: "mdl_mock_deepseek" }, { id: "approval", type: "approval", name: "人工确认" }], edges: [{ from_node_id: "trigger", to_node_id: "agent-check" }, { from_node_id: "agent-check", to_node_id: "approval" }], created_at: "2026-06-04T08:07:00Z", updated_at: "2026-06-04T08:07:00Z" },
     ],
   },
+  workflowRuns: [
+    {
+      id: "wfr_mock_release_241",
+      workflow_id: "wfl_mock_release",
+      workflow_version_id: "wfv_mock_release_v1",
+      project_id: "prj_mock_core",
+      status: "pending_manual",
+      triggered_by: "gitlab:Pipeline Hook",
+      started_at: "2026-06-04T08:24:00Z",
+      updated_at: "2026-06-04T08:31:00Z",
+      steps: [
+        { node_id: "trigger", name: "发布触发", type: "trigger", status: "completed", output: "GitLab pipeline success on main." },
+        { node_id: "agent-check", name: "智能体巡检", type: "agent_task", status: "completed", output: "发现 QA 报告通过，环境容量满足发布前检查。" },
+        { node_id: "approval", name: "人工确认", type: "approval", status: "waiting_approval", assignee_role: "Operator", output: "等待人工复核，不可自动跳过。" },
+      ],
+      error_output: "",
+    },
+    {
+      id: "wfr_mock_release_239",
+      workflow_id: "wfl_mock_release",
+      workflow_version_id: "wfv_mock_release_v1",
+      project_id: "prj_mock_core",
+      status: "failed",
+      triggered_by: "manual:web-console",
+      started_at: "2026-06-04T06:10:00Z",
+      updated_at: "2026-06-04T06:22:00Z",
+      steps: [
+        { node_id: "trigger", name: "发布触发", type: "trigger", status: "completed", output: "手动启动。" },
+        { node_id: "agent-check", name: "智能体巡检", type: "agent_task", status: "failed", output: "环境 qa-runner-03 无法连接。" },
+        { node_id: "approval", name: "人工确认", type: "approval", status: "blocked", assignee_role: "Operator", output: "上游失败，审批未开放。" },
+      ],
+      error_output: "Connection refused: qa-runner-03:22\n建议先恢复资产连通性后重跑。",
+    },
+  ],
   auditEvents: [
     { id: "aud_mock_1", actor_id: "system", action: "project.created", resource_type: "project", resource_id: "prj_mock_core", occurred_at: "2026-06-04T07:21:00Z", metadata: { key: "OPS" } },
     { id: "aud_mock_2", actor_id: "system", action: "asset.created", resource_type: "asset", resource_id: "ast_mock_gpu", occurred_at: "2026-06-04T07:21:40Z", metadata: { category: "gpu" } },
@@ -265,6 +307,7 @@ async function loadData(forceToast = false) {
     state.vcsOperations = vcsOperations;
     state.vcsWebhooks = vcsWebhooks.map(sanitizeWebhookEvent);
     state.files = files;
+    state.fileContexts = {};
     state.fileGrants = {};
     state.uploadSessions = [];
     state.testCases = testCases;
@@ -278,6 +321,7 @@ async function loadData(forceToast = false) {
     state.modelProviders = modelProviders;
     state.workflows = workflows;
     state.workflowVersions = workflowVersions;
+    state.workflowRuns = [];
     state.auditEvents = auditEvents;
     if (forceToast) toast("基础服务数据已刷新。");
   } catch (error) {
@@ -291,6 +335,7 @@ async function loadData(forceToast = false) {
     state.vcsOperations = clone(seed.vcsOperations);
     state.vcsWebhooks = clone(seed.vcsWebhooks).map(sanitizeWebhookEvent);
     state.files = clone(seed.files);
+    state.fileContexts = clone(seed.fileContexts);
     state.fileGrants = clone(seed.fileGrants);
     state.uploadSessions = clone(seed.uploadSessions);
     state.testCases = clone(seed.testCases);
@@ -304,6 +349,7 @@ async function loadData(forceToast = false) {
     state.modelProviders = clone(seed.modelProviders);
     state.workflows = clone(seed.workflows);
     state.workflowVersions = clone(seed.workflowVersions);
+    state.workflowRuns = clone(seed.workflowRuns);
     state.auditEvents = clone(seed.auditEvents);
     if (forceToast) toast("基础服务不可用，已切换本地模拟数据。");
   }
@@ -358,10 +404,10 @@ function render() {
   if (state.route === "projects") renderResource("projects");
   if (state.route === "assets") renderResource("assets");
   if (state.route === "environments") renderResource("environments");
-  if (state.route === "gitlabProfiles") renderResource("gitlabProfiles");
+  if (state.route === "gitlabProfiles") renderGitLabConsole();
   if (state.route === "vcsOperations") renderResource("vcsOperations");
   if (state.route === "vcsWebhooks") renderResource("vcsWebhooks");
-  if (state.route === "files") renderResource("files");
+  if (state.route === "files") renderFileConsole();
   if (state.route === "testCases") renderResource("testCases");
   if (state.route === "testSuites") renderResource("testSuites");
   if (state.route === "testRuns") renderResource("testRuns");
@@ -372,6 +418,7 @@ function render() {
   if (state.route === "credentials") renderResource("credentials");
   if (state.route === "modelProviders") renderResource("modelProviders");
   if (state.route === "workflows") state.workflowBuilder ? renderWorkflowBuilder() : renderResource("workflows");
+  if (state.route === "workflowRuns") renderWorkflowRuns();
 }
 
 function renderDashboard() {
@@ -490,6 +537,144 @@ function renderTasks() {
   `;
 }
 
+function renderGitLabConsole() {
+  const profiles = filteredRows("gitlabProfiles");
+  const operations = state.vcsOperations.slice(0, 6);
+  const webhooks = state.vcsWebhooks.slice(0, 6);
+  content.innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">GitLab 集成</p>
+        <h1>GitLab 设置与仓库发现</h1>
+        <p class="muted">维护 credential profile、仓库选择、项目绑定入口和最近 VCS/Webhook 状态。</p>
+      </div>
+      ${actionButton("create", "新增 GitLab 通道", "primary-button", "create-gitlabProfiles", { type: "gitlabProfiles" })}
+    </div>
+    ${permissionBanner()}
+    <div class="metric-grid">
+      ${metric("Profiles", state.gitlabProfiles.length, `${activeCount(state.gitlabProfiles)} 个启用`)}
+      ${metric("可选仓库", Object.values(state.gitlabRepositories).reduce((total, repos) => total + repos.length, 0), "来自 /v1/gitlab/profiles/{id}/repositories")}
+      ${metric("项目绑定", state.projects.reduce((total, project) => total + (project.repository_bindings || []).length, 0), "通过 /v1/projects/{id}/repositories")}
+      ${metric("Webhook", state.vcsWebhooks.length, `${state.vcsWebhooks.filter((event) => event.status === "received").length} 个待处理`)}
+    </div>
+    <div class="toolbar">
+      <label>本页搜索<input data-filter="localQuery" type="search" value="${escapeHtml(state.filters.localQuery || "")}" placeholder="Profile、Base URL、仓库、凭据" /></label>
+      ${filterControl({ key: "status", label: "状态", values: ["all", "active", "inactive"] })}
+      <label>行数<select data-filter="limit"><option>10</option><option ${state.filters.limit === "25" ? "selected" : ""}>25</option></select></label>
+      <button class="ghost-button" data-clear>清除</button>
+    </div>
+    <section class="ops-grid">
+      <div class="table-wrap">${profiles.length ? tableFor("gitlabProfiles", profiles) : emptyStateFor("gitlabProfiles")}</div>
+      <aside class="panel stack-panel">
+        <h2>仓库发现</h2>
+        <p class="muted">仓库清单来自 profile 级发现接口；URL 会拒绝 token、secret、password 等敏感 query。</p>
+        ${gitLabRepositoryMatrix()}
+      </aside>
+    </section>
+    <section class="ops-grid">
+      <div class="panel stack-panel">
+        <h2>项目绑定入口</h2>
+        ${gitLabProjectBindings()}
+      </div>
+      <div class="panel stack-panel">
+        <h2>最近 VCS / Webhook</h2>
+        ${miniTimeline([
+          ...operations.map((op) => ({ title: `${translateOperation(op.operation_type)} · ${repositoryName(op.profile_id, op.repository_id)}`, status: op.status, meta: op.external_id || op.id })),
+          ...webhooks.map((hook) => ({ title: `${hook.event_type} · ${repositoryName(hook.profile_id, hook.repository_id)}`, status: hook.status, meta: hook.id })),
+        ])}
+      </div>
+    </section>
+    <section id="detail-slot">${state.detail?.type === "gitlabProfiles" ? detailMarkup("gitlabProfiles", state.detail.id) : ""}</section>
+  `;
+  bindToolbar("gitlabProfiles");
+  bindActions(content);
+}
+
+function renderFileConsole() {
+  const files = filteredFileRows();
+  content.innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">文件中心</p>
+        <h1>文件对象面板</h1>
+        <p class="muted">按项目、资产、环境筛选文件对象，管理上传、下载与删除状态。</p>
+      </div>
+      ${actionButton("create", "登记文件", "primary-button", "create-files", { type: "files" })}
+    </div>
+    ${permissionBanner()}
+    <div class="metric-grid">
+      ${metric("文件对象", state.files.length, `${state.files.filter((file) => file.status === "available").length} 个可下载`)}
+      ${metric("待上传", state.files.filter((file) => file.status === "pending_upload").length, "需创建上传会话")}
+      ${metric("上传会话", state.uploadSessions.length, `${state.uploadSessions.filter((session) => session.status === "open").length} 个打开`)}
+      ${metric("授权", Object.values(state.fileGrants).filter((grant) => grant.upload || grant.download).length, "仅显示方法和有效期")}
+    </div>
+    <div class="toolbar file-toolbar">
+      <label>本页搜索<input data-file-filter="localQuery" type="search" value="${escapeHtml(state.filters.localQuery || "")}" placeholder="文件名、类型、checksum" /></label>
+      <label>项目<select data-file-filter="project_id">${scopedOptions("projects", state.filters.project_id, "全部项目")}</select></label>
+      <label>资产<select data-file-filter="asset_id">${scopedOptions("assets", state.filters.asset_id, "全部资产")}</select></label>
+      <label>环境<select data-file-filter="environment_id">${scopedOptions("environments", state.filters.environment_id, "全部环境")}</select></label>
+      ${filterControl({ key: "status", label: "状态", values: ["all", "pending_upload", "available", "deleted"] }).replaceAll("data-filter", "data-file-filter")}
+      <button class="ghost-button" data-file-clear>清除</button>
+    </div>
+    <section class="table-wrap" aria-label="文件对象 table">
+      ${files.length ? fileObjectTable(files) : emptyStateFor("files")}
+    </section>
+    <section class="ops-grid">
+      <div class="panel stack-panel">
+        <h2>上传队列</h2>
+        ${miniTimeline(state.uploadSessions.map((session) => ({ title: `${fileName(session.file_id)} · ${session.method}`, status: session.status, meta: `${session.expires_in_seconds || 0} 秒有效` })))}
+      </div>
+      <div class="panel stack-panel">
+        <h2>接口边界</h2>
+        ${listItems(["POST /v1/files 创建 metadata", "POST /v1/files/{fileID}/upload-sessions 创建上传会话", "POST /v1/files/upload-sessions/{sessionID}/complete 完成上传", "POST /v1/files/{fileID}/download-grants 生成下载授权"])}
+      </div>
+    </section>
+    <section id="detail-slot">${state.detail?.type === "files" ? detailMarkup("files", state.detail.id) : ""}</section>
+  `;
+  bindFileToolbar();
+  bindActions(content);
+}
+
+function renderWorkflowRuns() {
+  const runs = filteredWorkflowRuns();
+  const selected = state.detail?.type === "workflowRuns" ? state.workflowRuns.find((run) => run.id === state.detail.id) : runs[0];
+  content.innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">流程运行</p>
+        <h1>运行状态复核入口</h1>
+        <p class="muted">展示运行列表、步骤状态、审批/manual step 状态和错误输出；审批等待不会显示成可跳过。</p>
+      </div>
+      <button class="ghost-button" data-action="link" data-action-name="open-workflow-builder-preview" data-id="${escapeAttr(state.workflows[0]?.id || "")}" ${state.workflows[0] ? "" : "disabled"}>查看定义预览</button>
+    </div>
+    ${permissionBanner()}
+    <div class="metric-grid">
+      ${metric("运行记录", state.workflowRuns.length, "mock adapter: /v1/workflow-runs")}
+      ${metric("执行中", state.workflowRuns.filter((run) => ["queued", "running"].includes(run.status)).length, "智能体或 Skill 正在处理")}
+      ${metric("待人工", state.workflowRuns.filter((run) => run.status === "pending_manual").length, "审批节点需人工复核")}
+      ${metric("失败", state.workflowRuns.filter((run) => run.status === "failed").length, "查看错误输出")}
+    </div>
+    <div class="toolbar">
+      <label>本页搜索<input data-run-filter="localQuery" type="search" value="${escapeHtml(state.filters.localQuery || "")}" placeholder="运行号、流程、触发源、错误" /></label>
+      <label>状态<select data-run-filter="status">${selectedOptions(["all", "queued", "running", "pending_manual", "passed", "failed", "cancelled"], state.filters.status || "all")}</select></label>
+      <label>项目<select data-run-filter="project_id">${scopedOptions("projects", state.filters.project_id, "全部项目")}</select></label>
+      <button class="ghost-button" data-run-clear>清除</button>
+    </div>
+    <div class="run-layout">
+      <section class="table-wrap">${runs.length ? workflowRunTable(runs) : `<div class="empty-state"><strong>暂无流程运行</strong><span>${state.apiOnline ? "当前 OpenAPI 尚未提供 workflow run endpoint。" : "本地模拟数据中没有匹配记录。"}</span></div>`}</section>
+      <aside class="detail-panel">${selected ? workflowRunDetail(selected) : "<h2>运行详情</h2><p class=\"muted\">选择一条运行记录查看步骤状态。</p>"}</aside>
+    </div>
+  `;
+  bindWorkflowRunToolbar();
+  bindActions(content);
+  content.querySelectorAll("[data-run-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.detail = { type: "workflowRuns", id: button.dataset.runId };
+      renderWorkflowRuns();
+    });
+  });
+}
+
 function renderResource(type) {
   const config = resourceConfig(type);
   const rows = filteredRows(type);
@@ -516,6 +701,152 @@ function renderResource(type) {
   `;
   bindToolbar(type);
   bindActions(content);
+}
+
+function gitLabRepositoryMatrix() {
+  const profiles = state.gitlabProfiles;
+  if (!profiles.length) return `<div class="empty-state compact">暂无 GitLab profile。</div>`;
+  return `<div class="repository-matrix">${profiles.map((profile) => {
+    const repos = state.gitlabRepositories[profile.id] || profile.repository_selection || [];
+    return `<section>
+      <div><strong>${escapeHtml(profile.name)}</strong>${statusPill(profile.status)}</div>
+      <small>${escapeHtml(profile.base_url)} · ${credentialName(profile.credential_ref_id)}</small>
+      ${repos.length ? `<ul>${repos.map((repo) => `<li><span>${escapeHtml(repo.path)}</span><small>${escapeHtml(repo.id)} · ${escapeHtml(repo.web_url)}</small></li>`).join("")}</ul>` : `<div class="empty-state compact">暂无仓库。</div>`}
+    </section>`;
+  }).join("")}</div>`;
+}
+
+function gitLabProjectBindings() {
+  const rows = state.projects.map((project) => {
+    const bindings = project.repository_bindings || [];
+    return `<li>
+      <div><strong>${escapeHtml(project.key)} · ${escapeHtml(project.name)}</strong><small>${bindings.length ? bindings.map((binding) => repositoryName(binding.profile_id, binding.repository_id)).join(" / ") : "暂无仓库绑定"}</small></div>
+      ${actionButton("open", "详情", "ghost-button small", `open-project-${project.id}`, { type: "projects", id: project.id })}
+    </li>`;
+  });
+  return rows.length ? `<ul class="link-list">${rows.join("")}</ul>` : `<div class="empty-state compact">暂无项目。</div>`;
+}
+
+function filteredFileRows() {
+  const query = [state.query, state.filters.localQuery].filter(Boolean).join(" ").toLowerCase();
+  return state.files.filter((file) => {
+    const context = state.fileContexts[file.id] || {};
+    const text = JSON.stringify({ ...file, context }).toLowerCase();
+    if (query && !query.split(/\s+/).every((token) => text.includes(token))) return false;
+    if (state.filters.status && state.filters.status !== "all" && file.status !== state.filters.status) return false;
+    if (state.filters.project_id && state.filters.project_id !== "all" && context.project_id !== state.filters.project_id) return false;
+    if (state.filters.asset_id && state.filters.asset_id !== "all" && context.asset_id !== state.filters.asset_id) return false;
+    if (state.filters.environment_id && state.filters.environment_id !== "all" && context.environment_id !== state.filters.environment_id) return false;
+    return true;
+  });
+}
+
+function fileObjectTable(files) {
+  const headers = ["文件", "项目/环境", "资产", "大小", "上传/下载", "状态", "操作"];
+  return `<table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${files.map((file) => {
+    const context = state.fileContexts[file.id] || {};
+    return `<tr>
+      <td>${titleCell(file.id, file.filename, file.checksum || file.content_type)}</td>
+      <td>${projectName(context.project_id)}<br><small>${environmentName(context.environment_id)}</small></td>
+      <td>${assetLabel(context.asset_id || "")}<br><small>${escapeHtml(context.asset_kind || "file-object")}</small></td>
+      <td>${formatBytes(file.size_bytes)}</td>
+      <td>${fileGrantSummary(file.id)}</td>
+      <td>${statusPill(file.status)}</td>
+      <td>${rowActions("files", file)}</td>
+    </tr>`;
+  }).join("")}</tbody></table>`;
+}
+
+function bindFileToolbar() {
+  content.querySelectorAll("[data-file-filter]").forEach((control) => {
+    control.addEventListener("input", () => {
+      state.filters[control.dataset.fileFilter] = control.value;
+      renderFileConsole();
+    });
+  });
+  content.querySelector("[data-file-clear]").addEventListener("click", () => {
+    state.filters = {};
+    renderFileConsole();
+  });
+}
+
+function filteredWorkflowRuns() {
+  const query = [state.query, state.filters.localQuery].filter(Boolean).join(" ").toLowerCase();
+  return state.workflowRuns.filter((run) => {
+    const text = JSON.stringify({ ...run, workflow: workflowName(run.workflow_id), project: projectName(run.project_id) }).toLowerCase();
+    if (query && !query.split(/\s+/).every((token) => text.includes(token))) return false;
+    if (state.filters.status && state.filters.status !== "all" && run.status !== state.filters.status) return false;
+    if (state.filters.project_id && state.filters.project_id !== "all" && run.project_id !== state.filters.project_id) return false;
+    return true;
+  });
+}
+
+function workflowRunTable(runs) {
+  const headers = ["运行", "流程", "项目", "触发", "当前状态", "更新时间"];
+  return `<table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${runs.map((run) => `<tr>
+    <td><span class="row-title"><button data-run-id="${escapeAttr(run.id)}">${escapeHtml(run.id)}</button><small>${escapeHtml(run.workflow_version_id)}</small></span></td>
+    <td>${workflowName(run.workflow_id)}</td>
+    <td>${projectName(run.project_id)}</td>
+    <td>${escapeHtml(run.triggered_by)}</td>
+    <td>${statusPill(run.status)}</td>
+    <td>${date(run.updated_at)}</td>
+  </tr>`).join("")}</tbody></table>`;
+}
+
+function workflowRunDetail(run) {
+  return `
+    <div class="detail-heading">
+      <div><h2>${escapeHtml(run.id)}</h2><p class="muted">${workflowName(run.workflow_id)} · ${projectName(run.project_id)}</p></div>
+      ${statusPill(run.status)}
+    </div>
+    <dl class="kv">
+      <dt>触发源</dt><dd>${escapeHtml(run.triggered_by)}</dd>
+      <dt>开始时间</dt><dd>${date(run.started_at)}</dd>
+      <dt>更新时间</dt><dd>${date(run.updated_at)}</dd>
+      <dt>接口边界</dt><dd><span class="pill">mock /v1/workflow-runs</span></dd>
+    </dl>
+    <h3>步骤状态</h3>
+    <ol class="run-step-list">${(run.steps || []).map((step, index) => workflowRunStep(step, index)).join("")}</ol>
+    <h3>错误输出</h3>
+    ${run.error_output ? jsonBlock(run.error_output) : `<div class="empty-state compact">暂无错误输出。</div>`}
+  `;
+}
+
+function workflowRunStep(step, index) {
+  const manual = ["approval", "manual"].includes(step.type) || ["waiting_approval", "blocked"].includes(step.status);
+  return `<li class="${manual ? "manual-step" : ""}">
+    <span>${index + 1}</span>
+    <div>
+      <div class="step-head"><strong>${escapeHtml(step.name)}</strong>${statusPill(step.status)}</div>
+      <small>${workflowNodeTypeLabel(step.type)}${step.assignee_role ? ` · ${displayRole(step.assignee_role)}` : ""}</small>
+      <p>${escapeHtml(step.output || "暂无输出。")}</p>
+      ${manual ? `<div class="permission-denied compact"><strong>人工控制节点</strong><span>该步骤必须等待授权角色处理，不能自动跳过。</span></div>` : ""}
+    </div>
+  </li>`;
+}
+
+function bindWorkflowRunToolbar() {
+  content.querySelectorAll("[data-run-filter]").forEach((control) => {
+    control.addEventListener("input", () => {
+      state.filters[control.dataset.runFilter] = control.value;
+      renderWorkflowRuns();
+    });
+  });
+  content.querySelector("[data-run-clear]").addEventListener("click", () => {
+    state.filters = {};
+    state.detail = null;
+    renderWorkflowRuns();
+  });
+}
+
+function scopedOptions(source, selected = "all", emptyLabel = "全部") {
+  const rows = source === "projects" ? state.projects : source === "assets" ? state.assets : state.environments;
+  return `<option value="all">${emptyLabel}</option>${rows.map((row) => `<option value="${row.id}" ${selected === row.id ? "selected" : ""}>${labelFor(source, row.id)}</option>`).join("")}`;
+}
+
+function miniTimeline(items) {
+  if (!items.length) return `<div class="empty-state compact">暂无记录。</div>`;
+  return `<ul class="mini-timeline">${items.slice(0, 10).map((item) => `<li><span>${statusPill(item.status)}</span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.meta || "")}</small></div></li>`).join("")}</ul>`;
 }
 
 function resourceConfig(type) {
@@ -1885,6 +2216,7 @@ function addLocal(type, payload) {
   if (type === "files") {
     item.status = "pending_upload";
     item.checksum = "";
+    state.fileContexts[item.id] = { project_id: state.projects[0]?.id || "", asset_id: "", environment_id: "", asset_kind: "manual-upload" };
   }
   if (type === "testCases") item.steps = item.steps || [];
   if (type === "testSuites") item.case_ids = unique(item.case_ids || []);
@@ -2019,7 +2351,7 @@ function readiness(env) {
 }
 
 function statusPill(status = "active") {
-  const tone = ["active", "available", "in_use", "done", "completed", "passed", "available"].includes(status) ? "ok" : ["inactive", "maintenance", "archived", "warning", "pending", "queued", "low", "medium", "draft", "deprecated", "pending_upload", "open", "received"].includes(status) ? "warn" : ["high", "retired", "failed", "cancelled", "rejected"].includes(status) ? "bad" : status === "running" ? "" : "";
+  const tone = ["active", "available", "in_use", "done", "completed", "passed", "available"].includes(status) ? "ok" : ["inactive", "maintenance", "archived", "warning", "pending", "queued", "low", "medium", "draft", "deprecated", "pending_upload", "open", "received", "pending_manual", "waiting_approval"].includes(status) ? "warn" : ["high", "retired", "failed", "cancelled", "rejected", "blocked"].includes(status) ? "bad" : status === "running" ? "" : "";
   return `<span class="pill ${tone}">${escapeHtml(translateStatus(status))}</span>`;
 }
 
@@ -2145,6 +2477,16 @@ function testSuiteName(id) {
 function testRunName(id) {
   const run = state.testRuns.find((item) => item.id === id);
   return escapeHtml(run ? `运行 ${run.id}` : id || "未绑定");
+}
+
+function workflowName(id) {
+  const workflow = state.workflows.find((item) => item.id === id);
+  return escapeHtml(workflow ? workflow.name : id || "未绑定");
+}
+
+function fileName(id) {
+  const file = state.files.find((item) => item.id === id);
+  return escapeHtml(file ? file.filename : id || "未绑定");
 }
 
 function reportName(id) {
@@ -2396,7 +2738,7 @@ function linkedProjects() {
 }
 
 function countFor(key) {
-  return { dashboard: "", bigscreen: "", tasks: "", identity: state.users.length, projects: state.projects.length, assets: state.assets.length, environments: state.environments.length, gitlabProfiles: state.gitlabProfiles.length, vcsOperations: state.vcsOperations.length, vcsWebhooks: state.vcsWebhooks.length, files: state.files.length, testCases: state.testCases.length, testSuites: state.testSuites.length, testRuns: state.testRuns.length, reports: state.reports.length, qualityGates: state.qualityGates.length, agents: state.agents.length, skills: state.skills.length, credentials: state.credentials.filter((row) => row.provider === "model_provider").length, modelProviders: state.modelProviders.length, workflows: state.workflows.length }[key] || "";
+  return { dashboard: "", bigscreen: "", tasks: "", identity: state.users.length, projects: state.projects.length, assets: state.assets.length, environments: state.environments.length, gitlabProfiles: state.gitlabProfiles.length, vcsOperations: state.vcsOperations.length, vcsWebhooks: state.vcsWebhooks.length, files: state.files.length, testCases: state.testCases.length, testSuites: state.testSuites.length, testRuns: state.testRuns.length, reports: state.reports.length, qualityGates: state.qualityGates.length, agents: state.agents.length, skills: state.skills.length, credentials: state.credentials.filter((row) => row.provider === "model_provider").length, modelProviders: state.modelProviders.length, workflows: state.workflows.length, workflowRuns: state.workflowRuns.length }[key] || "";
 }
 
 function collectionFor(type) {
@@ -2514,6 +2856,9 @@ function translateStatus(status) {
     pending: "等待人工处理",
     done: "已完成",
     queued: "待分配",
+    pending_manual: "待人工复核",
+    waiting_approval: "等待审批",
+    blocked: "已阻断",
   }[status] || status;
 }
 
