@@ -1040,6 +1040,103 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkflowVersion"
+  /v1/workflow-runs:
+    get:
+      summary: List workflow runs
+      responses:
+        "200":
+          description: Workflow runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkflowRun"
+  /v1/workflows/{workflowID}/runs:
+    get:
+      summary: List workflow runs for a workflow
+      parameters:
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workflow runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkflowRun"
+    post:
+      summary: Create a workflow run from the workflow active version
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowRunCreate"
+      responses:
+        "201":
+          description: Created workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+  /v1/workflow-runs/{runID}/start:
+    post:
+      summary: Manually start a created workflow run
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Started workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+  /v1/workflow-runs/{runID}/steps/{stepRunID}:
+    patch:
+      summary: Update an agent, manual, or result workflow step run
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: stepRunID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowStepRunUpdate"
+      responses:
+        "200":
+          description: Updated workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
   /v1/test-cases:
     get:
       summary: List test cases
@@ -1847,7 +1944,7 @@ components:
         id:
           type: string
         type:
-          enum: [trigger, agent_task, skill_task, approval, notification]
+          enum: [trigger, agent_task, skill_task, approval, notification, manual, manual_task, result]
         name:
           type: string
         agent_id:
@@ -1901,6 +1998,108 @@ components:
             updated_at:
               type: string
               format: date-time
+    WorkflowRunCreate:
+      type: object
+      properties:
+        workflow_version_id:
+          type: string
+          description: Optional explicit version. Defaults to the workflow active_version_id.
+        trigger_type:
+          enum: [manual]
+        start:
+          type: boolean
+          description: If true, create and immediately manually start the run.
+    WorkflowStepRunUpdate:
+      type: object
+      required: [status]
+      properties:
+        status:
+          enum: [running, completed, failed, skipped]
+        output:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+    WorkflowStepRun:
+      type: object
+      required: [id, workflow_run_id, workflow_id, workflow_version_id, node_id, node_type, step_type, sequence, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        workflow_run_id:
+          type: string
+        workflow_id:
+          type: string
+        workflow_version_id:
+          type: string
+        node_id:
+          type: string
+        node_type:
+          type: string
+        step_type:
+          enum: [trigger, agent, manual, result]
+        sequence:
+          type: integer
+        name:
+          type: string
+        status:
+          enum: [pending, running, completed, failed, skipped]
+        agent_id:
+          type: string
+        skill_id:
+          type: string
+        model_provider_id:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    WorkflowRun:
+      type: object
+      required: [id, workflow_id, workflow_version_id, trigger_type, status, steps, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        workflow_id:
+          type: string
+        workflow_version_id:
+          type: string
+        trigger_type:
+          enum: [manual]
+        status:
+          enum: [created, running, completed, failed, cancelled]
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowStepRun"
     TestCaseCreate:
       type: object
       required: [project_id, name]

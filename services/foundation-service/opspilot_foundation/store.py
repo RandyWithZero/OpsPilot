@@ -33,6 +33,8 @@ from .domain import (
     VCSOperation,
     VCSWebhookEvent,
     WorkflowDefinition,
+    WorkflowRun,
+    WorkflowStepRun,
     WorkflowVersion,
     now_utc,
     redact_sensitive_payload,
@@ -61,6 +63,8 @@ class MemoryStore:
         self.model_providers: dict[str, ModelProvider] = {}
         self.workflows: dict[str, WorkflowDefinition] = {}
         self.workflow_versions: dict[str, WorkflowVersion] = {}
+        self.workflow_runs: dict[str, WorkflowRun] = {}
+        self.workflow_step_runs: dict[str, WorkflowStepRun] = {}
         self.test_cases: dict[str, TestCase] = {}
         self.test_suites: dict[str, TestSuite] = {}
         self.test_runs: dict[str, TestRun] = {}
@@ -820,6 +824,108 @@ class MemoryStore:
             self._audit(actor_id, "workflow.version.updated", "workflow_version", version.id, {"status": version.status})
             return asdict(version)
 
+    def create_workflow_run(self, actor_id: str, workflow_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            workflow = self._workflow(workflow_id)
+            version_id = str(data.get("workflow_version_id") or workflow.active_version_id)
+            if not version_id:
+                raise InvalidInput("workflow has no active version")
+            version = self._workflow_version(version_id)
+            if version.workflow_id != workflow.id:
+                raise Conflict("workflow version belongs to another workflow")
+            ordered_nodes = self._ordered_workflow_nodes(version)
+            if not ordered_nodes:
+                raise InvalidInput("workflow active version has no nodes")
+            run = WorkflowRun(workflow_id=workflow.id, workflow_version_id=version.id, trigger_type=str(data.get("trigger_type") or "manual"))
+            run.validate()
+            run.id = self._id("wfr")
+            stamp(run)
+            self.workflow_runs[run.id] = run
+            for sequence, node in enumerate(ordered_nodes, start=1):
+                step = WorkflowStepRun(
+                    workflow_run_id=run.id,
+                    workflow_id=workflow.id,
+                    workflow_version_id=version.id,
+                    node_id=str(node["id"]),
+                    node_type=str(node["type"]),
+                    step_type=self._workflow_step_type(str(node["type"])),
+                    sequence=sequence,
+                    name=str(node.get("name", "")),
+                    agent_id=str(node.get("agent_id", "")),
+                    skill_id=str(node.get("skill_id", "")),
+                    model_provider_id=str(node.get("model_provider_id", "")),
+                    input=dict(node.get("config", {})) if isinstance(node.get("config", {}), dict) else {},
+                )
+                step.validate()
+                step.id = self._id("wfs")
+                stamp(step)
+                self.workflow_step_runs[step.id] = step
+            self._audit(actor_id, "workflow.run.created", "workflow_run", run.id, {"workflow_id": workflow.id, "workflow_version_id": version.id, "step_count": len(ordered_nodes)})
+            response = self._workflow_run_response(run)
+            if data.get("start") is True:
+                return self.start_workflow_run(actor_id, run.id)
+            return response
+
+    def list_workflow_runs(self, workflow_id: str = "") -> list[dict[str, Any]]:
+        with self._lock:
+            runs = self.workflow_runs.values()
+            if workflow_id:
+                self._workflow(workflow_id)
+                runs = [run for run in runs if run.workflow_id == workflow_id]
+            return [self._workflow_run_response(run) for run in runs]
+
+    def start_workflow_run(self, actor_id: str, run_id: str) -> dict[str, Any]:
+        with self._lock:
+            run = self._workflow_run(run_id)
+            if run.status != "created":
+                raise Conflict("workflow run cannot be started from current status")
+            stamp_time = now_utc()
+            run.status = "running"
+            run.started_at = stamp_time
+            run.updated_at = stamp_time
+            for step in self._steps_for_run(run.id):
+                if step.step_type == "trigger":
+                    step.status = "completed"
+                    step.started_at = stamp_time
+                    step.completed_at = stamp_time
+                    step.updated_at = stamp_time
+            self._audit(actor_id, "workflow.run.started", "workflow_run", run.id, {"workflow_id": run.workflow_id, "workflow_version_id": run.workflow_version_id})
+            self._refresh_workflow_run_status(run)
+            return self._workflow_run_response(run)
+
+    def update_workflow_step_run(self, actor_id: str, run_id: str, step_run_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            run = self._workflow_run(run_id)
+            step = self._workflow_step_run(step_run_id)
+            if step.workflow_run_id != run.id:
+                raise NotFound("workflow step run not found")
+            if step.step_type == "trigger":
+                raise InvalidInput("trigger step runs are managed by workflow start")
+            if run.status != "running":
+                raise Conflict("workflow run is not active")
+            next_status = str(data.get("status", "")).strip()
+            if not next_status:
+                raise InvalidInput("workflow step updates require status")
+            self._validate_step_transition(step, next_status)
+            stamp_time = now_utc()
+            if next_status == "running" and not step.started_at:
+                step.started_at = stamp_time
+            if next_status in {"completed", "failed", "skipped"}:
+                step.completed_at = stamp_time
+                if not step.started_at:
+                    step.started_at = stamp_time
+            step.status = next_status
+            if "output" in data:
+                if not isinstance(data["output"], dict):
+                    raise InvalidInput("workflow step output must be an object")
+                step.output = data["output"]
+            if "error" in data:
+                step.error = str(data["error"])
+            step.updated_at = stamp_time
+            self._audit(actor_id, "workflow.step.updated", "workflow_step_run", step.id, {"workflow_run_id": run.id, "step_type": step.step_type, "status": step.status})
+            self._refresh_workflow_run_status(run)
+            return self._workflow_run_response(run)
+
     def create_test_case(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
         test_case = TestCase(**pick(data, TestCase))
         test_case.validate()
@@ -994,6 +1100,16 @@ class MemoryStore:
             raise NotFound("workflow version not found")
         return self.workflow_versions[version_id]
 
+    def _workflow_run(self, run_id: str) -> WorkflowRun:
+        if run_id not in self.workflow_runs:
+            raise NotFound("workflow run not found")
+        return self.workflow_runs[run_id]
+
+    def _workflow_step_run(self, step_run_id: str) -> WorkflowStepRun:
+        if step_run_id not in self.workflow_step_runs:
+            raise NotFound("workflow step run not found")
+        return self.workflow_step_runs[step_run_id]
+
     def _test_case(self, case_id: str) -> TestCase:
         if case_id not in self.test_cases:
             raise NotFound("test case not found")
@@ -1041,6 +1157,75 @@ class MemoryStore:
                     raise Conflict("workflow node skill is not allowed by agent")
                 if model_provider_id and model_provider_id != agent.model_provider_id:
                     raise Conflict("workflow node model provider is not allowed by agent")
+
+    def _workflow_run_response(self, run: WorkflowRun) -> dict[str, Any]:
+        response = asdict(run)
+        response["steps"] = [asdict(step) for step in self._steps_for_run(run.id)]
+        return response
+
+    def _steps_for_run(self, run_id: str) -> list[WorkflowStepRun]:
+        return sorted((step for step in self.workflow_step_runs.values() if step.workflow_run_id == run_id), key=lambda step: step.sequence)
+
+    def _ordered_workflow_nodes(self, version: WorkflowVersion) -> list[dict[str, Any]]:
+        nodes = [dict(node) for node in version.nodes]
+        node_by_id = {str(node["id"]): node for node in nodes}
+        edges = [(str(edge["from_node_id"]), str(edge["to_node_id"])) for edge in version.edges]
+        incoming: dict[str, int] = {node_id: 0 for node_id in node_by_id}
+        outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_by_id}
+        for from_node_id, to_node_id in edges:
+            outgoing[from_node_id].append(to_node_id)
+            incoming[to_node_id] += 1
+        queue = [str(node["id"]) for node in nodes if incoming[str(node["id"])] == 0]
+        ordered_ids: list[str] = []
+        while queue:
+            node_id = queue.pop(0)
+            ordered_ids.append(node_id)
+            for child_id in outgoing[node_id]:
+                incoming[child_id] -= 1
+                if incoming[child_id] == 0:
+                    queue.append(child_id)
+        if len(ordered_ids) != len(nodes):
+            raise InvalidInput("workflow version edges must not contain cycles")
+        return [node_by_id[node_id] for node_id in ordered_ids]
+
+    def _workflow_step_type(self, node_type: str) -> str:
+        if node_type == "trigger":
+            return "trigger"
+        if node_type == "agent_task":
+            return "agent"
+        if node_type in {"approval", "manual", "manual_task"}:
+            return "manual"
+        return "result"
+
+    def _validate_step_transition(self, step: WorkflowStepRun, next_status: str) -> None:
+        if next_status not in {"running", "completed", "failed", "skipped"}:
+            raise InvalidInput("unsupported workflow step status")
+        allowed = {
+            "pending": {"running", "completed", "failed", "skipped"},
+            "running": {"completed", "failed", "skipped"},
+            "completed": set(),
+            "failed": set(),
+            "skipped": set(),
+        }
+        if next_status not in allowed[step.status]:
+            raise Conflict("workflow step cannot transition from current status")
+
+    def _refresh_workflow_run_status(self, run: WorkflowRun) -> None:
+        steps = self._steps_for_run(run.id)
+        executable_steps = [step for step in steps if step.step_type != "trigger"]
+        if any(step.status == "failed" for step in executable_steps):
+            run.status = "failed"
+            run.completed_at = run.completed_at or now_utc()
+            run.updated_at = run.completed_at
+            return
+        if executable_steps and all(step.status in {"completed", "skipped"} for step in executable_steps):
+            run.status = "completed"
+            run.completed_at = run.completed_at or now_utc()
+            run.updated_at = run.completed_at
+            return
+        if run.status != "created":
+            run.status = "running"
+            run.updated_at = now_utc()
 
     def _id(self, prefix: str) -> str:
         self._ids += 1

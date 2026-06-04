@@ -474,6 +474,65 @@ class FoundationSliceTest(unittest.TestCase):
             )
         self.assertEqual(getattr(provider_policy_error.exception, "code", ""), "conflict")
 
+    def test_workflow_run_execution_slice_orders_and_transitions_steps(self) -> None:
+        credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key", "secret": "sk-secret"})
+        provider = self.store.create_model_provider("usr_test_actor", {"provider": "openai", "name": "Provider", "credential_ref_id": credential["id"]})
+        skill = self.store.create_skill("usr_test_actor", {"name": "Deploy", "version": "1.0.0", "runtime": "python"})
+        agent = self.store.create_agent("usr_test_actor", {"name": "Deploy Agent", "kind": "automation", "skill_ids": [skill["id"]], "model_provider_id": provider["id"]})
+        workflow = self.store.create_workflow("usr_test_actor", {"name": "Deploy workflow"})
+        version = self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "approve", "type": "approval", "name": "Approve"},
+                    {"id": "start", "type": "trigger", "name": "Start"},
+                    {"id": "deploy", "type": "agent_task", "name": "Deploy", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"]},
+                    {"id": "done", "type": "result", "name": "Done"},
+                ],
+                "edges": [
+                    {"from_node_id": "start", "to_node_id": "deploy"},
+                    {"from_node_id": "deploy", "to_node_id": "approve"},
+                    {"from_node_id": "approve", "to_node_id": "done"},
+                ],
+            },
+        )
+
+        run = self.store.create_workflow_run("usr_test_actor", workflow["id"], {})
+        self.assertEqual(run["workflow_version_id"], version["id"])
+        self.assertEqual(run["status"], "created")
+        self.assertEqual([step["node_id"] for step in run["steps"]], ["start", "deploy", "approve", "done"])
+        self.assertEqual([step["step_type"] for step in run["steps"]], ["trigger", "agent", "manual", "result"])
+
+        started = self.store.start_workflow_run("usr_test_actor", run["id"])
+        self.assertEqual(started["status"], "running")
+        self.assertEqual(started["steps"][0]["status"], "completed")
+
+        agent_step = next(step for step in started["steps"] if step["step_type"] == "agent")
+        manual_step = next(step for step in started["steps"] if step["step_type"] == "manual")
+        result_step = next(step for step in started["steps"] if step["step_type"] == "result")
+        running = self.store.update_workflow_step_run("usr_test_actor", run["id"], agent_step["id"], {"status": "running"})
+        self.assertEqual(next(step for step in running["steps"] if step["id"] == agent_step["id"])["status"], "running")
+        self.store.update_workflow_step_run("usr_test_actor", run["id"], agent_step["id"], {"status": "completed", "output": {"deployment_id": "dep-1"}})
+        self.store.update_workflow_step_run("usr_test_actor", run["id"], manual_step["id"], {"status": "completed", "output": {"approved_by": "qa"}})
+        completed = self.store.update_workflow_step_run("usr_test_actor", run["id"], result_step["id"], {"status": "completed", "output": {"summary": "ok"}})
+
+        self.assertEqual(completed["status"], "completed")
+        self.assertTrue(completed["completed_at"])
+        self.assertEqual(next(step for step in completed["steps"] if step["id"] == agent_step["id"])["output"], {"deployment_id": "dep-1"})
+        self.assertEqual(self.store.list_workflow_runs(workflow["id"])[0]["id"], run["id"])
+
+        with self.assertRaises(Exception) as raised:
+            self.store.update_workflow_step_run("usr_test_actor", run["id"], agent_step["id"], {"status": "running"})
+        self.assertEqual(getattr(raised.exception, "code", ""), "conflict")
+
+        audit = json.dumps(self.store.list_audit_events())
+        self.assertIn("workflow.run.created", audit)
+        self.assertIn("workflow.run.started", audit)
+        self.assertIn("workflow.step.updated", audit)
+        self.assertNotIn("sk-secret", audit)
+
     def test_test_report_quality_gate_slice_validates_project_boundaries(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
         project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
