@@ -491,7 +491,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CredentialCreate"
+              $ref: "#/components/schemas/CredentialUpdate"
       responses:
         "201":
           description: Created credential reference
@@ -885,9 +885,23 @@ components:
           writeOnly: true
         status:
           enum: [active, inactive]
+    CredentialUpdate:
+      type: object
+      properties:
+        provider:
+          enum: [gitlab, model_provider]
+        name:
+          type: string
+        secret:
+          type: string
+          writeOnly: true
+          description: Optional secret rotation value. Omit for metadata-only updates.
+        status:
+          enum: [active, inactive]
     CredentialReference:
       type: object
       required: [id, provider, name, secret_ref, secret_fingerprint, status, created_at, updated_at]
+      description: Credential reference response. Raw secret material is never returned; secret_ref is an opaque local vault reference, not a decryptable key.
       properties:
         id:
           type: string
@@ -897,8 +911,10 @@ components:
           type: string
         secret_ref:
           type: string
+          description: Opaque reference to local secret-store material.
         secret_fingerprint:
           type: string
+          description: HMAC-SHA256 based fingerprint for rotation/change detection.
         status:
           enum: [active, inactive]
         created_at:

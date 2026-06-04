@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import base64
 import hashlib
+import hmac
+import os
+import secrets
 from dataclasses import asdict
 from threading import RLock
 from typing import Any, TypeVar
@@ -20,6 +22,7 @@ from .domain import (
     RepositoryBinding,
     User,
     now_utc,
+    sanitize_public_url,
 )
 
 T = TypeVar("T")
@@ -36,7 +39,7 @@ class MemoryStore:
         self.files: dict[str, FileObject] = {}
         self.credentials: dict[str, CredentialReference] = {}
         self.gitlab_profiles: dict[str, GitLabProfile] = {}
-        self._encrypted_secrets: dict[str, str] = {}
+        self.secret_store = LocalSecretStore()
         self.audit_events: list[AuditEvent] = []
 
     def health(self) -> dict[str, str]:
@@ -185,8 +188,8 @@ class MemoryStore:
             if binding.repository_id not in repositories:
                 raise NotFound("repository not found for profile")
             selected = repositories[binding.repository_id]
-            binding.path = binding.path or selected["path"]
-            binding.web_url = binding.web_url or selected["web_url"]
+            binding.path = selected["path"]
+            binding.web_url = selected["web_url"]
             serialized = asdict(binding)
             project.repository_bindings = [
                 existing
@@ -374,12 +377,11 @@ class MemoryStore:
         credential.validate()
         with self._lock:
             credential.id = self._id("cred")
-            credential.secret_ref = self._id("sec")
-            credential.secret_fingerprint = fingerprint(secret)
+            credential.secret_ref = self.secret_store.put(secret)
+            credential.secret_fingerprint = self.secret_store.fingerprint(secret)
             stamp(credential)
-            self._encrypted_secrets[credential.secret_ref] = encrypt_secret(secret, credential.secret_ref)
             self.credentials[credential.id] = credential
-            self._audit(actor_id, "credential.created", "credential", credential.id, {"provider": credential.provider, "secret_fingerprint": credential.secret_fingerprint})
+            self._audit(actor_id, "credential.created", "credential", credential.id, {"provider": credential.provider})
             return asdict(credential)
 
     def list_credentials(self) -> list[dict[str, Any]]:
@@ -396,11 +398,11 @@ class MemoryStore:
                 secret = str(data["secret"])
                 if not secret:
                     raise InvalidInput("secret cannot be empty")
-                credential.secret_fingerprint = fingerprint(secret)
-                self._encrypted_secrets[credential.secret_ref] = encrypt_secret(secret, credential.secret_ref)
+                self.secret_store.rotate(credential.secret_ref, secret)
+                credential.secret_fingerprint = self.secret_store.fingerprint(secret)
             credential.validate()
             credential.updated_at = now_utc()
-            self._audit(actor_id, "credential.updated", "credential", credential.id, {"provider": credential.provider, "secret_fingerprint": credential.secret_fingerprint})
+            self._audit(actor_id, "credential.updated", "credential", credential.id, {"provider": credential.provider})
             return asdict(credential)
 
     def delete_credential(self, actor_id: str, credential_id: str) -> dict[str, str]:
@@ -411,7 +413,7 @@ class MemoryStore:
             if any(profile.credential_ref_id == credential_id for profile in self.gitlab_profiles.values()):
                 self.credentials[credential_id] = credential
                 raise Conflict("credential is used by a gitlab profile")
-            self._encrypted_secrets.pop(credential.secret_ref, None)
+            self.secret_store.delete(credential.secret_ref)
             self._audit(actor_id, "credential.deleted", "credential", credential_id, {"provider": credential.provider})
             return {"status": "deleted"}
 
@@ -425,6 +427,7 @@ class MemoryStore:
             if any(existing.name.lower() == profile.name.lower() for existing in self.gitlab_profiles.values()):
                 raise Conflict("gitlab profile name already exists")
             profile.id = self._id("glp")
+            profile.base_url = sanitize_public_url(profile.base_url, allow_path=False)
             profile.repository_selection = normalize_repositories(profile.repository_selection, profile.base_url)
             stamp(profile)
             self.gitlab_profiles[profile.id] = profile
@@ -448,6 +451,7 @@ class MemoryStore:
                 if key in data:
                     setattr(profile, key, data[key])
             profile.validate()
+            profile.base_url = sanitize_public_url(profile.base_url, allow_path=False)
             profile.repository_selection = normalize_repositories(profile.repository_selection, profile.base_url)
             profile.updated_at = now_utc()
             self._audit(actor_id, "gitlab.profile.updated", "gitlab_profile", profile.id, {"status": profile.status})
@@ -544,15 +548,28 @@ def pick(data: dict[str, Any], model: type[T]) -> dict[str, Any]:
     return {key: value for key, value in data.items() if key in fields}
 
 
-def fingerprint(secret: str) -> str:
-    return hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
+class LocalSecretStore:
+    def __init__(self) -> None:
+        configured_key = os.environ.get("OPSPILOT_SECRET_FINGERPRINT_KEY")
+        self._fingerprint_key = configured_key.encode("utf-8") if configured_key else secrets.token_bytes(32)
+        self._vault: dict[str, str] = {}
 
+    def put(self, secret: str) -> str:
+        secret_ref = f"sec_{secrets.token_urlsafe(18)}"
+        self._vault[secret_ref] = secret
+        return secret_ref
 
-def encrypt_secret(secret: str, secret_ref: str) -> str:
-    key = hashlib.sha256(f"opspilot-local-key:{secret_ref}".encode("utf-8")).digest()
-    raw = secret.encode("utf-8")
-    encrypted = bytes(byte ^ key[index % len(key)] for index, byte in enumerate(raw))
-    return base64.urlsafe_b64encode(encrypted).decode("ascii")
+    def rotate(self, secret_ref: str, secret: str) -> None:
+        if secret_ref not in self._vault:
+            raise NotFound("secret reference not found")
+        self._vault[secret_ref] = secret
+
+    def delete(self, secret_ref: str) -> None:
+        self._vault.pop(secret_ref, None)
+
+    def fingerprint(self, secret: str) -> str:
+        digest = hmac.new(self._fingerprint_key, secret.encode("utf-8"), hashlib.sha256).hexdigest()
+        return digest[:24]
 
 
 def normalize_repositories(repositories: list[dict[str, str]], base_url: str) -> list[dict[str, str]]:
@@ -562,7 +579,8 @@ def normalize_repositories(repositories: list[dict[str, str]], base_url: str) ->
         if not path:
             raise InvalidInput("repositories require path")
         repo_id = str(repository.get("id", "") or path)
-        web_url = str(repository.get("web_url", "") or f"{base_url.rstrip('/')}/{path}")
+        raw_web_url = str(repository.get("web_url", "") or f"{base_url.rstrip('/')}/{path}")
+        web_url = sanitize_public_url(raw_web_url, allow_path=True)
         name = str(repository.get("name", "") or path.rsplit("/", 1)[-1] or f"repository-{index}")
         normalized.append({"id": repo_id, "path": path, "name": name, "web_url": web_url})
     return normalized

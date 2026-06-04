@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 
 class DomainError(Exception):
@@ -163,8 +164,7 @@ class GitLabProfile:
     def validate(self) -> None:
         if not self.name or not self.base_url or not self.credential_ref_id:
             raise InvalidInput("gitlab profiles require name, base_url, and credential_ref_id")
-        if not self.base_url.startswith(("https://", "http://")):
-            raise InvalidInput("gitlab base_url must be an HTTP URL")
+        self.base_url = sanitize_public_url(self.base_url, allow_path=False)
 
 
 @dataclass
@@ -189,3 +189,22 @@ class AuditEvent:
     metadata: dict[str, Any] = field(default_factory=dict)
     id: str = ""
     occurred_at: str = ""
+
+
+TOKEN_QUERY_NAMES = {"access_token", "auth_token", "api_token", "private_token", "token", "key", "secret", "password"}
+
+
+def sanitize_public_url(value: str, *, allow_path: bool) -> str:
+    parsed = urlsplit(str(value).strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise InvalidInput("url must be http or https")
+    if parsed.username or parsed.password:
+        raise InvalidInput("url must not contain credentials")
+    if parsed.fragment:
+        raise InvalidInput("url must not contain fragments")
+    for key, _ in parse_qsl(parsed.query, keep_blank_values=True):
+        lowered = key.lower()
+        if lowered in TOKEN_QUERY_NAMES or "token" in lowered or "secret" in lowered or "password" in lowered:
+            raise InvalidInput("url must not contain token-like query parameters")
+    path = parsed.path.rstrip("/") if allow_path else ""
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))

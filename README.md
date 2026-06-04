@@ -17,7 +17,7 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 
 API contracts are kept in `packages/contracts/openapi/foundation-service.yaml`.
 
-Secrets are accepted only on credential create/rotate requests. API responses and audit events return credential references and fingerprints, not raw secret values.
+Secrets are accepted only on credential create/rotate requests. API responses return opaque credential references and HMAC fingerprints, while audit events omit raw secrets and fingerprints. GitLab URLs are canonicalized and token-bearing userinfo/query/fragment values are rejected before storage.
 
 ## Local Development
 
