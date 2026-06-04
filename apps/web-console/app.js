@@ -345,6 +345,7 @@ function renderNav() {
 
 function render() {
   document.body.classList.toggle("bigscreen-mode", state.route === "bigscreen");
+  document.body.classList.toggle("builder-mode", state.route === "workflows" && Boolean(state.workflowBuilder));
   $("#api-state").innerHTML = `${state.apiOnline ? "基础服务在线" : "本地模拟模式"} <span class="role-badge">${displayRole(state.role)}</span>`;
   $(".status-dot").classList.toggle("live", state.apiOnline);
   $("#project-switcher").innerHTML = `<option>全部项目</option>${state.projects.map((p) => `<option>${escapeHtml(p.key)} · ${escapeHtml(p.name)}</option>`).join("")}`;
@@ -944,14 +945,19 @@ function workflowDraftFromVersion(workflow) {
     { id: "agent-task", type: "agent_task", name: "发布前巡检", agent_id: state.agents[0]?.id || "", skill_id: state.agents[0]?.skill_ids?.[0] || "", model_provider_id: state.agents[0]?.model_provider_id || "", input: "读取项目、环境和最近测试报告，输出发布风险结论。", timeout_seconds: 900, failure_strategy: "stop" },
     { id: "approval", type: "approval", name: "人工确认", approval_role: "Operator", instructions: "确认巡检结果后继续发布。", timeout_strategy: "转人工复核" },
   ];
+  const seenIds = new Set();
+  const idMap = new Map();
   const nodes = baseNodes.map((node, index) => ({
     ...node,
-    id: String(node.id || `node-${index + 1}`),
-    name: node.name || defaultWorkflowNodeName(node.type, index + 1),
-    x: Number(node.x ?? 80 + index * 220),
+    id: safeWorkflowNodeId(node.id, index, seenIds, idMap),
+    type: safeWorkflowNodeType(node.type),
+    name: node.name || defaultWorkflowNodeName(safeWorkflowNodeType(node.type), index + 1),
+    x: Number(node.x ?? 48 + index * 200),
     y: Number(node.y ?? 120 + (index % 2) * 24),
   }));
-  const edges = (source?.edges?.length ? source.edges : nodes.slice(0, -1).map((node, index) => ({ from_node_id: node.id, to_node_id: nodes[index + 1].id }))).map((edge) => ({ from_node_id: edge.from_node_id, to_node_id: edge.to_node_id }));
+  const edges = (source?.edges?.length ? source.edges : nodes.slice(0, -1).map((node, index) => ({ from_node_id: node.id, to_node_id: nodes[index + 1].id })))
+    .map((edge) => ({ from_node_id: idMap.get(String(edge.from_node_id)) || edge.from_node_id, to_node_id: idMap.get(String(edge.to_node_id)) || edge.to_node_id }))
+    .filter((edge) => nodes.some((node) => node.id === edge.from_node_id) && nodes.some((node) => node.id === edge.to_node_id));
   return { workflow_id: workflow.id, base_version_id: source?.id || "", version: nextVersion, status: "draft", nodes, edges };
 }
 
@@ -1231,8 +1237,9 @@ function refreshWorkflowBuilder(message = "") {
 
 function addWorkflowNode(type, x = 80, y = 120) {
   const draft = state.workflowBuilder.draft;
+  type = safeWorkflowNodeType(type);
   const count = draft.nodes.filter((node) => node.type === type).length + 1;
-  const id = `${type.replace("_", "-")}-${Date.now().toString(36)}-${count}`;
+  const id = safeWorkflowNodeId(`${type.replace("_", "-")}-${Date.now().toString(36)}-${count}`, draft.nodes.length, new Set(draft.nodes.map((node) => node.id)), new Map());
   const node = { id, type, name: defaultWorkflowNodeName(type, count), x, y };
   if (type === "trigger") Object.assign(node, { trigger_mode: "manual", project_id: state.workflows.find((workflow) => workflow.id === draft.workflow_id)?.project_id || "" });
   if (type === "agent_task") Object.assign(node, { agent_id: state.agents[0]?.id || "", skill_id: state.agents[0]?.skill_ids?.[0] || "", model_provider_id: state.agents[0]?.model_provider_id || "", input: "", timeout_seconds: 900, failure_strategy: "stop" });
@@ -1298,11 +1305,15 @@ async function saveWorkflowBuilderVersion() {
 }
 
 function workflowVersionPayload(draft) {
+  const seenIds = new Set();
+  const idMap = new Map();
+  const nodes = draft.nodes.map((node, index) => ({ ...node, id: safeWorkflowNodeId(node.id, index, seenIds, idMap), type: safeWorkflowNodeType(node.type) }));
   return {
     version: String(draft.version || "1"),
     status: draft.status || "draft",
-    nodes: draft.nodes.map((node) => Object.fromEntries(Object.entries(node).filter(([key, value]) => !["x", "y"].includes(key) && value !== "" && value !== undefined))),
-    edges: draft.edges.map((edge) => ({ from_node_id: edge.from_node_id, to_node_id: edge.to_node_id })),
+    nodes: nodes.map((node) => Object.fromEntries(Object.entries(node).filter(([key, value]) => !["x", "y"].includes(key) && value !== "" && value !== undefined))),
+    edges: draft.edges.map((edge) => ({ from_node_id: idMap.get(String(edge.from_node_id)) || edge.from_node_id, to_node_id: idMap.get(String(edge.to_node_id)) || edge.to_node_id }))
+      .filter((edge) => nodes.some((node) => node.id === edge.from_node_id) && nodes.some((node) => node.id === edge.to_node_id)),
   };
 }
 
@@ -1395,7 +1406,7 @@ function workflowPreviewCopy(node) {
 }
 
 function workflowNodeTypeLabel(type) {
-  return { trigger: "触发器", agent_task: "智能体任务", approval: "人工确认", result: "结果/通知" }[type] || type;
+  return { trigger: "触发器", agent_task: "智能体任务", approval: "人工确认", result: "结果/通知" }[safeWorkflowNodeType(type)] || "未知节点";
 }
 
 function defaultWorkflowNodeName(type, count) {
@@ -1419,7 +1430,7 @@ function workflowProviderOptions(agentId, selected) {
 }
 
 function workflowNodeOptions(nodes, selected) {
-  return `<option value="">请选择节点</option>${nodes.map((node) => `<option value="${node.id}" ${selected === node.id ? "selected" : ""}>${escapeHtml(node.name)}</option>`).join("")}`;
+  return `<option value="">请选择节点</option>${nodes.map((node) => `<option value="${escapeAttr(node.id)}" ${selected === node.id ? "selected" : ""}>${escapeHtml(node.name)}</option>`).join("")}`;
 }
 
 function agentName(id) {
@@ -1433,9 +1444,27 @@ function translateWorkflowFailure(value) {
 
 function fitWorkflowDraft() {
   state.workflowBuilder.draft.nodes.forEach((node, index) => {
-    node.x = 72 + (index % 4) * 210;
+    node.x = 48 + (index % 4) * 200;
     node.y = 96 + Math.floor(index / 4) * 130;
   });
+}
+
+function safeWorkflowNodeType(type) {
+  return ["trigger", "agent_task", "approval", "result"].includes(type) ? type : "result";
+}
+
+function safeWorkflowNodeId(value, index, seenIds, idMap) {
+  const original = String(value || "");
+  const base = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(original) ? original : `node-${index + 1}`;
+  let candidate = base;
+  let suffix = 2;
+  while (seenIds.has(candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  seenIds.add(candidate);
+  idMap.set(original, candidate);
+  return candidate;
 }
 
 function workflowVersionPanel(workflow) {

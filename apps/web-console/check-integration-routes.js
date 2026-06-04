@@ -19,7 +19,8 @@ assertStyle(".kv dd", ["min-width: 0", "overflow-wrap: anywhere"]);
 assertStyle(".link-list", ["min-width: 0"]);
 assertStyle(".link-list li", ["min-width: 0", "overflow-wrap: anywhere"]);
 assertStyle(".json-block", ["max-width: 100%", "white-space: pre-wrap", "overflow-wrap: anywhere"]);
-assertStyle(".builder-shell", ["grid-template-columns: 260px minmax(0, 1fr) 360px", "min-width: 0"]);
+assertStyle(".builder-mode .sidebar,\n.builder-mode .topbar", ["display: none"]);
+assertStyle(".builder-shell", ["grid-template-columns: 220px minmax(520px, 1fr) 300px", "min-width: 0"]);
 assertStyle(".workflow-canvas", ["overflow: auto"]);
 assertStyle(".workflow-list-fallback", ["display: none"]);
 
@@ -190,6 +191,23 @@ const result = vm.runInContext(`
   if (state.workflowVersions.wfl_mock_release.length !== beforeVersions + 1) throw new Error("offline workflow builder save did not append a version");
   const saved = state.workflowVersions.wfl_mock_release.at(-1);
   if (!saved.nodes.some((node) => node.type === "result") || !saved.edges.some((edge) => edge.to_node_id === saved.nodes.at(-1).id)) throw new Error("saved workflow builder version lost node/edge edits");
+
+  state.workflowVersions.wfl_mock_release.push({
+    id: "wfv_injection",
+    workflow_id: "wfl_mock_release",
+    version: "inj",
+    status: "draft",
+    nodes: [
+      { id: "node1\\" autofocus onfocus=alert(2) x=\\"", type: "<img src=x onerror=alert(1)>", name: "恶意节点" },
+      { id: "safe-node", type: "approval", name: "安全节点" },
+    ],
+    edges: [{ from_node_id: "node1\\" autofocus onfocus=alert(2) x=\\"", to_node_id: "safe-node" }],
+  });
+  state.workflows[0].active_version_id = "wfv_injection";
+  openWorkflowBuilder("wfl_mock_release");
+  if (content.innerHTML.includes("<img src=x") || content.innerHTML.includes("onfocus=alert")) throw new Error("unsafe saved workflow node type/id rendered into builder HTML");
+  const injectedPayload = workflowVersionPayload(state.workflowBuilder.draft);
+  if (JSON.stringify(injectedPayload).includes("onfocus=alert") || !injectedPayload.nodes.every((node) => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(node.id))) throw new Error("unsafe workflow node ids were not normalized before save payload");
 })()
 `, context);
 
