@@ -10,7 +10,7 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 - projects and project membership
 - assets with categories, capabilities, and parent asset references
 - DEV/QA/QE environments with project, member, asset, and endpoint bindings
-- file metadata with local upload/download grant stubs
+- file metadata and local file-service MVP upload/download/list/delete APIs
 - credential references with redacted secret handling
 - GitLab API profiles, repository discovery sync/search/pagination, and project-to-repository bindings
 - GitLab/VCS branch and merge-request operations plus webhook-event ingestion through a VCS adapter boundary
@@ -88,5 +88,18 @@ curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/10
 ```
 
 Repository catalogs are owned by GitLab discovery sync. Project repository bindings store only `provider`, `profile_id`, and `repository_id`; branch/MR calls require a bound `project_id` before the stored GitLab API credential is used. GitLab webhook deliveries should send `X-Gitlab-Token`, which is checked against the profile webhook secret, not the outbound API token.
+
+### File Service Storage
+
+The file service stores metadata in the foundation store and file bytes behind an object-storage adapter. Local development uses `LocalFileStorage` and writes objects under `OPSPILOT_FILE_STORAGE_ROOT` when set, otherwise `/tmp/opspilot-foundation-files`.
+
+The storage adapter is selected with `OPSPILOT_OBJECT_STORAGE_ADAPTER`:
+
+- `local` (default): creates the local object root automatically.
+- `s3` or `minio`: validates `OPSPILOT_S3_BUCKET` and captures endpoint/region/auto-bucket settings (`OPSPILOT_S3_ENDPOINT_URL`, `OPSPILOT_S3_REGION`, `OPSPILOT_S3_AUTO_CREATE_BUCKET`) as the extension boundary for a future concrete S3 client.
+
+The API never returns internal storage keys. Upload/download grants and upload sessions expose opaque `opspilot://file-capabilities/...` URLs generated at the storage boundary. Business modules should keep only the returned file `id` or reference fields (`owner_id`, `resource_type`, `resource_id`, `module`).
+
+Local MVP uploads accept base64 JSON content up to `OPSPILOT_MAX_FILE_UPLOAD_BYTES` bytes after decode (default 5 MiB). HTTP request bodies are capped by `OPSPILOT_MAX_REQUEST_BODY_BYTES` (default 8 MiB). Non-admin HTTP callers are scoped to their `X-Actor-ID` as `owner_id`; admin callers may filter across owners.
 
 MySQL migrations and concrete persistence adapters should be added behind the existing repository boundary.

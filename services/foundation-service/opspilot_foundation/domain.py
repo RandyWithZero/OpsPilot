@@ -123,17 +123,27 @@ class FileObject:
     content_type: str
     size_bytes: int
     owner_id: str = ""
+    resource_type: str = ""
+    resource_id: str = ""
+    module: str = ""
     storage_key: str = ""
     status: str = "pending_upload"
     checksum: str = ""
     id: str = ""
     created_at: str = ""
     updated_at: str = ""
+    deleted_at: str = ""
+    deleted_by: str = ""
 
     def validate(self) -> None:
         self.filename = sanitize_filename(self.filename)
         if not self.filename or not self.content_type or int(self.size_bytes) < 0:
             raise InvalidInput("files require filename, content_type, and non-negative size_bytes")
+        if self.status not in {"pending_upload", "available", "deleted"}:
+            raise InvalidInput("file status must be pending_upload, available, or deleted")
+        self.resource_type = sanitize_token(self.resource_type, "resource_type", allow_empty=True)
+        self.resource_id = sanitize_token(self.resource_id, "resource_id", allow_empty=True)
+        self.module = sanitize_token(self.module, "module", allow_empty=True)
 
 
 @dataclass
@@ -526,6 +536,19 @@ def sanitize_filename(value: str) -> str:
     if any(ord(character) < 32 for character in filename):
         raise InvalidInput("filename must not contain control characters")
     return filename
+
+
+def sanitize_token(value: str, label: str, *, allow_empty: bool) -> str:
+    token = str(value).strip()
+    if not token and allow_empty:
+        return ""
+    if not token:
+        raise InvalidInput(f"{label} is required")
+    if any(ord(character) < 32 for character in token):
+        raise InvalidInput(f"{label} must not contain control characters")
+    if "/" in token or "\\" in token:
+        raise InvalidInput(f"{label} must not contain path separators")
+    return token
 
 
 def redact_sensitive_payload(value: Any) -> Any:

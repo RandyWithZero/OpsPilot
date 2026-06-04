@@ -427,6 +427,30 @@ paths:
   /v1/files:
     get:
       summary: List file metadata objects
+      description: Non-admin callers are server-scoped to owner_id = X-Actor-ID. Admin callers may filter across owners.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: owner_id
+          in: query
+          schema:
+            type: string
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+        - name: resource_id
+          in: query
+          schema:
+            type: string
+        - name: module
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            enum: [pending_upload, available, deleted]
       responses:
         "200":
           description: File objects
@@ -454,9 +478,60 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FileObject"
+  /v1/files/upload:
+    post:
+      summary: Upload a file through the configured storage adapter
+      description: Local MVP JSON uploads are capped by OPSPILOT_MAX_REQUEST_BODY_BYTES before parsing and OPSPILOT_MAX_FILE_UPLOAD_BYTES after base64 decode.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileUpload"
+      responses:
+        "201":
+          description: Uploaded file object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileObject"
+  /v1/files/{fileID}:
+    delete:
+      summary: Soft-delete a file object and remove its stored object when present
+      description: Non-admin callers are server-scoped to owner_id = X-Actor-ID. Admin callers may filter across owners.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: fileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: owner_id
+          in: query
+          schema:
+            type: string
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+        - name: resource_id
+          in: query
+          schema:
+            type: string
+        - name: module
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted file object
   /v1/files/{fileID}/upload-grants:
     post:
-      summary: Create a local upload grant for a file object
+      summary: Create an opaque upload grant for a file object
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -474,7 +549,7 @@ paths:
                 $ref: "#/components/schemas/FileGrant"
   /v1/files/{fileID}/upload-sessions:
     post:
-      summary: Create a local upload session for a file object
+      summary: Create an opaque upload session for a file object
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -492,7 +567,7 @@ paths:
                 $ref: "#/components/schemas/UploadSession"
   /v1/files/upload-sessions/{sessionID}/complete:
     post:
-      summary: Mark a local upload session complete
+      summary: Mark an upload session complete
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -516,7 +591,7 @@ paths:
                 $ref: "#/components/schemas/UploadSessionCompleteResponse"
   /v1/files/{fileID}/download-grants:
     post:
-      summary: Create a local download grant for a file object
+      summary: Create an opaque download grant for a file object
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -532,6 +607,41 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FileGrant"
+  /v1/files/{fileID}/download:
+    get:
+      summary: Download a file through a controlled response
+      description: Non-admin callers are server-scoped to owner_id = X-Actor-ID. Admin callers may filter across owners.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: fileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: owner_id
+          in: query
+          schema:
+            type: string
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+        - name: resource_id
+          in: query
+          schema:
+            type: string
+        - name: module
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Download payload with public metadata and base64 content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileDownload"
   /v1/credentials:
     get:
       summary: List credential references
@@ -1477,6 +1587,7 @@ paths:
                   $ref: "#/components/schemas/Report"
     post:
       summary: Create report
+      description: Attached file_ids must reference available files owned by the report project owner/member scope and bound to either the same project or the report test_run_id.
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -1772,6 +1883,31 @@ components:
           minimum: 0
         owner_id:
           type: string
+        resource_type:
+          type: string
+        resource_id:
+          type: string
+        module:
+          type: string
+    FileUpload:
+      type: object
+      required: [filename, content_type, content_base64]
+      properties:
+        filename:
+          type: string
+        content_type:
+          type: string
+        owner_id:
+          type: string
+        resource_type:
+          type: string
+        resource_id:
+          type: string
+        module:
+          type: string
+        content_base64:
+          type: string
+          description: Base64 encoded file bytes for the local MVP upload path. The service calculates size_bytes and checksum. Default decoded limit is 5 MiB via OPSPILOT_MAX_FILE_UPLOAD_BYTES.
     FileObject:
       allOf:
         - $ref: "#/components/schemas/FileObjectCreate"
@@ -1790,6 +1926,19 @@ components:
             updated_at:
               type: string
               format: date-time
+            deleted_at:
+              type: string
+              format: date-time
+            deleted_by:
+              type: string
+    FileDownload:
+      type: object
+      required: [file, content_base64]
+      properties:
+        file:
+          $ref: "#/components/schemas/FileObject"
+        content_base64:
+          type: string
     FileGrant:
       type: object
       required: [file_id, method, url, expires_in_seconds]
@@ -1800,6 +1949,7 @@ components:
           enum: [GET, PUT]
         url:
           type: string
+          description: Opaque storage-boundary capability URL. It does not expose provider internals or storage keys.
         expires_in_seconds:
           type: integer
     UploadSession:
@@ -2577,6 +2727,7 @@ components:
           type: string
         file_ids:
           type: array
+          description: Available file refs scoped to this report project. Each file must be owned by a project owner/member, use module reports or the report_type, and bind to resource_type/resource_id of the project or test_run_id.
           items:
             type: string
         summary:

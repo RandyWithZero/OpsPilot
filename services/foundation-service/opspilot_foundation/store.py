@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import base64
 from dataclasses import asdict
 from threading import RLock
 from typing import Any, TypeVar
@@ -40,14 +41,16 @@ from .domain import (
     redact_sensitive_payload,
     sanitize_public_url,
 )
+from .storage import ObjectStorage, storage_from_env
 from .auth import PermissionDenied
 from .vcs import GitLabAPIClient, GitLabClient, LocalGitLabClient
 
 T = TypeVar("T")
+MAX_FILE_UPLOAD_BYTES = int(os.environ.get("OPSPILOT_MAX_FILE_UPLOAD_BYTES", str(5 * 1024 * 1024)))
 
 
 class MemoryStore:
-    def __init__(self, gitlab_client: GitLabClient | None = None) -> None:
+    def __init__(self, storage: ObjectStorage | None = None, gitlab_client: GitLabClient | None = None) -> None:
         self._lock = RLock()
         self._ids = 0
         self.users: dict[str, User] = {}
@@ -73,6 +76,8 @@ class MemoryStore:
         self.reports: dict[str, Report] = {}
         self.quality_gates: dict[str, QualityGate] = {}
         self.secret_store = LocalSecretStore()
+        self.storage = storage or storage_from_env()
+        self.storage.ensure_bucket()
         self.gitlab_client = gitlab_client or (GitLabAPIClient() if os.environ.get("OPSPILOT_GITLAB_LIVE") == "1" else LocalGitLabClient())
         self.audit_events: list[AuditEvent] = []
 
@@ -369,42 +374,95 @@ class MemoryStore:
             file_object.storage_key = self._new_storage_key()
             stamp(file_object)
             self.files[file_object.id] = file_object
-            self._audit(actor_id, "file.created", "file", file_object.id, {"filename": file_object.filename, "size_bytes": file_object.size_bytes})
+            self._audit(actor_id, "file.created", "file", file_object.id, self._file_audit_metadata(file_object))
             return self._public_file(file_object)
 
-    def list_file_objects(self) -> list[dict[str, Any]]:
+    def upload_file_object(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        content = self._decode_file_content(data)
+        payload = {**data, "size_bytes": len(content)}
+        file_object = FileObject(**pick(payload, FileObject))
+        file_object.status = "available"
+        file_object.checksum = f"sha256:{hashlib.sha256(content).hexdigest()}"
+        file_object.validate()
         with self._lock:
-            return [self._public_file(file_object) for file_object in self.files.values()]
+            file_object.id = self._id("fil")
+            file_object.storage_key = self._new_storage_key()
+            stamp(file_object)
+            self.storage.put(file_object.storage_key, content)
+            self.files[file_object.id] = file_object
+            self._audit(actor_id, "file.uploaded", "file", file_object.id, self._file_audit_metadata(file_object))
+            return self._public_file(file_object)
 
-    def create_upload_grant(self, actor_id: str, file_id: str) -> dict[str, Any]:
+    def list_file_objects(self, filters: dict[str, str] | None = None) -> list[dict[str, Any]]:
+        filters = filters or {}
+        with self._lock:
+            return [self._public_file(file_object) for file_object in self.files.values() if self._matches_file_filters(file_object, filters)]
+
+    def download_file_object(self, actor_id: str, file_id: str, filters: dict[str, str] | None = None) -> dict[str, Any]:
         with self._lock:
             file_object = self._file(file_id)
+            if file_object.status != "available":
+                raise NotFound("file is not available")
+            if not self._matches_file_filters(file_object, filters or {}):
+                raise NotFound("file not found")
+            content = self.storage.get(file_object.storage_key)
+            self._audit(actor_id, "file.downloaded", "file", file_object.id, self._file_audit_metadata(file_object))
+            return {
+                "file": self._public_file(file_object),
+                "content_base64": base64.b64encode(content).decode("ascii"),
+            }
+
+    def delete_file_object(self, actor_id: str, file_id: str, filters: dict[str, str] | None = None) -> dict[str, str]:
+        with self._lock:
+            file_object = self._file(file_id)
+            if not self._matches_file_filters(file_object, filters or {}):
+                raise NotFound("file not found")
+            if file_object.status != "deleted":
+                self.storage.delete(file_object.storage_key)
+                file_object.status = "deleted"
+                file_object.deleted_at = now_utc()
+                file_object.deleted_by = actor_id or "system"
+                file_object.updated_at = file_object.deleted_at
+                self._audit(actor_id, "file.deleted", "file", file_object.id, self._file_audit_metadata(file_object))
+            return {"status": "deleted"}
+
+    def create_upload_grant(self, actor_id: str, file_id: str, filters: dict[str, str] | None = None) -> dict[str, Any]:
+        with self._lock:
+            file_object = self._file(file_id)
+            if not self._matches_file_filters(file_object, filters or {}):
+                raise NotFound("file not found")
+            capability_id = self._id("fgr")
             grant = {
                 "file_id": file_object.id,
                 "method": "PUT",
-                "url": f"local://uploads/{file_object.storage_key}",
+                "url": self.storage.capability_url("upload", capability_id),
                 "expires_in_seconds": 900,
             }
-            self._audit(actor_id, "file.upload_grant.created", "file", file_object.id, {})
+            self._audit(actor_id, "file.upload_grant.created", "file", file_object.id, {"capability_id": capability_id})
             return grant
 
-    def create_upload_session(self, actor_id: str, file_id: str) -> dict[str, Any]:
+    def create_upload_session(self, actor_id: str, file_id: str, filters: dict[str, str] | None = None) -> dict[str, Any]:
         with self._lock:
             file_object = self._file(file_id)
-            session = UploadSession(file_id=file_object.id, url=f"local://uploads/{file_object.storage_key}")
-            session.validate()
+            if not self._matches_file_filters(file_object, filters or {}):
+                raise NotFound("file not found")
+            session = UploadSession(file_id=file_object.id)
             session.id = self._id("upl")
+            session.url = self.storage.capability_url("upload", session.id)
+            session.validate()
             stamp(session)
             self.upload_sessions[session.id] = session
             self._audit(actor_id, "file.upload_session.created", "file", file_object.id, {"upload_session_id": session.id})
             return asdict(session)
 
-    def complete_upload_session(self, actor_id: str, session_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    def complete_upload_session(self, actor_id: str, session_id: str, data: dict[str, Any], filters: dict[str, str] | None = None) -> dict[str, Any]:
         with self._lock:
             session = self._upload_session(session_id)
             if session.status != "open":
                 raise Conflict("upload session is not open")
             file_object = self._file(session.file_id)
+            if not self._matches_file_filters(file_object, filters or {}):
+                raise NotFound("file not found")
             if "checksum" in data:
                 file_object.checksum = str(data["checksum"])
             if "size_bytes" in data:
@@ -417,16 +475,19 @@ class MemoryStore:
             self._audit(actor_id, "file.upload_session.completed", "file", file_object.id, {"upload_session_id": session.id})
             return {"upload_session": asdict(session), "file": self._public_file(file_object)}
 
-    def create_download_grant(self, actor_id: str, file_id: str) -> dict[str, Any]:
+    def create_download_grant(self, actor_id: str, file_id: str, filters: dict[str, str] | None = None) -> dict[str, Any]:
         with self._lock:
             file_object = self._file(file_id)
+            if not self._matches_file_filters(file_object, filters or {}):
+                raise NotFound("file not found")
+            capability_id = self._id("fgr")
             grant = {
                 "file_id": file_object.id,
                 "method": "GET",
-                "url": f"local://downloads/{file_object.storage_key}",
+                "url": self.storage.capability_url("download", capability_id),
                 "expires_in_seconds": 900,
             }
-            self._audit(actor_id, "file.download_grant.created", "file", file_object.id, {})
+            self._audit(actor_id, "file.download_grant.created", "file", file_object.id, {"capability_id": capability_id})
             return grant
 
     def create_credential(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1131,14 +1192,16 @@ class MemoryStore:
         report = Report(**pick(data, Report))
         report.validate()
         with self._lock:
-            self._project(report.project_id)
+            project = self._project(report.project_id)
+            self._require_project_actor(actor_id, project)
+            run = None
             if report.test_run_id:
                 run = self._test_run(report.test_run_id)
                 if run.project_id != report.project_id:
                     raise Conflict("test run belongs to another project")
             report.file_ids = unique(report.file_ids)
             for file_id in report.file_ids:
-                self._file(file_id)
+                self._validate_report_file(report, project, run, file_id)
             report.id = self._id("rpt")
             stamp(report)
             self.reports[report.id] = report
@@ -1226,12 +1289,17 @@ class MemoryStore:
         if not project_id:
             raise InvalidInput("gitlab repository operations require project_id")
         project = self._project(project_id)
-        if actor_id not in unique([project.owner_id, *project.member_ids]):
-            raise PermissionDenied("actor is not a project member")
+        self._require_project_actor(actor_id, project)
         for binding in project.repository_bindings:
             if binding.get("provider") == "gitlab" and binding.get("profile_id") == profile_id and binding.get("repository_id") == repository_id:
                 return project
         raise Conflict("repository is not bound to project")
+
+    def _require_project_actor(self, actor_id: str, project: Project) -> None:
+        if not actor_id or actor_id == "system":
+            raise PermissionDenied("authenticated actor is required")
+        if actor_id not in unique([project.owner_id, *project.member_ids]):
+            raise PermissionDenied("actor is not a project member")
 
     def _agent(self, agent_id: str) -> Agent:
         if agent_id not in self.agents:
@@ -1287,6 +1355,21 @@ class MemoryStore:
         if report_id not in self.reports:
             raise NotFound("report not found")
         return self.reports[report_id]
+
+    def _validate_report_file(self, report: Report, project: Project, run: TestRun | None, file_id: str) -> None:
+        file_object = self._file(file_id)
+        if file_object.status != "available":
+            raise Conflict("report file must be available")
+        project_member_ids = set(unique([project.owner_id, *project.member_ids]))
+        if not file_object.owner_id or file_object.owner_id not in project_member_ids:
+            raise Conflict("report file owner is outside the project")
+        allowed_resources = {("project", project.id)}
+        if run is not None:
+            allowed_resources.add(("test_run", run.id))
+        if (file_object.resource_type, file_object.resource_id) not in allowed_resources:
+            raise Conflict("report file resource is outside the report scope")
+        if file_object.module not in {"reports", report.report_type}:
+            raise Conflict("report file module is outside the report scope")
 
     def _validate_agent_refs(self, agent: Agent) -> None:
         for skill_id in agent.skill_ids:
@@ -1429,6 +1512,40 @@ class MemoryStore:
         public = asdict(file_object)
         public.pop("storage_key", None)
         return public
+
+    def _decode_file_content(self, data: dict[str, Any]) -> bytes:
+        encoded = data.get("content_base64")
+        if not isinstance(encoded, str) or not encoded:
+            raise InvalidInput("file upload requires content_base64")
+        if len(encoded) > ((MAX_FILE_UPLOAD_BYTES + 2) // 3) * 4:
+            raise InvalidInput("file upload exceeds max size")
+        try:
+            content = base64.b64decode(encoded.encode("ascii"), validate=True)
+        except (ValueError, UnicodeEncodeError) as exc:
+            raise InvalidInput("content_base64 is invalid") from exc
+        if len(content) > MAX_FILE_UPLOAD_BYTES:
+            raise InvalidInput("file upload exceeds max size")
+        return content
+
+    def _matches_file_filters(self, file_object: FileObject, filters: dict[str, str]) -> bool:
+        allowed = {"owner_id", "resource_type", "resource_id", "module", "status"}
+        unknown = set(filters) - allowed
+        if unknown:
+            raise InvalidInput("unsupported file filter")
+        for key, expected in filters.items():
+            if str(getattr(file_object, key)) != str(expected):
+                return False
+        return True
+
+    def _file_audit_metadata(self, file_object: FileObject) -> dict[str, Any]:
+        return {
+            "owner_id": file_object.owner_id,
+            "resource_type": file_object.resource_type,
+            "resource_id": file_object.resource_id,
+            "module": file_object.module,
+            "size_bytes": file_object.size_bytes,
+            "storage_provider": self.storage.provider,
+        }
 
     def _audit(self, actor_id: str, action: str, resource_type: str, resource_id: str, metadata: dict[str, Any]) -> None:
         event = AuditEvent(

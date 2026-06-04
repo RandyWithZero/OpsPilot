@@ -1,6 +1,12 @@
+import base64
 import json
 import sys
+import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from opspilot_foundation.store import MemoryStore  # noqa: E402
 from opspilot_foundation.server import FoundationHandler  # noqa: E402
+from opspilot_foundation.storage import LocalFileStorage, S3CompatibleStorage  # noqa: E402
 from opspilot_foundation.domain import InvalidInput  # noqa: E402
 from opspilot_foundation.auth import (  # noqa: E402
     ActorContext,
@@ -62,7 +69,11 @@ class FakeGitLabClient:
 
 class FoundationSliceTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.store = MemoryStore()
+        self.storage_dir = tempfile.TemporaryDirectory()
+        self.store = MemoryStore(storage=LocalFileStorage(self.storage_dir.name))
+
+    def tearDown(self) -> None:
+        self.storage_dir.cleanup()
 
     def test_create_and_link_inventory_slice(self) -> None:
         user = self.store.create_user(
@@ -224,8 +235,10 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertEqual(upload["method"], "PUT")
         self.assertEqual(download["method"], "GET")
         self.assertNotIn("storage_key", file_object)
-        self.assertTrue(upload["url"].startswith("local://uploads/objects/"))
-        self.assertTrue(download["url"].startswith("local://downloads/objects/"))
+        self.assertTrue(upload["url"].startswith("opspilot://file-capabilities/upload/"))
+        self.assertTrue(download["url"].startswith("opspilot://file-capabilities/download/"))
+        self.assertNotIn("objects/", upload["url"])
+        self.assertNotIn("objects/", download["url"])
         self.assertNotIn("report.txt", upload["url"])
         self.assertNotIn("report.txt", download["url"])
 
@@ -269,6 +282,164 @@ class FoundationSliceTest(unittest.TestCase):
             with self.assertRaises(Exception) as raised:
                 self.store.create_file_object("usr_test_actor", {"filename": unsafe_filename, "content_type": "text/plain", "size_bytes": 1})
             self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+
+    def test_file_upload_download_list_delete_and_audit(self) -> None:
+        uploaded = self.store.upload_file_object(
+            "usr_test_actor",
+            {
+                "owner_id": "usr_owner",
+                "resource_type": "test_run",
+                "resource_id": "trn_001",
+                "module": "qa",
+                "filename": "result.txt",
+                "content_type": "text/plain",
+                "content_base64": base64.b64encode(b"passed").decode("ascii"),
+            },
+        )
+
+        self.assertEqual(uploaded["status"], "available")
+        self.assertEqual(uploaded["size_bytes"], 6)
+        self.assertIn("checksum", uploaded)
+        self.assertNotIn("storage_key", uploaded)
+
+        listed = self.store.list_file_objects({"owner_id": "usr_owner", "resource_type": "test_run", "resource_id": "trn_001", "module": "qa"})
+        self.assertEqual([file_object["id"] for file_object in listed], [uploaded["id"]])
+        self.assertEqual(self.store.list_file_objects({"module": "ops"}), [])
+
+        downloaded = self.store.download_file_object("usr_test_actor", uploaded["id"], {"owner_id": "usr_owner"})
+        self.assertEqual(base64.b64decode(downloaded["content_base64"]), b"passed")
+        self.assertEqual(downloaded["file"]["filename"], "result.txt")
+
+        deleted = self.store.delete_file_object("usr_test_actor", uploaded["id"], {"owner_id": "usr_owner"})
+        self.assertEqual(deleted["status"], "deleted")
+        self.assertEqual(self.store.list_file_objects({"status": "deleted"})[0]["deleted_by"], "usr_test_actor")
+        with self.assertRaises(Exception) as raised:
+            self.store.download_file_object("usr_test_actor", uploaded["id"], {"owner_id": "usr_owner"})
+        self.assertEqual(getattr(raised.exception, "code", ""), "not_found")
+
+        actions = [event["action"] for event in self.store.list_audit_events()]
+        self.assertIn("file.uploaded", actions)
+        self.assertIn("file.downloaded", actions)
+        self.assertIn("file.deleted", actions)
+
+    def test_file_scoped_access_filters_reject_other_owner(self) -> None:
+        uploaded = self.store.upload_file_object(
+            "usr_test_actor",
+            {
+                "owner_id": "usr_owner",
+                "resource_type": "project",
+                "resource_id": "prj_001",
+                "module": "reports",
+                "filename": "report.txt",
+                "content_type": "text/plain",
+                "content_base64": base64.b64encode(b"private").decode("ascii"),
+            },
+        )
+
+        with self.assertRaises(Exception) as raised:
+            self.store.download_file_object("usr_test_actor", uploaded["id"], {"owner_id": "usr_other"})
+        self.assertEqual(getattr(raised.exception, "code", ""), "not_found")
+
+        with self.assertRaises(Exception) as delete_error:
+            self.store.delete_file_object("usr_test_actor", uploaded["id"], {"owner_id": "usr_other"})
+        self.assertEqual(getattr(delete_error.exception, "code", ""), "not_found")
+
+    def test_file_upload_rejects_oversized_decoded_content(self) -> None:
+        with self.assertRaises(Exception) as raised:
+            self.store.upload_file_object(
+                "usr_test_actor",
+                {
+                    "owner_id": "usr_owner",
+                    "filename": "too-large.bin",
+                    "content_type": "application/octet-stream",
+                    "content_base64": base64.b64encode(b"x" * (5 * 1024 * 1024 + 1)).decode("ascii"),
+                },
+            )
+        self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+
+    def test_file_http_routes_enforce_server_owner_scope(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        original_store = FoundationHandler.store
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
+        FoundationHandler.store = MemoryStore(storage=LocalFileStorage(temp_dir.name))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            created = self.http_json(
+                base_url,
+                "POST",
+                "/v1/files/upload",
+                {
+                    "owner_id": "usr_owner",
+                    "filename": "private.txt",
+                    "content_type": "text/plain",
+                    "content_base64": base64.b64encode(b"private").decode("ascii"),
+                },
+                {"X-Actor-ID": "usr_owner", "X-Actor-Role": "operator"},
+                expected_status=201,
+            )
+
+            other_download = self.http_json(
+                base_url,
+                "GET",
+                f"/v1/files/{created['id']}/download",
+                headers={"X-Actor-ID": "usr_other", "X-Actor-Role": "operator"},
+                expected_status=404,
+            )
+            self.assertEqual(other_download["error"], "not_found")
+
+            spoofed_list = self.http_json(
+                base_url,
+                "GET",
+                "/v1/files?owner_id=usr_owner",
+                headers={"X-Actor-ID": "usr_other", "X-Actor-Role": "operator"},
+                expected_status=403,
+            )
+            self.assertEqual(spoofed_list["error"], "permission_denied")
+
+            owner_download = self.http_json(
+                base_url,
+                "GET",
+                f"/v1/files/{created['id']}/download",
+                headers={"X-Actor-ID": "usr_owner", "X-Actor-Role": "operator"},
+            )
+            self.assertEqual(base64.b64decode(owner_download["content_base64"]), b"private")
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+            server.server_close()
+            FoundationHandler.store = original_store
+            temp_dir.cleanup()
+
+    def http_json(
+        self,
+        base_url: str,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        headers: dict[str, str] | None = None,
+        expected_status: int = 200,
+    ) -> dict:
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        request = urllib.request.Request(base_url + path, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, expected_status)
+                return payload
+        except urllib.error.HTTPError as error:
+            payload = json.loads(error.read().decode("utf-8"))
+            self.assertEqual(error.code, expected_status)
+            return payload
+
+    def test_s3_compatible_storage_requires_bucket_and_defers_client_calls(self) -> None:
+        storage = S3CompatibleStorage()
+        storage.bucket = "opspilot-files"
+        storage.ensure_bucket()
+        self.assertEqual(storage.provider, "s3")
+        with self.assertRaises(NotImplementedError):
+            storage.put("objects/example", b"content")
 
     def test_credentials_store_secret_references_without_response_secret_leakage(self) -> None:
         credential = self.store.create_credential(
@@ -787,7 +958,6 @@ class FoundationSliceTest(unittest.TestCase):
             "usr_test_actor",
             {"project_id": project["id"], "name": "QA Lab", "type": "QA", "owner_id": user["id"]},
         )
-        artifact = self.store.create_file_object("usr_test_actor", {"filename": "qa-report.md", "content_type": "text/markdown", "size_bytes": 128})
 
         test_case = self.store.create_test_case(
             "usr_test_actor",
@@ -796,8 +966,20 @@ class FoundationSliceTest(unittest.TestCase):
         suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Smoke", "case_ids": [test_case["id"], test_case["id"]]})
         run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"], "environment_id": environment["id"]})
         updated_run = self.store.update_test_run("usr_test_actor", run["id"], {"status": "passed", "results": [{"case_id": test_case["id"], "status": "passed"}]})
-        report = self.store.create_report(
+        artifact = self.store.upload_file_object(
             "usr_test_actor",
+            {
+                "owner_id": user["id"],
+                "resource_type": "test_run",
+                "resource_id": run["id"],
+                "module": "reports",
+                "filename": "qa-report.md",
+                "content_type": "text/markdown",
+                "content_base64": base64.b64encode(b"qa report").decode("ascii"),
+            },
+        )
+        report = self.store.create_report(
+            user["id"],
             {"project_id": project["id"], "title": "QA Smoke Report", "test_run_id": run["id"], "file_ids": [artifact["id"]], "summary": {"passed": 1}},
         )
         gate = self.store.create_quality_gate(
@@ -813,6 +995,41 @@ class FoundationSliceTest(unittest.TestCase):
         with self.assertRaises(Exception) as raised:
             self.store.create_test_suite("usr_test_actor", {"project_id": other_project["id"], "name": "Bad Suite", "case_ids": [test_case["id"]]})
         self.assertEqual(getattr(raised.exception, "code", ""), "conflict")
+
+        other_project_artifact = self.store.upload_file_object(
+            "usr_test_actor",
+            {
+                "owner_id": user["id"],
+                "resource_type": "project",
+                "resource_id": other_project["id"],
+                "module": "reports",
+                "filename": "other-project.md",
+                "content_type": "text/markdown",
+                "content_base64": base64.b64encode(b"wrong project").decode("ascii"),
+            },
+        )
+        with self.assertRaises(Exception) as cross_project_file:
+            self.store.create_report(user["id"], {"project_id": project["id"], "title": "Bad File Project", "file_ids": [other_project_artifact["id"]]})
+        self.assertEqual(getattr(cross_project_file.exception, "code", ""), "conflict")
+
+        with self.assertRaises(PermissionDenied):
+            self.store.create_report("usr_project_outsider", {"project_id": project["id"], "title": "Outsider Report", "file_ids": [artifact["id"]]})
+
+        other_owner_artifact = self.store.upload_file_object(
+            "usr_test_actor",
+            {
+                "owner_id": "usr_other",
+                "resource_type": "project",
+                "resource_id": project["id"],
+                "module": "reports",
+                "filename": "other-owner.md",
+                "content_type": "text/markdown",
+                "content_base64": base64.b64encode(b"wrong owner").decode("ascii"),
+            },
+        )
+        with self.assertRaises(Exception) as cross_owner_file:
+            self.store.create_report(user["id"], {"project_id": project["id"], "title": "Bad File Owner", "file_ids": [other_owner_artifact["id"]]})
+        self.assertEqual(getattr(cross_owner_file.exception, "code", ""), "conflict")
 
         audit = json.dumps(self.store.list_audit_events())
         self.assertIn("test_run.updated", audit)

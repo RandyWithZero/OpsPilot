@@ -7,9 +7,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
-from .auth import actor_from_headers, permission_for_request, require_permission
+from .auth import ROLE_ADMIN, ActorContext, PermissionDenied, actor_from_headers, permission_for_request, require_permission
 from .domain import DomainError
 from .store import MemoryStore
+
+MAX_REQUEST_BODY_BYTES = int(os.environ.get("OPSPILOT_MAX_REQUEST_BODY_BYTES", str(8 * 1024 * 1024)))
 
 
 class FoundationHandler(BaseHTTPRequestHandler):
@@ -27,7 +29,6 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/projects": self.store.list_projects,
             "/v1/assets": self.store.list_assets,
             "/v1/environments": self.store.list_environments,
-            "/v1/files": self.store.list_file_objects,
             "/v1/credentials": self.store.list_credentials,
             "/v1/gitlab/profiles": self.store.list_gitlab_profiles,
             "/v1/vcs/operations": self.store.list_vcs_operations,
@@ -46,12 +47,19 @@ class FoundationHandler(BaseHTTPRequestHandler):
         }
         parsed = urlparse(self.path)
         path = parsed.path
-        query = parse_qs(parsed.query)
         actor = actor_from_headers(self.headers)
         if not self._authorize(actor, "GET", path):
             return
+        query = parse_qs(parsed.query)
         actor_id = actor.actor_id
+        file_query = self._query_filters(parsed.query)
         parts = [part for part in path.split("/") if part]
+        if path == "/v1/files":
+            self._call(lambda: self.store.list_file_objects(self._file_access_filters(actor, file_query)))
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "download":
+            self._call(lambda: self.store.download_file_object(actor_id, parts[2], self._file_access_filters(actor, file_query)))
+            return
         if len(parts) == 5 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories":
             self._call(
                 lambda: self.store.discover_gitlab_repositories(
@@ -104,7 +112,10 @@ class FoundationHandler(BaseHTTPRequestHandler):
             self._call(lambda: self.store.create_environment(actor_id, body), HTTPStatus.CREATED)
             return
         if path == "/v1/files":
-            self._call(lambda: self.store.create_file_object(actor_id, body), HTTPStatus.CREATED)
+            self._call(lambda: self.store.create_file_object(actor_id, self._file_write_body(actor, body)), HTTPStatus.CREATED)
+            return
+        if path == "/v1/files/upload":
+            self._call(lambda: self.store.upload_file_object(actor_id, self._file_write_body(actor, body)), HTTPStatus.CREATED)
             return
         if path == "/v1/credentials":
             self._call(lambda: self.store.create_credential(actor_id, body), HTTPStatus.CREATED)
@@ -150,16 +161,16 @@ class FoundationHandler(BaseHTTPRequestHandler):
 
         parts = [part for part in path.split("/") if part]
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "upload-grants":
-            self._call(lambda: self.store.create_upload_grant(actor_id, parts[2]), HTTPStatus.CREATED)
+            self._call(lambda: self.store.create_upload_grant(actor_id, parts[2], self._file_access_filters(actor, {})), HTTPStatus.CREATED)
             return
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "upload-sessions":
-            self._call(lambda: self.store.create_upload_session(actor_id, parts[2]), HTTPStatus.CREATED)
+            self._call(lambda: self.store.create_upload_session(actor_id, parts[2], self._file_access_filters(actor, {})), HTTPStatus.CREATED)
             return
         if len(parts) == 5 and parts[:3] == ["v1", "files", "upload-sessions"] and parts[4] == "complete":
-            self._call(lambda: self.store.complete_upload_session(actor_id, parts[3], body))
+            self._call(lambda: self.store.complete_upload_session(actor_id, parts[3], body, self._file_access_filters(actor, {})))
             return
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "download-grants":
-            self._call(lambda: self.store.create_download_grant(actor_id, parts[2]), HTTPStatus.CREATED)
+            self._call(lambda: self.store.create_download_grant(actor_id, parts[2], self._file_access_filters(actor, {})), HTTPStatus.CREATED)
             return
         if len(parts) == 5 and parts[:2] == ["v1", "projects"] and parts[3] == "assets":
             self._call(lambda: self.store.link_project_asset(actor_id, parts[2], parts[4]))
@@ -269,6 +280,10 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if len(parts) == 3 and parts[:2] == ["v1", "credentials"]:
             self._call(lambda: self.store.delete_credential(actor_id, parts[2]))
             return
+        if len(parts) == 3 and parts[:2] == ["v1", "files"]:
+            query = self._query_filters(urlparse(self.path).query)
+            self._call(lambda: self.store.delete_file_object(actor_id, parts[2], self._file_access_filters(actor, query)))
+            return
         if len(parts) == 4 and parts[:3] == ["v1", "gitlab", "profiles"]:
             self._call(lambda: self.store.delete_gitlab_profile(actor_id, parts[3]))
             return
@@ -301,6 +316,8 @@ class FoundationHandler(BaseHTTPRequestHandler):
 
     def _body(self) -> dict[str, Any]:
         size = int(self.headers.get("Content-Length", "0"))
+        if size > MAX_REQUEST_BODY_BYTES:
+            raise BadJSON("request body is too large")
         if size == 0:
             return {}
         try:
@@ -342,6 +359,31 @@ class FoundationHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID,X-Actor-Role,X-Gitlab-Token")
+
+    def _query_filters(self, query: str) -> dict[str, str]:
+        filters: dict[str, str] = {}
+        for key, values in parse_qs(query, keep_blank_values=False).items():
+            if values:
+                filters[key] = values[-1]
+        return filters
+
+    def _file_access_filters(self, actor: ActorContext, filters: dict[str, str]) -> dict[str, str]:
+        scoped = dict(filters)
+        if actor.role == ROLE_ADMIN:
+            return scoped
+        requested_owner = scoped.get("owner_id")
+        if requested_owner and requested_owner != actor.actor_id:
+            raise PermissionDenied("actor cannot access files for another owner")
+        scoped["owner_id"] = actor.actor_id
+        return scoped
+
+    def _file_write_body(self, actor: ActorContext, body: dict[str, Any]) -> dict[str, Any]:
+        scoped = dict(body)
+        requested_owner = str(scoped.get("owner_id", "") or "")
+        if actor.role != ROLE_ADMIN and requested_owner and requested_owner != actor.actor_id:
+            raise PermissionDenied("actor cannot create files for another owner")
+        scoped["owner_id"] = requested_owner or actor.actor_id
+        return scoped
 
 
 class BadJSON(Exception):
