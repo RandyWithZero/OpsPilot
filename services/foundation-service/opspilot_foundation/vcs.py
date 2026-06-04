@@ -96,13 +96,14 @@ class GitLabAPIClient(GitLabClient):
         return [{"name": branch["name"], "default": bool(branch.get("default", False)), "protected": bool(branch.get("protected", False))} for branch in branches]
 
     def create_branch(self, base_url: str, token: str, repository_id: str, branch: str, ref: str) -> dict[str, Any]:
-        return self._request(
+        response = self._request(
             base_url,
             token,
             "POST",
             f"/api/v4/projects/{quote(repository_id, safe='')}/repository/branches",
             body={"branch": branch, "ref": ref},
         )
+        return self._public_branch(response)
 
     def create_merge_request(self, base_url: str, token: str, repository_id: str, source_branch: str, target_branch: str, title: str) -> dict[str, Any]:
         response = self._request(
@@ -141,4 +142,11 @@ class GitLabAPIClient(GitLabClient):
             "target_branch": str(response.get("target_branch", "")),
             "title": str(response.get("title", "")),
             "web_url": sanitize_public_url(str(response.get("web_url", "")), allow_path=True) if response.get("web_url") else "",
+        }
+
+    def _public_branch(self, response: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "name": str(response.get("name", "")),
+            "default": bool(response.get("default", False)),
+            "protected": bool(response.get("protected", False)),
         }

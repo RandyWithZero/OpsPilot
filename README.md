@@ -18,6 +18,7 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 - agent registry and skill catalog metadata
 - model provider configuration through safe credential references
 - workflow definitions with versioned node/edge models
+- workflow run execution records with ordered step runs and manual status transitions
 - test cases, suites, runs, reports, and quality gates
 - audit events for create/link actions
 
@@ -60,30 +61,32 @@ GitLab MVP flow:
 
 ```sh
 curl -X POST http://localhost:8080/v1/credentials \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Admin' \
   -d '{"provider":"gitlab","name":"GitLab Ops","secret":"glpat-..."}'
 
 curl -X POST http://localhost:8080/v1/gitlab/profiles \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Primary GitLab","base_url":"https://gitlab.example.com","credential_ref_id":"cred_000001"}'
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Admin' \
+  -d '{"name":"Primary GitLab","base_url":"https://gitlab.example.com","credential_ref_id":"cred_000001","webhook_secret":"gitlab-webhook-secret"}'
 
 curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/sync \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
   -d '{"search":"platform","page":1,"per_page":20}'
 
 curl 'http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories?search=platform&page=1&per_page=20'
 
 curl -X POST http://localhost:8080/v1/projects/prj_000010/repositories \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
   -d '{"provider":"gitlab","profile_id":"glp_000003","repository_id":"100"}'
 
 curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/100/branches \
-  -H 'Content-Type: application/json' \
-  -d '{"branch":"feature/opspilot","ref":"main"}'
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
+  -d '{"project_id":"prj_000010","branch":"feature/opspilot","ref":"main"}'
 
 curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/100/merge-requests \
-  -H 'Content-Type: application/json' \
-  -d '{"source_branch":"feature/opspilot","target_branch":"main","title":"OpsPilot change"}'
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
+  -d '{"project_id":"prj_000010","source_branch":"feature/opspilot","target_branch":"main","title":"OpsPilot change"}'
 ```
+
+Repository catalogs are owned by GitLab discovery sync. Project repository bindings store only `provider`, `profile_id`, and `repository_id`; branch/MR calls require a bound `project_id` before the stored GitLab API credential is used. GitLab webhook deliveries should send `X-Gitlab-Token`, which is checked against the profile webhook secret, not the outbound API token.
 
 MySQL migrations and concrete persistence adapters should be added behind the existing repository boundary.

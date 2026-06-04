@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: OpsPilot Foundation Service API
   version: 0.3.0
-  description: Foundation APIs for identity, projects, inventory, files, credential references, GitLab profiles, VCS operations, test/report records, and audit events.
+  description: Foundation APIs for identity, projects, inventory, files, credential references, GitLab profiles, VCS operations, test/report records, and audit events. Local MVP RBAC uses X-Actor-ID plus X-Actor-Role headers; supported roles are Admin, Operator, and Viewer.
 servers:
   - url: http://localhost:8080
 paths:
@@ -28,6 +28,7 @@ paths:
       summary: Create identity user
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -48,6 +49,7 @@ paths:
       summary: Update identity user
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: userID
           in: path
           required: true
@@ -70,6 +72,7 @@ paths:
       summary: Delete identity user
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: userID
           in: path
           required: true
@@ -94,6 +97,7 @@ paths:
       summary: Create project
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -112,6 +116,7 @@ paths:
       summary: Update project
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: projectID
           in: path
           required: true
@@ -134,6 +139,7 @@ paths:
       summary: Delete project
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: projectID
           in: path
           required: true
@@ -147,6 +153,7 @@ paths:
       summary: Link an asset to a project
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: projectID
           in: path
           required: true
@@ -168,6 +175,7 @@ paths:
       summary: Unlink an asset from a project
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: projectID
           in: path
           required: true
@@ -190,6 +198,7 @@ paths:
       summary: Link an environment to a project
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: projectID
           in: path
           required: true
@@ -211,6 +220,7 @@ paths:
       summary: Unlink an environment from a project
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: projectID
           in: path
           required: true
@@ -233,6 +243,7 @@ paths:
       summary: Link a GitLab repository to a project
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: projectID
           in: path
           required: true
@@ -256,6 +267,7 @@ paths:
       summary: Unlink a GitLab repository from a project
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: projectID
           in: path
           required: true
@@ -294,6 +306,7 @@ paths:
       summary: Create asset
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -312,6 +325,7 @@ paths:
       summary: Update asset
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: assetID
           in: path
           required: true
@@ -334,6 +348,7 @@ paths:
       summary: Delete asset
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: assetID
           in: path
           required: true
@@ -358,6 +373,7 @@ paths:
       summary: Create environment
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -376,6 +392,7 @@ paths:
       summary: Update environment
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: environmentID
           in: path
           required: true
@@ -398,6 +415,7 @@ paths:
       summary: Delete environment
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: environmentID
           in: path
           required: true
@@ -422,6 +440,7 @@ paths:
       summary: Create file metadata
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -440,6 +459,7 @@ paths:
       summary: Create a local upload grant for a file object
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: fileID
           in: path
           required: true
@@ -457,6 +477,7 @@ paths:
       summary: Create a local upload session for a file object
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: fileID
           in: path
           required: true
@@ -474,6 +495,7 @@ paths:
       summary: Mark a local upload session complete
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: sessionID
           in: path
           required: true
@@ -497,6 +519,7 @@ paths:
       summary: Create a local download grant for a file object
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: fileID
           in: path
           required: true
@@ -513,6 +536,9 @@ paths:
     get:
       summary: List credential references
       description: Returns credential references only. Secret material is never returned.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       responses:
         "200":
           description: Credential references
@@ -526,6 +552,7 @@ paths:
       summary: Create a credential reference from a secret
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -544,6 +571,7 @@ paths:
       summary: Update credential metadata or rotate secret
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: credentialID
           in: path
           required: true
@@ -566,6 +594,7 @@ paths:
       summary: Delete credential reference
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: credentialID
           in: path
           required: true
@@ -590,6 +619,7 @@ paths:
       summary: Create GitLab API profile
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -608,6 +638,7 @@ paths:
       summary: Update GitLab API profile
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: profileID
           in: path
           required: true
@@ -630,6 +661,7 @@ paths:
       summary: Delete GitLab API profile
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: profileID
           in: path
           required: true
@@ -678,6 +710,7 @@ paths:
       description: Uses the profile credential inside the VCS boundary. Raw tokens are never returned.
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: profileID
           in: path
           required: true
@@ -701,11 +734,18 @@ paths:
       summary: List GitLab repository branches
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: profileID
           in: path
           required: true
           schema:
             type: string
+        - name: project_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: OpsPilot project that has this repository bound. Actor must own or belong to the project before the stored GitLab credential is used.
         - name: repositoryID
           in: path
           required: true
@@ -722,6 +762,7 @@ paths:
       summary: Create a GitLab repository branch
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: profileID
           in: path
           required: true
@@ -750,6 +791,7 @@ paths:
       summary: Create a GitLab merge request
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: profileID
           in: path
           required: true
@@ -778,6 +820,7 @@ paths:
       summary: Get GitLab merge request status
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: profileID
           in: path
           required: true
@@ -793,6 +836,12 @@ paths:
           required: true
           schema:
             type: string
+        - name: project_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: OpsPilot project that has this repository bound. Actor must own or belong to the project before the stored GitLab credential is used.
       responses:
         "200":
           description: Merge request status
@@ -816,6 +865,7 @@ paths:
       summary: Queue a GitLab VCS operation through the local adapter boundary
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -845,6 +895,8 @@ paths:
       summary: Record a GitLab webhook event
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - $ref: "#/components/parameters/GitLabWebhookToken"
       requestBody:
         required: true
         content:
@@ -874,6 +926,7 @@ paths:
       summary: Create agent
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -892,6 +945,7 @@ paths:
       summary: Update agent
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: agentID
           in: path
           required: true
@@ -914,6 +968,7 @@ paths:
       summary: Delete agent
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: agentID
           in: path
           required: true
@@ -938,6 +993,7 @@ paths:
       summary: Create skill
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -956,6 +1012,7 @@ paths:
       summary: Update skill
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: skillID
           in: path
           required: true
@@ -978,6 +1035,7 @@ paths:
       summary: Delete skill
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: skillID
           in: path
           required: true
@@ -1003,6 +1061,7 @@ paths:
       description: Uses a safe credential reference. Raw model API keys are created through /v1/credentials and are never returned here.
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -1021,6 +1080,7 @@ paths:
       summary: Update model provider
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: providerID
           in: path
           required: true
@@ -1043,6 +1103,7 @@ paths:
       summary: Delete model provider
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: providerID
           in: path
           required: true
@@ -1067,6 +1128,7 @@ paths:
       summary: Create workflow definition
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -1085,6 +1147,7 @@ paths:
       summary: Update workflow definition
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: workflowID
           in: path
           required: true
@@ -1107,6 +1170,7 @@ paths:
       summary: Delete workflow definition
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: workflowID
           in: path
           required: true
@@ -1137,6 +1201,7 @@ paths:
       summary: Create workflow version
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: workflowID
           in: path
           required: true
@@ -1160,6 +1225,7 @@ paths:
       summary: Update workflow version
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: workflowID
           in: path
           required: true
@@ -1183,6 +1249,106 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkflowVersion"
+  /v1/workflow-runs:
+    get:
+      summary: List workflow runs
+      responses:
+        "200":
+          description: Workflow runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkflowRun"
+  /v1/workflows/{workflowID}/runs:
+    get:
+      summary: List workflow runs for a workflow
+      parameters:
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workflow runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkflowRun"
+    post:
+      summary: Create a workflow run from the workflow active version
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowRunCreate"
+      responses:
+        "201":
+          description: Created workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+  /v1/workflow-runs/{runID}/start:
+    post:
+      summary: Manually start a created workflow run
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Started workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+  /v1/workflow-runs/{runID}/steps/{stepRunID}:
+    patch:
+      summary: Update an agent, manual, or result workflow step run
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: stepRunID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowStepRunUpdate"
+      responses:
+        "200":
+          description: Updated workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
   /v1/test-cases:
     get:
       summary: List test cases
@@ -1199,6 +1365,7 @@ paths:
       summary: Create test case
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -1228,6 +1395,7 @@ paths:
       summary: Create test suite
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -1257,6 +1425,7 @@ paths:
       summary: Create test run
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -1275,6 +1444,7 @@ paths:
       summary: Update test run status/results
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
         - name: runID
           in: path
           required: true
@@ -1309,6 +1479,7 @@ paths:
       summary: Create report
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -1338,6 +1509,7 @@ paths:
       summary: Create quality gate
       parameters:
         - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       requestBody:
         required: true
         content:
@@ -1354,6 +1526,9 @@ paths:
   /v1/audit-events:
     get:
       summary: List audit events, newest first
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       responses:
         "200":
           description: Audit events
@@ -1372,9 +1547,30 @@ components:
       schema:
         type: string
       description: Actor ID recorded on audit events. Auth middleware will replace this development header.
+    ActorRole:
+      name: X-Actor-Role
+      in: header
+      required: false
+      schema:
+        type: string
+        enum: [Admin, Operator, Viewer]
+      description: Local MVP role context. Admin may manage secrets, GitLab profiles, and destructive/archive actions; Operator may perform operational workflow/file/VCS actions; Viewer is read-only. Omitted locally is treated as Viewer; invalid roles have no permissions.
+    GitLabWebhookToken:
+      name: X-Gitlab-Token
+      in: header
+      required: false
+      schema:
+        type: string
+      description: GitLab webhook secret token. Prefer this header over a request-body token; it is validated against the profile webhook secret, not the outbound GitLab API credential.
   responses:
     Conflict:
       description: Resource conflicts with an existing value.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PermissionDenied:
+      description: Actor role is not allowed to perform this operation.
       content:
         application/json:
           schema:
@@ -1759,16 +1955,22 @@ components:
             $ref: "#/components/schemas/GitLabBranch"
     GitLabBranchCreate:
       type: object
-      required: [branch, ref]
+      required: [project_id, branch, ref]
       properties:
+        project_id:
+          type: string
+          description: OpsPilot project that has this repository bound. Actor must own or belong to the project before the stored GitLab credential is used.
         branch:
           type: string
         ref:
           type: string
     GitLabMergeRequestCreate:
       type: object
-      required: [source_branch, target_branch, title]
+      required: [project_id, source_branch, target_branch, title]
       properties:
+        project_id:
+          type: string
+          description: OpsPilot project that has this repository bound. Actor must own or belong to the project before the stored GitLab credential is used.
         source_branch:
           type: string
         target_branch:
@@ -1809,10 +2011,10 @@ components:
           type: string
         credential_ref_id:
           type: string
-        repository_selection:
-          type: array
-          items:
-            $ref: "#/components/schemas/GitLabRepository"
+        webhook_secret:
+          type: string
+          writeOnly: true
+          description: Optional GitLab webhook secret. Stored separately from the outbound API credential and never returned.
         status:
           enum: [active, inactive]
     GitLabProfileUpdate:
@@ -1824,29 +2026,44 @@ components:
           type: string
         credential_ref_id:
           type: string
-        repository_selection:
-          type: array
-          items:
-            $ref: "#/components/schemas/GitLabRepository"
+        webhook_secret:
+          type: string
+          writeOnly: true
+          description: Rotates or creates the separate GitLab webhook secret.
         status:
           enum: [active, inactive]
     GitLabProfile:
-      allOf:
-        - $ref: "#/components/schemas/GitLabProfileCreate"
-        - type: object
-          required: [id, status, repository_synced_at, created_at, updated_at]
-          properties:
-            id:
-              type: string
-            repository_synced_at:
-              type: string
-              description: Empty until repository discovery has synced successfully.
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
+      type: object
+      required: [id, name, base_url, credential_ref_id, repository_selection, repository_synced_at, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        base_url:
+          type: string
+        credential_ref_id:
+          type: string
+        webhook_secret_ref:
+          type: string
+          description: Server-side reference for the separate webhook secret, when configured. The secret value is never returned.
+        repository_selection:
+          type: array
+          readOnly: true
+          description: Last synced repository discovery results. Clients cannot author this catalog through profile create/update.
+          items:
+            $ref: "#/components/schemas/GitLabRepository"
+        repository_synced_at:
+          type: string
+          description: Empty until repository discovery has synced successfully.
+        status:
+          enum: [active, inactive]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     RepositoryBinding:
       type: object
       required: [provider, profile_id, repository_id]
@@ -1856,11 +2073,6 @@ components:
         profile_id:
           type: string
         repository_id:
-          type: string
-        path:
-          type: string
-          description: Optional request field. The service infers and returns the selected repository path.
-        web_url:
           type: string
     VCSOperationCreate:
       type: object
@@ -1918,7 +2130,7 @@ components:
         authenticity_token:
           type: string
           writeOnly: true
-          description: GitLab webhook token checked against the profile credential; never stored or returned.
+          description: GitLab webhook token checked against the profile webhook secret; never stored or returned. Prefer the X-Gitlab-Token header for real webhook deliveries.
         payload:
           type: object
           description: Payload is recursively redacted before persistence or response.
@@ -2087,7 +2299,7 @@ components:
         id:
           type: string
         type:
-          enum: [trigger, agent_task, skill_task, approval, notification]
+          enum: [trigger, agent_task, skill_task, approval, notification, manual, manual_task, result]
         name:
           type: string
         agent_id:
@@ -2141,6 +2353,114 @@ components:
             updated_at:
               type: string
               format: date-time
+    WorkflowRunCreate:
+      type: object
+      properties:
+        workflow_version_id:
+          type: string
+          description: Optional explicit version. Defaults to the workflow active_version_id.
+        trigger_type:
+          enum: [manual]
+        start:
+          type: boolean
+          description: If true, create and immediately manually start the run.
+    WorkflowStepRunUpdate:
+      type: object
+      required: [status]
+      properties:
+        status:
+          enum: [running, completed, failed, skipped]
+          description: Manual/approval step runs cannot be skipped; downstream steps require predecessors to be terminal in an allowed state.
+        output:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+    WorkflowStepRun:
+      type: object
+      required: [id, workflow_run_id, workflow_id, workflow_version_id, node_id, node_type, step_type, sequence, predecessor_node_ids, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        workflow_run_id:
+          type: string
+        workflow_id:
+          type: string
+        workflow_version_id:
+          type: string
+        node_id:
+          type: string
+        node_type:
+          type: string
+        step_type:
+          enum: [trigger, agent, manual, result]
+        sequence:
+          type: integer
+        name:
+          type: string
+        status:
+          enum: [pending, running, completed, failed, skipped]
+        agent_id:
+          type: string
+        skill_id:
+          type: string
+        model_provider_id:
+          type: string
+        predecessor_node_ids:
+          type: array
+          description: Immutable predecessor node IDs snapshotted from workflow version edges when the run is created.
+          items:
+            type: string
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    WorkflowRun:
+      type: object
+      required: [id, workflow_id, workflow_version_id, trigger_type, status, steps, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        workflow_id:
+          type: string
+        workflow_version_id:
+          type: string
+        trigger_type:
+          enum: [manual]
+        status:
+          enum: [created, running, completed, failed, cancelled]
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowStepRun"
     TestCaseCreate:
       type: object
       required: [project_id, name]

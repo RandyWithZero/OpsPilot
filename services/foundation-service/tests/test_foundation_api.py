@@ -9,6 +9,13 @@ sys.path.insert(0, str(ROOT))
 from opspilot_foundation.store import MemoryStore  # noqa: E402
 from opspilot_foundation.server import FoundationHandler  # noqa: E402
 from opspilot_foundation.domain import InvalidInput  # noqa: E402
+from opspilot_foundation.auth import (  # noqa: E402
+    ActorContext,
+    PermissionDenied,
+    actor_from_headers,
+    permission_for_request,
+    require_permission,
+)
 
 
 class FakeGitLabClient:
@@ -147,7 +154,63 @@ class FoundationSliceTest(unittest.TestCase):
 
         self.assertIn(("Access-Control-Allow-Origin", "*"), headers)
         self.assertIn(("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS"), headers)
-        self.assertIn(("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID"), headers)
+        self.assertIn(("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID,X-Actor-Role,X-Gitlab-Token"), headers)
+
+    def test_local_rbac_permission_matrix_for_high_risk_apis(self) -> None:
+        self.assertEqual(actor_from_headers({}).role, "Viewer")
+        self.assertEqual(actor_from_headers({"X-Actor-ID": "usr_operator", "X-Actor-Role": "operator"}).actor_id, "usr_operator")
+        self.assertEqual(actor_from_headers({"X-Actor-Role": "viewer"}).role, "Viewer")
+        self.assertEqual(actor_from_headers({"X-Actor-Role": "root"}).role, "")
+
+        self.assert_missing_role_denied("GET", "/v1/credentials")
+        self.assert_missing_role_denied("POST", "/v1/credentials")
+        self.assert_missing_role_denied("POST", "/v1/files/fil_1/upload-grants")
+        self.assert_missing_role_denied("PATCH", "/v1/workflow-runs/wfr_1/steps/wfs_1", {"status": "completed"})
+        self.assert_missing_role_denied("DELETE", "/v1/projects/prj_1")
+        self.assert_invalid_role_denied("GET", "/v1/projects")
+        self.assert_invalid_role_denied("POST", "/v1/credentials")
+
+        self.assert_allowed("Viewer", "GET", "/v1/projects")
+        self.assert_denied("Viewer", "GET", "/v1/credentials")
+        self.assert_denied("Viewer", "POST", "/v1/files/fil_1/upload-grants")
+        self.assert_denied("Viewer", "PATCH", "/v1/workflow-runs/wfr_1/steps/wfs_1")
+        self.assert_denied("Viewer", "DELETE", "/v1/projects/prj_1")
+
+        self.assert_allowed("Operator", "POST", "/v1/files/fil_1/upload-grants")
+        self.assert_allowed("Operator", "POST", "/v1/vcs/operations")
+        self.assert_allowed("Operator", "POST", "/v1/workflows/wfl_1/runs")
+        self.assert_allowed("Operator", "POST", "/v1/workflow-runs/wfr_1/start")
+        self.assert_allowed("Operator", "PATCH", "/v1/workflow-runs/wfr_1/steps/wfs_1", {"status": "completed"})
+        self.assert_allowed("Operator", "PATCH", "/v1/workflows/wfl_1/versions/wfv_1", {"status": "published"})
+        self.assert_denied("Operator", "POST", "/v1/credentials")
+        self.assert_denied("Operator", "POST", "/v1/users")
+        self.assert_denied("Operator", "PATCH", "/v1/credentials/cred_1")
+        self.assert_denied("Operator", "PATCH", "/v1/gitlab/profiles/glp_1")
+        self.assert_denied("Operator", "PATCH", "/v1/users/usr_1")
+        self.assert_denied("Operator", "PATCH", "/v1/agents/agt_1")
+        self.assert_denied("Operator", "PATCH", "/v1/skills/skl_1")
+        self.assert_denied("Operator", "PATCH", "/v1/projects/prj_1", {"status": "archived"})
+        self.assert_denied("Operator", "DELETE", "/v1/projects/prj_1")
+
+        self.assert_allowed("Admin", "GET", "/v1/credentials")
+        self.assert_allowed("Admin", "POST", "/v1/credentials")
+        self.assert_allowed("Admin", "PATCH", "/v1/gitlab/profiles/glp_1")
+        self.assert_allowed("Admin", "DELETE", "/v1/projects/prj_1")
+
+    def assert_allowed(self, role: str, method: str, path: str, body: dict | None = None) -> None:
+        require_permission(ActorContext(actor_id="usr_test_actor", role=role), permission_for_request(method, path, body))
+
+    def assert_denied(self, role: str, method: str, path: str, body: dict | None = None) -> None:
+        with self.assertRaises(PermissionDenied):
+            require_permission(ActorContext(actor_id="usr_test_actor", role=role), permission_for_request(method, path, body))
+
+    def assert_missing_role_denied(self, method: str, path: str, body: dict | None = None) -> None:
+        actor = actor_from_headers({})
+        self.assert_denied(actor.role, method, path, body)
+
+    def assert_invalid_role_denied(self, method: str, path: str, body: dict | None = None) -> None:
+        actor = actor_from_headers({"X-Actor-Role": "root"})
+        self.assert_denied(actor.role, method, path, body)
 
     def test_file_grants_are_metadata_only(self) -> None:
         file_object = self.store.create_file_object(
@@ -244,6 +307,7 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertNotEqual(first["secret_fingerprint"], second["secret_fingerprint"])
 
     def test_gitlab_profile_repositories_and_project_binding(self) -> None:
+        self.store = MemoryStore(gitlab_client=FakeGitLabClient())
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
         project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
         credential = self.store.create_credential(
@@ -256,11 +320,9 @@ class FoundationSliceTest(unittest.TestCase):
                 "name": "Primary GitLab",
                 "base_url": "https://gitlab.example.com",
                 "credential_ref_id": credential["id"],
-                "repository_selection": [
-                    {"id": "100", "path": "platform/opspilot", "name": "OpsPilot", "web_url": "https://gitlab.example.com/platform/opspilot"}
-                ],
             },
         )
+        self.store.sync_gitlab_repositories("usr_test_actor", profile["id"])
 
         repositories = self.store.list_gitlab_repositories(profile["id"])
         self.assertEqual(repositories[0]["path"], "platform/opspilot")
@@ -271,7 +333,7 @@ class FoundationSliceTest(unittest.TestCase):
             {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100"},
         )
         self.assertEqual(linked["repository_bindings"][0]["repository_id"], "100")
-        self.assertEqual(linked["repository_bindings"][0]["path"], "platform/opspilot")
+        self.assertEqual(set(linked["repository_bindings"][0].keys()), {"provider", "profile_id", "repository_id"})
 
         unlinked = self.store.unlink_project_repository("usr_test_actor", project["id"], profile["id"], "100")
         self.assertEqual(unlinked["repository_bindings"], [])
@@ -297,7 +359,7 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertTrue(filtered["has_next"])
 
         linked = self.store.link_project_repository("usr_test_actor", project["id"], {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100"})
-        self.assertEqual(linked["repository_bindings"][0]["path"], "platform/opspilot")
+        self.assertEqual(linked["repository_bindings"][0], {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100"})
         audit = json.dumps(self.store.list_audit_events())
         self.assertIn("gitlab.repositories.synced", audit)
         self.assertIn("project.repository.linked", audit)
@@ -306,24 +368,28 @@ class FoundationSliceTest(unittest.TestCase):
     def test_gitlab_branch_and_merge_request_operations_use_gitlab_client(self) -> None:
         gitlab = FakeGitLabClient()
         self.store = MemoryStore(gitlab_client=gitlab)
-        credential = self.store.create_credential("usr_test_actor", {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"})
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        credential = self.store.create_credential(user["id"], {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"})
         profile = self.store.create_gitlab_profile(
-            "usr_test_actor",
+            user["id"],
             {"name": "Primary GitLab", "base_url": "https://gitlab.example.com", "credential_ref_id": credential["id"]},
         )
-        self.store.sync_gitlab_repositories("usr_test_actor", profile["id"])
+        self.store.sync_gitlab_repositories(user["id"], profile["id"])
+        self.store.link_project_repository(user["id"], project["id"], {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100"})
 
-        branch_operation = self.store.create_gitlab_branch("usr_test_actor", profile["id"], "100", {"branch": "feature/gitlab-mvp", "ref": "main"})
-        branches = self.store.list_gitlab_branches("usr_test_actor", profile["id"], "100")
+        branch_operation = self.store.create_gitlab_branch(user["id"], profile["id"], "100", {"project_id": project["id"], "branch": "feature/gitlab-mvp", "ref": "main"})
+        branches = self.store.list_gitlab_branches(user["id"], project["id"], profile["id"], "100")
         merge_operation = self.store.create_gitlab_merge_request(
-            "usr_test_actor",
+            user["id"],
             profile["id"],
             "100",
-            {"source_branch": "feature/gitlab-mvp", "target_branch": "main", "title": "GitLab MVP"},
+            {"project_id": project["id"], "source_branch": "feature/gitlab-mvp", "target_branch": "main", "title": "GitLab MVP"},
         )
-        status = self.store.get_gitlab_merge_request("usr_test_actor", profile["id"], "100", merge_operation["external_id"])
+        status = self.store.get_gitlab_merge_request(user["id"], project["id"], profile["id"], "100", merge_operation["external_id"])
 
         self.assertEqual(branch_operation["status"], "completed")
+        self.assertEqual(set(branch_operation["result"]["branch"].keys()), {"name", "default", "protected"})
         self.assertEqual(branches["branches"][1]["name"], "feature/gitlab-mvp")
         self.assertEqual(merge_operation["status"], "completed")
         self.assertEqual(merge_operation["result"]["merge_request"]["state"], "opened")
@@ -334,19 +400,22 @@ class FoundationSliceTest(unittest.TestCase):
         gitlab = FakeGitLabClient()
         gitlab.fail_next_merge_request = True
         self.store = MemoryStore(gitlab_client=gitlab)
-        credential = self.store.create_credential("usr_test_actor", {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"})
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        credential = self.store.create_credential(user["id"], {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"})
         profile = self.store.create_gitlab_profile(
-            "usr_test_actor",
+            user["id"],
             {"name": "Primary GitLab", "base_url": "https://gitlab.example.com", "credential_ref_id": credential["id"]},
         )
-        self.store.sync_gitlab_repositories("usr_test_actor", profile["id"])
+        self.store.sync_gitlab_repositories(user["id"], profile["id"])
+        self.store.link_project_repository(user["id"], project["id"], {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100"})
 
         with self.assertRaises(Exception) as raised:
             self.store.create_gitlab_merge_request(
-                "usr_test_actor",
+                user["id"],
                 profile["id"],
                 "100",
-                {"source_branch": "feature/bad", "target_branch": "main", "title": "Bad MR"},
+                {"project_id": project["id"], "source_branch": "feature/bad", "target_branch": "main", "title": "Bad MR"},
             )
 
         self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
@@ -370,7 +439,8 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertNotIn("glpat-token", json.dumps(self.store.list_audit_events()))
         self.assertEqual(self.store.list_gitlab_profiles(), [])
 
-    def test_gitlab_repository_urls_are_sanitized_and_binding_ignores_client_web_url(self) -> None:
+    def test_gitlab_repository_catalog_is_adapter_owned_and_binding_ignores_client_metadata(self) -> None:
+        self.store = MemoryStore(gitlab_client=FakeGitLabClient())
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
         project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
         credential = self.store.create_credential(
@@ -396,11 +466,10 @@ class FoundationSliceTest(unittest.TestCase):
                 "name": "Primary GitLab",
                 "base_url": "https://gitlab.example.com?utm_source=setup",
                 "credential_ref_id": credential["id"],
-                "repository_selection": [{"id": "100", "path": "platform/opspilot", "web_url": "https://gitlab.example.com/platform/opspilot?tab=readme"}],
             },
         )
+        self.store.sync_gitlab_repositories("usr_test_actor", profile["id"])
         self.assertEqual(profile["base_url"], "https://gitlab.example.com")
-        self.assertEqual(profile["repository_selection"][0]["web_url"], "https://gitlab.example.com/platform/opspilot")
 
         linked = self.store.link_project_repository(
             "usr_test_actor",
@@ -414,11 +483,12 @@ class FoundationSliceTest(unittest.TestCase):
             },
         )
         serialized = json.dumps({"projects": self.store.list_projects(), "repositories": self.store.list_gitlab_repositories(profile["id"]), "audit": self.store.list_audit_events()})
-        self.assertEqual(linked["repository_bindings"][0]["web_url"], "https://gitlab.example.com/platform/opspilot")
+        self.assertEqual(linked["repository_bindings"][0], {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100"})
         self.assertNotIn("glpat-token", serialized)
         self.assertNotIn("oauth2", serialized)
 
     def test_gitlab_vcs_operations_and_webhook_events_use_selected_repository(self) -> None:
+        self.store = MemoryStore(gitlab_client=FakeGitLabClient())
         credential = self.store.create_credential(
             "usr_test_actor",
             {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"},
@@ -429,9 +499,10 @@ class FoundationSliceTest(unittest.TestCase):
                 "name": "Primary GitLab",
                 "base_url": "https://gitlab.example.com",
                 "credential_ref_id": credential["id"],
-                "repository_selection": [{"id": "100", "path": "platform/opspilot", "name": "OpsPilot"}],
+                "webhook_secret": "webhook-secret-value",
             },
         )
+        self.store.sync_gitlab_repositories("usr_test_actor", profile["id"])
 
         operation = self.store.create_vcs_operation(
             "usr_test_actor",
@@ -444,7 +515,7 @@ class FoundationSliceTest(unittest.TestCase):
                 "profile_id": profile["id"],
                 "repository_id": "100",
                 "event_type": "merge_request",
-                "authenticity_token": "glpat-secret-value",
+                "authenticity_token": "webhook-secret-value",
                 "payload": {"iid": 12, "token": "leaked", "nested": {"private_token": "nested-leak", "private_key": "private-key-should-redact", "safe": "value"}},
             },
         )
@@ -459,8 +530,16 @@ class FoundationSliceTest(unittest.TestCase):
         serialized = json.dumps({"operations": self.store.list_vcs_operations(), "webhooks": self.store.list_vcs_webhook_events(), "audit": self.store.list_audit_events()})
         self.assertIn("vcs.operation.created", serialized)
         self.assertNotIn("glpat-secret-value", serialized)
+        self.assertNotIn("webhook-secret-value", serialized)
         self.assertNotIn("leaked", serialized)
         self.assertNotIn("private-key-should-redact", serialized)
+
+        with self.assertRaises(Exception) as pat_as_webhook_token:
+            self.store.ingest_vcs_webhook_event(
+                "usr_test_actor",
+                {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100", "event_type": "merge_request", "authenticity_token": "glpat-secret-value"},
+            )
+        self.assertEqual(getattr(pat_as_webhook_token.exception, "code", ""), "invalid_input")
 
         with self.assertRaises(Exception) as raised:
             self.store.create_vcs_operation(
@@ -475,6 +554,27 @@ class FoundationSliceTest(unittest.TestCase):
                 {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100", "event_type": "merge_request", "authenticity_token": "wrong"},
             )
         self.assertEqual(getattr(webhook_error.exception, "code", ""), "invalid_input")
+
+    def test_gitlab_branch_and_merge_request_operations_require_bound_project_actor(self) -> None:
+        self.store = MemoryStore(gitlab_client=FakeGitLabClient())
+        owner = self.store.create_user("usr_test_actor", {"email": "owner@example.com", "name": "Owner"})
+        outsider = self.store.create_user("usr_test_actor", {"email": "outsider@example.com", "name": "Outsider"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": owner["id"]})
+        credential = self.store.create_credential(owner["id"], {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"})
+        profile = self.store.create_gitlab_profile(owner["id"], {"name": "Primary GitLab", "base_url": "https://gitlab.example.com", "credential_ref_id": credential["id"]})
+        self.store.sync_gitlab_repositories(owner["id"], profile["id"])
+
+        with self.assertRaises(PermissionDenied):
+            self.store.create_gitlab_branch("system", profile["id"], "100", {"project_id": project["id"], "branch": "feature/no-auth", "ref": "main"})
+        with self.assertRaises(Exception) as unbound:
+            self.store.create_gitlab_branch(owner["id"], profile["id"], "100", {"project_id": project["id"], "branch": "feature/unbound", "ref": "main"})
+        self.assertEqual(getattr(unbound.exception, "code", ""), "conflict")
+
+        self.store.link_project_repository(owner["id"], project["id"], {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100"})
+        with self.assertRaises(PermissionDenied):
+            self.store.create_gitlab_branch(outsider["id"], profile["id"], "100", {"project_id": project["id"], "branch": "feature/outsider", "ref": "main"})
+        allowed = self.store.create_gitlab_branch(owner["id"], profile["id"], "100", {"project_id": project["id"], "branch": "feature/owner", "ref": "main"})
+        self.assertEqual(allowed["status"], "completed")
 
     def test_agent_skill_model_provider_and_workflow_slice(self) -> None:
         credential = self.store.create_credential(
@@ -595,6 +695,89 @@ class FoundationSliceTest(unittest.TestCase):
                 },
             )
         self.assertEqual(getattr(provider_policy_error.exception, "code", ""), "conflict")
+
+    def test_workflow_run_execution_slice_orders_and_transitions_steps(self) -> None:
+        credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key", "secret": "sk-secret"})
+        provider = self.store.create_model_provider("usr_test_actor", {"provider": "openai", "name": "Provider", "credential_ref_id": credential["id"]})
+        skill = self.store.create_skill("usr_test_actor", {"name": "Deploy", "version": "1.0.0", "runtime": "python"})
+        agent = self.store.create_agent("usr_test_actor", {"name": "Deploy Agent", "kind": "automation", "skill_ids": [skill["id"]], "model_provider_id": provider["id"]})
+        workflow = self.store.create_workflow("usr_test_actor", {"name": "Deploy workflow"})
+        version = self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "approve", "type": "approval", "name": "Approve"},
+                    {"id": "start", "type": "trigger", "name": "Start"},
+                    {"id": "deploy", "type": "agent_task", "name": "Deploy", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"]},
+                    {"id": "done", "type": "result", "name": "Done"},
+                ],
+                "edges": [
+                    {"from_node_id": "start", "to_node_id": "deploy"},
+                    {"from_node_id": "deploy", "to_node_id": "approve"},
+                    {"from_node_id": "approve", "to_node_id": "done"},
+                ],
+            },
+        )
+
+        run = self.store.create_workflow_run("usr_test_actor", workflow["id"], {})
+        self.assertEqual(run["workflow_version_id"], version["id"])
+        self.assertEqual(run["status"], "created")
+        self.assertEqual([step["node_id"] for step in run["steps"]], ["start", "deploy", "approve", "done"])
+        self.assertEqual([step["step_type"] for step in run["steps"]], ["trigger", "agent", "manual", "result"])
+        self.assertEqual(next(step for step in run["steps"] if step["node_id"] == "done")["predecessor_node_ids"], ["approve"])
+
+        started = self.store.start_workflow_run("usr_test_actor", run["id"])
+        self.assertEqual(started["status"], "running")
+        self.assertEqual(started["steps"][0]["status"], "completed")
+
+        agent_step = next(step for step in started["steps"] if step["step_type"] == "agent")
+        manual_step = next(step for step in started["steps"] if step["step_type"] == "manual")
+        result_step = next(step for step in started["steps"] if step["step_type"] == "result")
+        running = self.store.update_workflow_step_run("usr_test_actor", run["id"], agent_step["id"], {"status": "running"})
+        self.assertEqual(next(step for step in running["steps"] if step["id"] == agent_step["id"])["status"], "running")
+        self.store.update_workflow_step_run("usr_test_actor", run["id"], agent_step["id"], {"status": "completed", "output": {"deployment_id": "dep-1"}})
+
+        with self.assertRaises(Exception) as skipped_gate:
+            self.store.update_workflow_step_run("usr_test_actor", run["id"], manual_step["id"], {"status": "skipped"})
+        self.assertEqual(getattr(skipped_gate.exception, "code", ""), "invalid_input")
+
+        self.store.update_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            version["id"],
+            {
+                "edges": [
+                    {"from_node_id": "start", "to_node_id": "deploy"},
+                    {"from_node_id": "deploy", "to_node_id": "done"},
+                    {"from_node_id": "done", "to_node_id": "approve"},
+                ],
+            },
+        )
+        with self.assertRaises(Exception) as downstream_bypass:
+            self.store.update_workflow_step_run("usr_test_actor", run["id"], result_step["id"], {"status": "completed", "output": {"summary": "bypassed"}})
+        self.assertEqual(getattr(downstream_bypass.exception, "code", ""), "conflict")
+        self.assertEqual(self.store.list_workflow_runs(workflow["id"])[0]["status"], "running")
+        self.assertEqual(next(step for step in self.store.list_workflow_runs(workflow["id"])[0]["steps"] if step["node_id"] == "done")["predecessor_node_ids"], ["approve"])
+
+        self.store.update_workflow_step_run("usr_test_actor", run["id"], manual_step["id"], {"status": "completed", "output": {"approved_by": "qa"}})
+        completed = self.store.update_workflow_step_run("usr_test_actor", run["id"], result_step["id"], {"status": "completed", "output": {"summary": "ok"}})
+
+        self.assertEqual(completed["status"], "completed")
+        self.assertTrue(completed["completed_at"])
+        self.assertEqual(next(step for step in completed["steps"] if step["id"] == agent_step["id"])["output"], {"deployment_id": "dep-1"})
+        self.assertEqual(self.store.list_workflow_runs(workflow["id"])[0]["id"], run["id"])
+
+        with self.assertRaises(Exception) as raised:
+            self.store.update_workflow_step_run("usr_test_actor", run["id"], agent_step["id"], {"status": "running"})
+        self.assertEqual(getattr(raised.exception, "code", ""), "conflict")
+
+        audit = json.dumps(self.store.list_audit_events())
+        self.assertIn("workflow.run.created", audit)
+        self.assertIn("workflow.run.started", audit)
+        self.assertIn("workflow.step.updated", audit)
+        self.assertNotIn("sk-secret", audit)
 
     def test_test_report_quality_gate_slice_validates_project_boundaries(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})

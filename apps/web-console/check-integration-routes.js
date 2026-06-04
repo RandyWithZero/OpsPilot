@@ -19,6 +19,9 @@ assertStyle(".kv dd", ["min-width: 0", "overflow-wrap: anywhere"]);
 assertStyle(".link-list", ["min-width: 0"]);
 assertStyle(".link-list li", ["min-width: 0", "overflow-wrap: anywhere"]);
 assertStyle(".json-block", ["max-width: 100%", "white-space: pre-wrap", "overflow-wrap: anywhere"]);
+assertStyle(".workflow-run-panel", ["min-width: 0"]);
+assertStyle(".run-step", ["min-width: 0"]);
+assertStyle(".gate-copy", ["overflow-wrap: anywhere"]);
 assertStyle(".builder-mode .sidebar,\n.builder-mode .topbar", ["display: none"]);
 assertStyle(".builder-shell", ["grid-template-columns: 220px minmax(520px, 1fr) 300px", "min-width: 0"]);
 assertStyle(".workflow-canvas", ["overflow: auto"]);
@@ -93,6 +96,7 @@ const result = vm.runInContext(`
     modelProviders: clone(seed.modelProviders),
     workflows: clone(seed.workflows),
     workflowVersions: clone(seed.workflowVersions),
+    workflowRuns: clone(seed.workflowRuns),
     auditEvents: clone(seed.auditEvents),
     filters: {},
     detail: null,
@@ -169,6 +173,81 @@ const result = vm.runInContext(`
   const vcsDetails = detailPairs("vcsOperations", state.vcsOperations[0]).map(([, value]) => value).join(" ");
   const vcsRelationships = relationshipControls("vcsOperations", state.vcsOperations[0]);
   if (!vcsDetails.includes("json-block") || !vcsRelationships.includes("json-block")) throw new Error("long VCS detail JSON is not rendered in contained blocks");
+
+  state.route = "workflows";
+  state.detail = { type: "workflows", id: "wfl_mock_release" };
+  renderResource("workflows");
+  if (!content.innerHTML.includes("执行控制") || !content.innerHTML.includes("步骤时间线")) throw new Error("workflow run execution panel missing");
+  if (!content.innerHTML.includes("等待前置节点") || !content.innerHTML.includes("人工确认")) throw new Error("workflow predecessor gate copy missing");
+
+  const beforeRuns = state.workflowRuns.length;
+  await createWorkflowRun("wfl_mock_release", false);
+  if (state.workflowRuns.length !== beforeRuns + 1) throw new Error("offline workflow run create did not append a run");
+  let run = state.workflowRuns[0];
+  if (run.status !== "created" || !run.steps?.every((step) => Array.isArray(step.predecessor_node_ids))) throw new Error("offline workflow run did not preserve created status and predecessor snapshots");
+  await startWorkflowRun(run.id);
+  run = state.workflowRuns.find((item) => item.id === run.id);
+  const triggerStep = run.steps.find((step) => step.step_type === "trigger");
+  const agentStep = run.steps.find((step) => step.step_type === "agent");
+  const manualStep = run.steps.find((step) => step.step_type === "manual");
+  const resultStep = run.steps.find((step) => step.step_type === "result");
+  if (run.status !== "running" || triggerStep.status !== "completed") throw new Error("offline workflow run start did not activate run and complete trigger");
+  let rejectedEarlyResult = false;
+  try {
+    await updateWorkflowStep(run.id, resultStep.id + "|completed");
+  } catch {
+    rejectedEarlyResult = true;
+  }
+  if (!rejectedEarlyResult) throw new Error("result step transitioned before predecessors were satisfied");
+  await updateWorkflowStep(run.id, agentStep.id + "|completed");
+  let rejectedManualSkip = false;
+  try {
+    await updateWorkflowStep(run.id, manualStep.id + "|skipped");
+  } catch {
+    rejectedManualSkip = true;
+  }
+  if (!rejectedManualSkip) throw new Error("manual workflow step allowed skipped transition");
+  await updateWorkflowStep(run.id, manualStep.id + "|completed");
+  await updateWorkflowStep(run.id, resultStep.id + "|completed");
+  run = state.workflowRuns.find((item) => item.id === run.id);
+  if (run.status !== "completed" || !resultStep.output) throw new Error("offline workflow run did not roll up to completed with step output");
+  agentStep.output = {
+    api_key: "sk-output-api-key",
+    nested: {
+      authorization: "Bearer output-authorization-token",
+      token: "output-token-value",
+      secret: "output-secret-value",
+      password: "output-password-value",
+      cookie: "sessionid=output-cookie-value; csrftoken=output-csrf-value",
+      note: "authorization=Bearer inline-authorization-value token=inline-token-value secret=inline-secret-value password=inline-password-value Cookie: sessionid=inline-cookie-value; csrftoken=inline-csrf-value",
+    },
+  };
+  agentStep.error = "request failed api_key=error-api-key authorization=Bearer error-authorization-token token=error-token-value secret=error-secret-value password=error-password-value Cookie: sessionid=error-cookie-value; csrftoken=error-csrf-value";
+  const sensitiveTimelineHtml = workflowRunTimeline(run);
+  const forbiddenTimelineValues = [
+    "sk-output-api-key",
+    "output-authorization-token",
+    "output-token-value",
+    "output-secret-value",
+    "output-password-value",
+    "output-cookie-value",
+    "output-csrf-value",
+    "inline-authorization-value",
+    "inline-token-value",
+    "inline-secret-value",
+    "inline-password-value",
+    "inline-cookie-value",
+    "inline-csrf-value",
+    "error-api-key",
+    "error-authorization-token",
+    "error-token-value",
+    "error-secret-value",
+    "error-password-value",
+    "error-cookie-value",
+    "error-csrf-value",
+  ];
+  if (forbiddenTimelineValues.some((value) => sensitiveTimelineHtml.includes(value))) throw new Error("workflow timeline leaked sensitive output/error values");
+  if (!sensitiveTimelineHtml.includes("[REDACTED]")) throw new Error("workflow timeline did not show redacted markers for sensitive output/error");
 
   openWorkflowBuilder("wfl_mock_release");
   if (!content.innerHTML.includes("节点 Palette") || !content.innerHTML.includes("workflow-canvas") || !content.innerHTML.includes("移动端节点列表")) throw new Error("workflow builder shell missing MVP regions");

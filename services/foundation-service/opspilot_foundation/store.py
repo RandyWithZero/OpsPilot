@@ -33,11 +33,14 @@ from .domain import (
     VCSOperation,
     VCSWebhookEvent,
     WorkflowDefinition,
+    WorkflowRun,
+    WorkflowStepRun,
     WorkflowVersion,
     now_utc,
     redact_sensitive_payload,
     sanitize_public_url,
 )
+from .auth import PermissionDenied
 from .vcs import GitLabAPIClient, GitLabClient, LocalGitLabClient
 
 T = TypeVar("T")
@@ -62,6 +65,8 @@ class MemoryStore:
         self.model_providers: dict[str, ModelProvider] = {}
         self.workflows: dict[str, WorkflowDefinition] = {}
         self.workflow_versions: dict[str, WorkflowVersion] = {}
+        self.workflow_runs: dict[str, WorkflowRun] = {}
+        self.workflow_step_runs: dict[str, WorkflowStepRun] = {}
         self.test_cases: dict[str, TestCase] = {}
         self.test_suites: dict[str, TestSuite] = {}
         self.test_runs: dict[str, TestRun] = {}
@@ -216,9 +221,6 @@ class MemoryStore:
             repositories = {repo["id"]: repo for repo in self.list_gitlab_repositories(binding.profile_id)}
             if binding.repository_id not in repositories:
                 raise NotFound("repository not found for profile")
-            selected = repositories[binding.repository_id]
-            binding.path = selected["path"]
-            binding.web_url = selected["web_url"]
             serialized = asdict(binding)
             project.repository_bindings = [
                 existing
@@ -478,6 +480,8 @@ class MemoryStore:
             return {"status": "deleted"}
 
     def create_gitlab_profile(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        if data.get("repository_selection"):
+            raise InvalidInput("repository selection is read-only; sync repositories through the GitLab adapter")
         profile = GitLabProfile(**pick(data, GitLabProfile))
         profile.validate()
         with self._lock:
@@ -488,7 +492,10 @@ class MemoryStore:
                 raise Conflict("gitlab profile name already exists")
             profile.id = self._id("glp")
             profile.base_url = sanitize_public_url(profile.base_url, allow_path=False)
-            profile.repository_selection = normalize_repositories(profile.repository_selection, profile.base_url)
+            profile.repository_selection = []
+            webhook_secret = str(data.get("webhook_secret", "")).strip()
+            if webhook_secret:
+                profile.webhook_secret_ref = self.secret_store.put(webhook_secret)
             stamp(profile)
             self.gitlab_profiles[profile.id] = profile
             self._audit(actor_id, "gitlab.profile.created", "gitlab_profile", profile.id, {"base_url": profile.base_url, "credential_ref_id": profile.credential_ref_id})
@@ -499,6 +506,8 @@ class MemoryStore:
             return [asdict(profile) for profile in self.gitlab_profiles.values()]
 
     def update_gitlab_profile(self, actor_id: str, profile_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        if data.get("repository_selection"):
+            raise InvalidInput("repository selection is read-only; sync repositories through the GitLab adapter")
         with self._lock:
             profile = self._gitlab_profile(profile_id)
             if "credential_ref_id" in data:
@@ -507,12 +516,17 @@ class MemoryStore:
                     raise InvalidInput("gitlab profiles require a gitlab credential")
             if "name" in data and any(existing.id != profile_id and existing.name.lower() == str(data["name"]).lower() for existing in self.gitlab_profiles.values()):
                 raise Conflict("gitlab profile name already exists")
-            for key in ("name", "base_url", "credential_ref_id", "repository_selection", "status"):
+            for key in ("name", "base_url", "credential_ref_id", "status"):
                 if key in data:
                     setattr(profile, key, data[key])
             profile.validate()
             profile.base_url = sanitize_public_url(profile.base_url, allow_path=False)
-            profile.repository_selection = normalize_repositories(profile.repository_selection, profile.base_url)
+            webhook_secret = str(data.get("webhook_secret", "")).strip()
+            if webhook_secret:
+                if profile.webhook_secret_ref:
+                    self.secret_store.rotate(profile.webhook_secret_ref, webhook_secret)
+                else:
+                    profile.webhook_secret_ref = self.secret_store.put(webhook_secret)
             profile.updated_at = now_utc()
             self._audit(actor_id, "gitlab.profile.updated", "gitlab_profile", profile.id, {"status": profile.status})
             return asdict(profile)
@@ -525,6 +539,8 @@ class MemoryStore:
             for project in self.projects.values():
                 project.repository_bindings = [binding for binding in project.repository_bindings if binding["profile_id"] != profile_id]
                 project.updated_at = now_utc()
+            if profile.webhook_secret_ref:
+                self.secret_store.delete(profile.webhook_secret_ref)
             self._audit(actor_id, "gitlab.profile.deleted", "gitlab_profile", profile_id, {"name": profile.name})
             return {"status": "deleted"}
 
@@ -570,8 +586,9 @@ class MemoryStore:
             profile.base_url,
         )
 
-    def list_gitlab_branches(self, actor_id: str, profile_id: str, repository_id: str) -> dict[str, Any]:
+    def list_gitlab_branches(self, actor_id: str, project_id: str, profile_id: str, repository_id: str) -> dict[str, Any]:
         with self._lock:
+            self._project_repository_binding(actor_id, project_id, profile_id, repository_id)
             profile = self._active_gitlab_profile(profile_id)
             credential = self._active_credential(profile.credential_ref_id)
             repository = self._gitlab_repository(profile_id, repository_id)
@@ -582,11 +599,13 @@ class MemoryStore:
     def create_gitlab_branch(self, actor_id: str, profile_id: str, repository_id: str, data: dict[str, Any]) -> dict[str, Any]:
         branch = str(data.get("branch", "")).strip()
         ref = str(data.get("ref", "")).strip()
+        project_id = str(data.get("project_id", "")).strip()
         with self._lock:
+            self._project_repository_binding(actor_id, project_id, profile_id, repository_id)
             profile = self._active_gitlab_profile(profile_id)
             credential = self._active_credential(profile.credential_ref_id)
             repository = self._gitlab_repository(profile_id, repository_id)
-            created = self.gitlab_client.create_branch(profile.base_url, self.secret_store.get(credential.secret_ref), repository_id, branch, ref)
+            created = public_gitlab_branch(self.gitlab_client.create_branch(profile.base_url, self.secret_store.get(credential.secret_ref), repository_id, branch, ref))
             operation = VCSOperation(provider="gitlab", profile_id=profile_id, repository_id=repository_id, operation_type="create_branch", branch=branch)
             operation.validate()
             operation.status = "completed"
@@ -602,7 +621,9 @@ class MemoryStore:
         source_branch = str(data.get("source_branch", "")).strip()
         target_branch = str(data.get("target_branch", "")).strip()
         title = str(data.get("title", "")).strip()
+        project_id = str(data.get("project_id", "")).strip()
         with self._lock:
+            self._project_repository_binding(actor_id, project_id, profile_id, repository_id)
             profile = self._active_gitlab_profile(profile_id)
             credential = self._active_credential(profile.credential_ref_id)
             repository = self._gitlab_repository(profile_id, repository_id)
@@ -642,8 +663,9 @@ class MemoryStore:
             self._audit(actor_id, "gitlab.merge_request.created", "vcs_operation", operation.id, {"profile_id": profile_id, "repository_id": repository_id, "iid": operation.external_id})
             return asdict(operation)
 
-    def get_gitlab_merge_request(self, actor_id: str, profile_id: str, repository_id: str, merge_request_iid: str) -> dict[str, Any]:
+    def get_gitlab_merge_request(self, actor_id: str, project_id: str, profile_id: str, repository_id: str, merge_request_iid: str) -> dict[str, Any]:
         with self._lock:
+            self._project_repository_binding(actor_id, project_id, profile_id, repository_id)
             profile = self._active_gitlab_profile(profile_id)
             credential = self._active_credential(profile.credential_ref_id)
             repository = self._gitlab_repository(profile_id, repository_id)
@@ -685,9 +707,8 @@ class MemoryStore:
         event.validate()
         with self._lock:
             profile = self._gitlab_profile(event.profile_id)
-            credential = self._credential(profile.credential_ref_id)
             authenticity_token = str(data.get("authenticity_token", ""))
-            if not authenticity_token or not self.secret_store.verify(credential.secret_ref, authenticity_token):
+            if not profile.webhook_secret_ref or not authenticity_token or not self.secret_store.verify(profile.webhook_secret_ref, authenticity_token):
                 raise InvalidInput("webhook authenticity token is invalid")
             if event.repository_id:
                 self._gitlab_repository(event.profile_id, event.repository_id)
@@ -933,6 +954,111 @@ class MemoryStore:
             self._audit(actor_id, "workflow.version.updated", "workflow_version", version.id, {"status": version.status})
             return asdict(version)
 
+    def create_workflow_run(self, actor_id: str, workflow_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            workflow = self._workflow(workflow_id)
+            version_id = str(data.get("workflow_version_id") or workflow.active_version_id)
+            if not version_id:
+                raise InvalidInput("workflow has no active version")
+            version = self._workflow_version(version_id)
+            if version.workflow_id != workflow.id:
+                raise Conflict("workflow version belongs to another workflow")
+            ordered_nodes = self._ordered_workflow_nodes(version)
+            if not ordered_nodes:
+                raise InvalidInput("workflow active version has no nodes")
+            run = WorkflowRun(workflow_id=workflow.id, workflow_version_id=version.id, trigger_type=str(data.get("trigger_type") or "manual"))
+            run.validate()
+            run.id = self._id("wfr")
+            stamp(run)
+            self.workflow_runs[run.id] = run
+            predecessors_by_node_id = self._workflow_predecessor_snapshot(version)
+            for sequence, node in enumerate(ordered_nodes, start=1):
+                step = WorkflowStepRun(
+                    workflow_run_id=run.id,
+                    workflow_id=workflow.id,
+                    workflow_version_id=version.id,
+                    node_id=str(node["id"]),
+                    node_type=str(node["type"]),
+                    step_type=self._workflow_step_type(str(node["type"])),
+                    sequence=sequence,
+                    name=str(node.get("name", "")),
+                    agent_id=str(node.get("agent_id", "")),
+                    skill_id=str(node.get("skill_id", "")),
+                    model_provider_id=str(node.get("model_provider_id", "")),
+                    predecessor_node_ids=predecessors_by_node_id[str(node["id"])],
+                    input=dict(node.get("config", {})) if isinstance(node.get("config", {}), dict) else {},
+                )
+                step.validate()
+                step.id = self._id("wfs")
+                stamp(step)
+                self.workflow_step_runs[step.id] = step
+            self._audit(actor_id, "workflow.run.created", "workflow_run", run.id, {"workflow_id": workflow.id, "workflow_version_id": version.id, "step_count": len(ordered_nodes)})
+            response = self._workflow_run_response(run)
+            if data.get("start") is True:
+                return self.start_workflow_run(actor_id, run.id)
+            return response
+
+    def list_workflow_runs(self, workflow_id: str = "") -> list[dict[str, Any]]:
+        with self._lock:
+            runs = self.workflow_runs.values()
+            if workflow_id:
+                self._workflow(workflow_id)
+                runs = [run for run in runs if run.workflow_id == workflow_id]
+            return [self._workflow_run_response(run) for run in runs]
+
+    def start_workflow_run(self, actor_id: str, run_id: str) -> dict[str, Any]:
+        with self._lock:
+            run = self._workflow_run(run_id)
+            if run.status != "created":
+                raise Conflict("workflow run cannot be started from current status")
+            stamp_time = now_utc()
+            run.status = "running"
+            run.started_at = stamp_time
+            run.updated_at = stamp_time
+            for step in self._steps_for_run(run.id):
+                if step.step_type == "trigger":
+                    step.status = "completed"
+                    step.started_at = stamp_time
+                    step.completed_at = stamp_time
+                    step.updated_at = stamp_time
+            self._audit(actor_id, "workflow.run.started", "workflow_run", run.id, {"workflow_id": run.workflow_id, "workflow_version_id": run.workflow_version_id})
+            self._refresh_workflow_run_status(run)
+            return self._workflow_run_response(run)
+
+    def update_workflow_step_run(self, actor_id: str, run_id: str, step_run_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            run = self._workflow_run(run_id)
+            step = self._workflow_step_run(step_run_id)
+            if step.workflow_run_id != run.id:
+                raise NotFound("workflow step run not found")
+            if step.step_type == "trigger":
+                raise InvalidInput("trigger step runs are managed by workflow start")
+            if run.status != "running":
+                raise Conflict("workflow run is not active")
+            next_status = str(data.get("status", "")).strip()
+            if not next_status:
+                raise InvalidInput("workflow step updates require status")
+            self._validate_step_transition(step, next_status)
+            self._validate_step_predecessors(run, step)
+            stamp_time = now_utc()
+            if next_status == "running" and not step.started_at:
+                step.started_at = stamp_time
+            if next_status in {"completed", "failed", "skipped"}:
+                step.completed_at = stamp_time
+                if not step.started_at:
+                    step.started_at = stamp_time
+            step.status = next_status
+            if "output" in data:
+                if not isinstance(data["output"], dict):
+                    raise InvalidInput("workflow step output must be an object")
+                step.output = data["output"]
+            if "error" in data:
+                step.error = str(data["error"])
+            step.updated_at = stamp_time
+            self._audit(actor_id, "workflow.step.updated", "workflow_step_run", step.id, {"workflow_run_id": run.id, "step_type": step.step_type, "status": step.status})
+            self._refresh_workflow_run_status(run)
+            return self._workflow_run_response(run)
+
     def create_test_case(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
         test_case = TestCase(**pick(data, TestCase))
         test_case.validate()
@@ -1094,6 +1220,19 @@ class MemoryStore:
             raise NotFound("repository not found for profile")
         return repositories[repository_id]
 
+    def _project_repository_binding(self, actor_id: str, project_id: str, profile_id: str, repository_id: str) -> Project:
+        if not actor_id or actor_id == "system":
+            raise PermissionDenied("authenticated actor is required")
+        if not project_id:
+            raise InvalidInput("gitlab repository operations require project_id")
+        project = self._project(project_id)
+        if actor_id not in unique([project.owner_id, *project.member_ids]):
+            raise PermissionDenied("actor is not a project member")
+        for binding in project.repository_bindings:
+            if binding.get("provider") == "gitlab" and binding.get("profile_id") == profile_id and binding.get("repository_id") == repository_id:
+                return project
+        raise Conflict("repository is not bound to project")
+
     def _agent(self, agent_id: str) -> Agent:
         if agent_id not in self.agents:
             raise NotFound("agent not found")
@@ -1118,6 +1257,16 @@ class MemoryStore:
         if version_id not in self.workflow_versions:
             raise NotFound("workflow version not found")
         return self.workflow_versions[version_id]
+
+    def _workflow_run(self, run_id: str) -> WorkflowRun:
+        if run_id not in self.workflow_runs:
+            raise NotFound("workflow run not found")
+        return self.workflow_runs[run_id]
+
+    def _workflow_step_run(self, step_run_id: str) -> WorkflowStepRun:
+        if step_run_id not in self.workflow_step_runs:
+            raise NotFound("workflow step run not found")
+        return self.workflow_step_runs[step_run_id]
 
     def _test_case(self, case_id: str) -> TestCase:
         if case_id not in self.test_cases:
@@ -1166,6 +1315,101 @@ class MemoryStore:
                     raise Conflict("workflow node skill is not allowed by agent")
                 if model_provider_id and model_provider_id != agent.model_provider_id:
                     raise Conflict("workflow node model provider is not allowed by agent")
+
+    def _workflow_run_response(self, run: WorkflowRun) -> dict[str, Any]:
+        response = asdict(run)
+        response["steps"] = [asdict(step) for step in self._steps_for_run(run.id)]
+        return response
+
+    def _steps_for_run(self, run_id: str) -> list[WorkflowStepRun]:
+        return sorted((step for step in self.workflow_step_runs.values() if step.workflow_run_id == run_id), key=lambda step: step.sequence)
+
+    def _ordered_workflow_nodes(self, version: WorkflowVersion) -> list[dict[str, Any]]:
+        nodes = [dict(node) for node in version.nodes]
+        node_by_id = {str(node["id"]): node for node in nodes}
+        edges = self._workflow_edge_pairs(version)
+        incoming: dict[str, int] = {node_id: 0 for node_id in node_by_id}
+        outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_by_id}
+        for from_node_id, to_node_id in edges:
+            outgoing[from_node_id].append(to_node_id)
+            incoming[to_node_id] += 1
+        queue = [str(node["id"]) for node in nodes if incoming[str(node["id"])] == 0]
+        ordered_ids: list[str] = []
+        while queue:
+            node_id = queue.pop(0)
+            ordered_ids.append(node_id)
+            for child_id in outgoing[node_id]:
+                incoming[child_id] -= 1
+                if incoming[child_id] == 0:
+                    queue.append(child_id)
+        if len(ordered_ids) != len(nodes):
+            raise InvalidInput("workflow version edges must not contain cycles")
+        return [node_by_id[node_id] for node_id in ordered_ids]
+
+    def _workflow_edge_pairs(self, version: WorkflowVersion) -> list[tuple[str, str]]:
+        return [(str(edge["from_node_id"]), str(edge["to_node_id"])) for edge in version.edges]
+
+    def _workflow_predecessor_snapshot(self, version: WorkflowVersion) -> dict[str, list[str]]:
+        predecessors = {str(node["id"]): [] for node in version.nodes}
+        for from_node_id, to_node_id in self._workflow_edge_pairs(version):
+            predecessors[to_node_id].append(from_node_id)
+        return predecessors
+
+    def _workflow_step_type(self, node_type: str) -> str:
+        if node_type == "trigger":
+            return "trigger"
+        if node_type == "agent_task":
+            return "agent"
+        if node_type in {"approval", "manual", "manual_task"}:
+            return "manual"
+        return "result"
+
+    def _validate_step_transition(self, step: WorkflowStepRun, next_status: str) -> None:
+        if next_status not in {"running", "completed", "failed", "skipped"}:
+            raise InvalidInput("unsupported workflow step status")
+        if step.step_type == "manual" and next_status == "skipped":
+            raise InvalidInput("manual workflow step runs cannot be skipped")
+        allowed = {
+            "pending": {"running", "completed", "failed", "skipped"},
+            "running": {"completed", "failed", "skipped"},
+            "completed": set(),
+            "failed": set(),
+            "skipped": set(),
+        }
+        if next_status not in allowed[step.status]:
+            raise Conflict("workflow step cannot transition from current status")
+
+    def _validate_step_predecessors(self, run: WorkflowRun, step: WorkflowStepRun) -> None:
+        if not step.predecessor_node_ids:
+            return
+        steps_by_node_id = {candidate.node_id: candidate for candidate in self._steps_for_run(run.id)}
+        for predecessor_node_id in step.predecessor_node_ids:
+            predecessor = steps_by_node_id.get(predecessor_node_id)
+            if predecessor is None:
+                raise Conflict("workflow step predecessor is missing")
+            if predecessor.step_type == "manual":
+                if predecessor.status != "completed":
+                    raise Conflict("manual predecessor step must be completed before downstream transition")
+                continue
+            if predecessor.status not in {"completed", "skipped"}:
+                raise Conflict("predecessor step must be terminal before downstream transition")
+
+    def _refresh_workflow_run_status(self, run: WorkflowRun) -> None:
+        steps = self._steps_for_run(run.id)
+        executable_steps = [step for step in steps if step.step_type != "trigger"]
+        if any(step.status == "failed" for step in executable_steps):
+            run.status = "failed"
+            run.completed_at = run.completed_at or now_utc()
+            run.updated_at = run.completed_at
+            return
+        if executable_steps and all(step.status in {"completed", "skipped"} for step in executable_steps):
+            run.status = "completed"
+            run.completed_at = run.completed_at or now_utc()
+            run.updated_at = run.completed_at
+            return
+        if run.status != "created":
+            run.status = "running"
+            run.updated_at = now_utc()
 
     def _id(self, prefix: str) -> str:
         self._ids += 1
@@ -1267,3 +1511,11 @@ def normalize_repositories(repositories: list[dict[str, str]], base_url: str) ->
         name = str(repository.get("name", "") or path.rsplit("/", 1)[-1] or f"repository-{index}")
         normalized.append({"id": repo_id, "path": path, "name": name, "web_url": web_url})
     return normalized
+
+
+def public_gitlab_branch(branch: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": str(branch.get("name", "")),
+        "default": bool(branch.get("default", False)),
+        "protected": bool(branch.get("protected", False)),
+    }
