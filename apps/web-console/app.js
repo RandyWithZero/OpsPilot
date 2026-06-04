@@ -173,7 +173,7 @@ async function loadData(forceToast = false) {
     state.environments = environments;
     state.agents = agents;
     state.skills = skills;
-    state.credentials = credentials;
+    state.credentials = credentials.map((credential) => sanitizeCredential(credential));
     state.modelProviders = modelProviders;
     state.workflows = workflows;
     state.workflowVersions = workflowVersions;
@@ -187,7 +187,7 @@ async function loadData(forceToast = false) {
     state.environments = clone(seed.environments);
     state.agents = clone(seed.agents);
     state.skills = clone(seed.skills);
-    state.credentials = clone(seed.credentials);
+    state.credentials = clone(seed.credentials).map((credential) => sanitizeCredential(credential));
     state.modelProviders = clone(seed.modelProviders);
     state.workflows = clone(seed.workflows);
     state.workflowVersions = clone(seed.workflowVersions);
@@ -484,7 +484,7 @@ function filteredRows(type) {
   const map = { identity: state.users, projects: state.projects, assets: state.assets, environments: state.environments, agents: state.agents, skills: state.skills, credentials: state.credentials.filter((row) => row.provider === "model_provider"), modelProviders: state.modelProviders, workflows: state.workflows };
   const query = [state.query, state.filters.localQuery].filter(Boolean).join(" ").toLowerCase();
   return map[type].filter((row) => {
-    const text = JSON.stringify(row).toLowerCase();
+    const text = JSON.stringify(searchableRow(type, row)).toLowerCase();
     if (query && !query.split(/\s+/).every((token) => text.includes(token))) return false;
     if (type === "assets" && state.filters.category && state.filters.category !== "all" && row.category !== state.filters.category) return false;
     if ((type === "identity" || type === "projects" || type === "assets") && state.filters.status && state.filters.status !== "all" && row.status !== state.filters.status) return false;
@@ -497,6 +497,10 @@ function filteredRows(type) {
     }
     return true;
   }).slice(0, Number(state.filters.limit || 10));
+}
+
+function searchableRow(type, row) {
+  return type === "credentials" ? sanitizeCredential(row) : row;
 }
 
 function tableFor(type, rows) {
@@ -850,7 +854,7 @@ async function afterMutation(type, id = null) {
 function applyLocal(type, id, localChange) {
   const collection = collections[type];
   if (!id) {
-    state[collection].push(localChange());
+    state[collection].push(sanitizeLocalItem(type, localChange()));
     addAudit(`${collection}.created`, collection, state[collection].at(-1).id);
     return;
   }
@@ -858,7 +862,7 @@ function applyLocal(type, id, localChange) {
   if (index < 0) return;
   const updated = localChange(state[collection][index]);
   if (updated === null) state[collection].splice(index, 1);
-  else state[collection][index] = updated;
+  else state[collection][index] = sanitizeLocalItem(type, updated, state[collection][index]);
   addAudit(`${collection}.updated`, collection, id);
 }
 
@@ -876,15 +880,29 @@ function addLocal(type, payload) {
     item.asset_ids = [];
   }
   if (type === "credentials") {
-    item.secret_ref = `vault://local/${item.id}`;
-    item.secret_fingerprint = `fp_${String(Date.now()).slice(-6)}`;
-    delete item.secret;
+    return sanitizeCredential(item, {}, { local: true });
   }
   if (type === "workflows") {
     item.active_version_id = item.active_version_id || "";
     state.workflowVersions[item.id] = [];
   }
   return item;
+}
+
+function sanitizeLocalItem(type, item, previous = {}) {
+  return type === "credentials" ? sanitizeCredential(item, previous, { local: true }) : item;
+}
+
+function sanitizeCredential(item = {}, previous = {}, options = {}) {
+  const safe = { ...item };
+  const hadSecret = Object.prototype.hasOwnProperty.call(safe, "secret") && Boolean(safe.secret);
+  delete safe.secret;
+  safe.provider = safe.provider || previous.provider || "model_provider";
+  if (options.local) {
+    safe.secret_ref = safe.secret_ref || previous.secret_ref || `vault://local/${safe.id || "pending"}`;
+    safe.secret_fingerprint = hadSecret || !safe.secret_fingerprint ? `fp_${String(Date.now()).slice(-6)}` : safe.secret_fingerprint;
+  }
+  return safe;
 }
 
 function bindToolbar(type) {
