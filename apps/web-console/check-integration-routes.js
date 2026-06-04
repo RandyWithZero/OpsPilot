@@ -37,6 +37,7 @@ const context = vm.createContext({
   clearTimeout,
   Date,
   Intl,
+  URL,
   FormData,
 });
 
@@ -94,6 +95,22 @@ const result = vm.runInContext(`
   state.credentials = [];
   state.gitlabProfiles = [];
   state.gitlabRepositories = {};
+  let rejectedSensitiveUrl = false;
+  try {
+    await createGitLabProfile({ name: "危险 GitLab", base_url: "https://oauth2:glpat-url-token@gitlab.example.com?private_token=query-secret", gitlab_secret: "glpat-form-secret", repository_selection: [] });
+  } catch {
+    rejectedSensitiveUrl = true;
+  }
+  if (!rejectedSensitiveUrl) throw new Error("token-bearing GitLab base URL was not rejected");
+  let rejectedRepositoryUrl = false;
+  try {
+    repositorySelection("100,platform/opspilot,OpsPilot,https://gitlab.example.com/platform/opspilot?private_token=repo-secret");
+  } catch {
+    rejectedRepositoryUrl = true;
+  }
+  if (!rejectedRepositoryUrl) throw new Error("token-bearing repository URL was not rejected");
+  if (JSON.stringify(state).includes("glpat-url-token") || JSON.stringify(state).includes("repo-secret")) throw new Error("sensitive GitLab URL material retained after rejection");
+
   await createGitLabProfile({ name: "离线 GitLab", base_url: "https://gitlab.local", gitlab_secret: "glpat-offline-raw-secret", repository_selection: [] });
   const credentialDump = JSON.stringify(state.credentials);
   if (credentialDump.includes("glpat-offline-raw-secret")) throw new Error("raw GitLab token retained in offline credential state");
@@ -108,6 +125,21 @@ const result = vm.runInContext(`
   if (state.files[0].status !== "available") throw new Error("offline file did not become available");
   if (!state.fileGrants[fileId]?.upload || !state.fileGrants[fileId]?.download) throw new Error("offline file grants missing");
   if (latestUploadSession(fileId)?.status !== "completed") throw new Error("offline upload session not completed");
+
+  state.fileGrants[fileId] = {
+    upload: { file_id: fileId, method: "PUT", url: "https://storage.example/upload?signature=grant-secret", expires_in_seconds: 900 },
+    download: { file_id: fileId, method: "GET", url: "https://storage.example/download?token=download-secret", expires_in_seconds: 900 },
+  };
+  const grantHtml = fileGrantSummary(fileId);
+  if (grantHtml.includes("grant-secret") || grantHtml.includes("download-secret") || grantHtml.includes("storage.example")) throw new Error("file grant summary rendered bearer URL material");
+
+  state.vcsWebhooks = [{ id: "whk_raw", provider: "gitlab", profile_id: "glp_local", event_type: "Push Hook", repository_id: "100", payload: { token: "raw-webhook-token", nested: { private_key: "raw-private-key", safe: "value" } }, status: "received" }];
+  state.filters = {};
+  state.query = "raw-private-key";
+  if (filteredRows("vcsWebhooks").length) throw new Error("raw webhook private_key was searchable");
+  const webhookDetails = detailPairs("vcsWebhooks", state.vcsWebhooks[0]).map(([, value]) => value).join(" ");
+  const webhookRelationships = relationshipControls("vcsWebhooks", state.vcsWebhooks[0]);
+  if (webhookDetails.includes("raw-private-key") || webhookRelationships.includes("raw-private-key") || webhookDetails.includes("raw-webhook-token") || webhookRelationships.includes("raw-webhook-token")) throw new Error("raw webhook payload rendered in detail");
 })()
 `, context);
 

@@ -259,10 +259,10 @@ async function loadData(forceToast = false) {
     state.projects = projects;
     state.assets = assets;
     state.environments = environments;
-    state.gitlabProfiles = gitlabProfiles;
-    state.gitlabRepositories = gitlabRepositories;
+    state.gitlabProfiles = gitlabProfiles.map(sanitizeGitLabProfile);
+    state.gitlabRepositories = sanitizeGitLabRepositoryMap(gitlabRepositories);
     state.vcsOperations = vcsOperations;
-    state.vcsWebhooks = vcsWebhooks;
+    state.vcsWebhooks = vcsWebhooks.map(sanitizeWebhookEvent);
     state.files = files;
     state.fileGrants = {};
     state.uploadSessions = [];
@@ -285,10 +285,10 @@ async function loadData(forceToast = false) {
     state.projects = clone(seed.projects);
     state.assets = clone(seed.assets);
     state.environments = clone(seed.environments);
-    state.gitlabProfiles = clone(seed.gitlabProfiles);
-    state.gitlabRepositories = clone(seed.gitlabRepositories);
+    state.gitlabProfiles = clone(seed.gitlabProfiles).map(sanitizeGitLabProfile);
+    state.gitlabRepositories = sanitizeGitLabRepositoryMap(clone(seed.gitlabRepositories));
     state.vcsOperations = clone(seed.vcsOperations);
-    state.vcsWebhooks = clone(seed.vcsWebhooks);
+    state.vcsWebhooks = clone(seed.vcsWebhooks).map(sanitizeWebhookEvent);
     state.files = clone(seed.files);
     state.fileGrants = clone(seed.fileGrants);
     state.uploadSessions = clone(seed.uploadSessions);
@@ -702,6 +702,8 @@ function filteredRows(type) {
 }
 
 function searchableRow(type, row) {
+  if (type === "gitlabProfiles") return sanitizeGitLabProfile(row);
+  if (type === "vcsWebhooks") return sanitizeWebhookEvent(row);
   return type === "credentials" ? sanitizeCredential(row) : row;
 }
 
@@ -807,7 +809,7 @@ function detailPairs(type, row) {
   }
   if (type === "gitlabProfiles") return [["Base URL", escapeHtml(row.base_url)], ["Credential", credentialName(row.credential_ref_id)], ["仓库选择", String((state.gitlabRepositories[row.id] || row.repository_selection || []).length)], ...common];
   if (type === "vcsOperations") return [["Profile", gitlabProfileName(row.profile_id)], ["仓库", repositoryName(row.profile_id, row.repository_id)], ["操作", escapeHtml(translateOperation(row.operation_type))], ["分支", escapeHtml(row.branch || "-")], ["Source", escapeHtml(row.source_branch || "-")], ["Target", escapeHtml(row.target_branch || "-")], ["标题", escapeHtml(row.title || "-")], ["结果", escapeHtml(JSON.stringify(row.result || {}))], ...common];
-  if (type === "vcsWebhooks") return [["Profile", gitlabProfileName(row.profile_id)], ["仓库", repositoryName(row.profile_id, row.repository_id)], ["事件", escapeHtml(row.event_type)], ["Payload", escapeHtml(JSON.stringify(row.payload || {}))], ...common];
+  if (type === "vcsWebhooks") return [["Profile", gitlabProfileName(row.profile_id)], ["仓库", repositoryName(row.profile_id, row.repository_id)], ["事件", escapeHtml(row.event_type)], ["Payload", escapeHtml(JSON.stringify(sanitizeWebhookEvent(row).payload || {}))], ...common];
   if (type === "files") return [["文件名", escapeHtml(row.filename)], ["Content-Type", escapeHtml(row.content_type)], ["大小", formatBytes(row.size_bytes)], ["Checksum", escapeHtml(row.checksum || "未记录")], ["Owner", nameFor("users", row.owner_id)], ["授权/会话", fileGrantSummary(row.id)], ...common];
   if (type === "testCases") return [["项目", projectName(row.project_id)], ["类型", escapeHtml(row.case_type)], ["优先级", statusPill(row.priority)], ["步骤", String(row.steps?.length || 0)], ...common];
   if (type === "testSuites") return [["项目", projectName(row.project_id)], ["用例", linkedNameList(row.case_ids || [], "testCases")], ...common];
@@ -866,7 +868,7 @@ function relationshipControls(type, row) {
   if (type === "agents") return `<h4>关联 Skill</h4>${linkedNameList(row.skill_ids || [], "skills")}<h4>模型供应商</h4>${listItems([modelProviderName(row.model_provider_id)])}<h4>能力</h4>${listItems((row.capabilities || []).map(escapeHtml))}`;
   if (type === "gitlabProfiles") return `<h4>仓库选择</h4>${repositoryList(row.id)}<h4>引用项目</h4>${listItems(state.projects.filter((project) => (project.repository_bindings || []).some((binding) => binding.profile_id === row.id)).map((project) => escapeHtml(project.name)))}`;
   if (type === "vcsOperations") return `<h4>操作结果</h4>${listItems(Object.entries(row.result || {}).map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(value)}`))}<h4>Profile</h4>${listItems([gitlabProfileName(row.profile_id)])}`;
-  if (type === "vcsWebhooks") return `<h4>脱敏 Payload</h4>${listItems(Object.entries(row.payload || {}).map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(JSON.stringify(value))}`))}<h4>Profile</h4>${listItems([gitlabProfileName(row.profile_id)])}`;
+  if (type === "vcsWebhooks") return `<h4>脱敏 Payload</h4>${listItems(Object.entries(sanitizeWebhookEvent(row).payload || {}).map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(JSON.stringify(value))}`))}<h4>Profile</h4>${listItems([gitlabProfileName(row.profile_id)])}`;
   if (type === "files") return fileActionPanel(row);
   if (type === "testCases") return `<h4>步骤</h4>${listItems((row.steps || []).map((step) => escapeHtml(step.name || step.expected || JSON.stringify(step))))}<h4>所属套件</h4>${listItems(state.testSuites.filter((suite) => suite.case_ids?.includes(row.id)).map((suite) => escapeHtml(suite.name)))}`;
   if (type === "testSuites") return `<h4>用例清单</h4>${linkedNameList(row.case_ids || [], "testCases")}<h4>运行记录</h4>${listItems(state.testRuns.filter((run) => run.suite_id === row.id).map((run) => `运行 ${escapeHtml(run.id)} · ${statusPill(run.status)}`))}`;
@@ -989,8 +991,8 @@ function formFor(type, row, mode) {
 
 async function submitForm(event, type, id) {
   event.preventDefault();
-  const payload = payloadFromForm(new FormData(event.target), type);
   try {
+    const payload = payloadFromForm(new FormData(event.target), type);
     if (type === "gitlabProfiles" && !id) {
       await createGitLabProfile(payload);
       modal.close();
@@ -1046,6 +1048,7 @@ function payloadFromForm(form, type) {
     delete payload.endpoint;
   }
   if (type === "gitlabProfiles") {
+    payload.base_url = sanitizePublicUrl(payload.base_url, { allowPath: false });
     payload.repository_selection = repositorySelection(payload.repository_selection);
     if (!payload.credential_ref_id) delete payload.credential_ref_id;
     if (!payload.gitlab_secret) delete payload.gitlab_secret;
@@ -1287,7 +1290,7 @@ function addLocal(type, payload) {
     return sanitizeCredential(item, {}, { local: true });
   }
   if (type === "gitlabProfiles") {
-    item.repository_selection = item.repository_selection || [];
+    Object.assign(item, sanitizeGitLabProfile(item, { strict: true }));
     state.gitlabRepositories[item.id] = item.repository_selection.length ? item.repository_selection : [
       { id: "stub-ops-platform", path: "platform/opspilot", name: "OpsPilot", web_url: `${item.base_url.replace(/\/$/, "")}/platform/opspilot` },
       { id: "stub-infra", path: "platform/infra", name: "Infra", web_url: `${item.base_url.replace(/\/$/, "")}/platform/infra` },
@@ -1636,9 +1639,9 @@ function fileGrantSummary(fileId) {
   const grant = state.fileGrants[fileId] || {};
   const sessions = state.uploadSessions.filter((session) => session.file_id === fileId);
   return listItems([
-    grant.upload ? `上传授权 ${escapeHtml(grant.upload.method)} · ${escapeHtml(grant.upload.url)}` : "暂无上传授权",
-    grant.download ? `下载授权 ${escapeHtml(grant.download.method)} · ${escapeHtml(grant.download.url)}` : "暂无下载授权",
-    sessions.length ? `上传会话 ${escapeHtml(sessions.at(-1).id)} · ${statusPill(sessions.at(-1).status)}` : "暂无上传会话",
+    grant.upload ? `上传授权 ${escapeHtml(grant.upload.method)} · ${grant.upload.expires_in_seconds || 0} 秒有效` : "暂无上传授权",
+    grant.download ? `下载授权 ${escapeHtml(grant.download.method)} · ${grant.download.expires_in_seconds || 0} 秒有效` : "暂无下载授权",
+    sessions.length ? `上传会话 ${escapeHtml(sessions.at(-1).id)} · ${statusPill(sessions.at(-1).status)} · ${sessions.at(-1).expires_in_seconds || 0} 秒有效` : "暂无上传会话",
   ]);
 }
 
@@ -1676,7 +1679,7 @@ function repositoryLines(repositories) {
 function repositorySelection(value) {
   return String(value || "").split(/\n+/).map((line) => line.trim()).filter(Boolean).map((line) => {
     const [id, path, name, webUrl] = line.split(",").map((part) => part.trim());
-    return { id, path, name: name || path, web_url: webUrl || "" };
+    return { id, path, name: name || path, web_url: webUrl ? sanitizePublicUrl(webUrl, { allowPath: true }) : "" };
   }).filter((repo) => repo.id && repo.path);
 }
 
@@ -1718,6 +1721,61 @@ function jsonArray(value) {
   } catch {
     return [];
   }
+}
+
+function sanitizeGitLabProfile(profile = {}, options = {}) {
+  const safe = { ...profile };
+  try {
+    safe.base_url = sanitizePublicUrl(safe.base_url || "", { allowPath: false });
+  } catch (error) {
+    if (options.strict) throw error;
+    safe.base_url = "已拒绝的 URL";
+  }
+  safe.repository_selection = (safe.repository_selection || []).map((repository) => sanitizeGitLabRepository(repository, safe.base_url, options)).filter(Boolean);
+  return safe;
+}
+
+function sanitizeGitLabRepositoryMap(repositoryMap = {}) {
+  return Object.fromEntries(Object.entries(repositoryMap).map(([profileId, repositories]) => {
+    const profile = state.gitlabProfiles.find((item) => item.id === profileId);
+    return [profileId, (repositories || []).map((repository) => sanitizeGitLabRepository(repository, profile?.base_url || "")).filter(Boolean)];
+  }));
+}
+
+function sanitizeGitLabRepository(repository = {}, baseUrl = "", options = {}) {
+  const safe = { ...repository };
+  try {
+    if (safe.web_url) safe.web_url = sanitizePublicUrl(safe.web_url, { allowPath: true });
+    else if (baseUrl && safe.path && baseUrl !== "已拒绝的 URL") safe.web_url = `${baseUrl.replace(/\/$/, "")}/${String(safe.path).replace(/^\//, "")}`;
+  } catch (error) {
+    if (options.strict) throw error;
+    safe.web_url = "已拒绝的 URL";
+  }
+  return safe;
+}
+
+function sanitizeWebhookEvent(event = {}) {
+  const safe = { ...event };
+  safe.payload = redactClientPayload(safe.payload || {});
+  delete safe.authenticity_token;
+  return safe;
+}
+
+function sanitizePublicUrl(value, options = {}) {
+  let parsed;
+  try {
+    parsed = new URL(String(value || "").trim());
+  } catch {
+    throw new Error("invalid_url");
+  }
+  if (!["http:", "https:"].includes(parsed.protocol) || !parsed.host) throw new Error("invalid_url");
+  if (parsed.username || parsed.password || parsed.hash) throw new Error("sensitive_url_rejected");
+  for (const key of parsed.searchParams.keys()) {
+    const lowered = key.toLowerCase();
+    if (["access_token", "auth_token", "api_token", "private_token", "token", "key", "secret", "password"].includes(lowered) || ["token", "secret", "password", "key"].some((part) => lowered.includes(part))) throw new Error("sensitive_url_rejected");
+  }
+  const path = options.allowPath ? parsed.pathname.replace(/\/$/, "") : "";
+  return `${parsed.protocol}//${parsed.host}${path}`;
 }
 
 function redactClientPayload(value) {
