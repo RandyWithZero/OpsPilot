@@ -335,6 +335,8 @@ class FoundationSliceTest(unittest.TestCase):
         with self.assertRaises(Exception) as cross_workflow_error:
             self.store.update_workflow("usr_test_actor", second_workflow["id"], {"active_version_id": first_version["id"]})
         self.assertEqual(getattr(cross_workflow_error.exception, "code", ""), "conflict")
+        workflow_after_rejected_update = next(workflow for workflow in self.store.list_workflows() if workflow["id"] == second_workflow["id"])
+        self.assertEqual(workflow_after_rejected_update["active_version_id"], "")
 
         with self.assertRaises(Exception) as skill_policy_error:
             self.store.create_workflow_version(

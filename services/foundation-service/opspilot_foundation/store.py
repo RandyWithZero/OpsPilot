@@ -651,14 +651,17 @@ class MemoryStore:
                 raise NotFound("project not found")
             if "name" in data and any(existing.id != workflow_id and existing.name.lower() == str(data["name"]).lower() for existing in self.workflows.values()):
                 raise Conflict("workflow name already exists")
+            candidate = WorkflowDefinition(**asdict(workflow))
             for key in ("name", "description", "project_id", "status", "active_version_id"):
                 if key in data:
-                    setattr(workflow, key, data[key])
-            if workflow.active_version_id:
-                active_version = self._workflow_version(workflow.active_version_id)
-                if active_version.workflow_id != workflow.id:
+                    setattr(candidate, key, data[key])
+            if candidate.active_version_id:
+                active_version = self._workflow_version(candidate.active_version_id)
+                if active_version.workflow_id != candidate.id:
                     raise Conflict("active version belongs to another workflow")
-            workflow.validate()
+            candidate.validate()
+            for key in ("name", "description", "project_id", "status", "active_version_id"):
+                setattr(workflow, key, getattr(candidate, key))
             workflow.updated_at = now_utc()
             self._audit(actor_id, "workflow.updated", "workflow", workflow.id, {"status": workflow.status})
             return asdict(workflow)
