@@ -829,6 +829,29 @@ dialog::backdrop {
   gap: 24px;
 }
 
+.command-center .panel {
+  border-color: #2a3448;
+  background: #172033;
+  color: #e6edf7;
+}
+
+.command-center .panel h2 {
+  color: #fff;
+}
+
+.command-center .panel .muted {
+  color: #9fb0c7;
+}
+
+.command-center .link-list li {
+  border-bottom-color: #2f3a50;
+  color: #e6edf7;
+}
+
+.command-center .link-list li:last-child {
+  border-bottom: 0;
+}
+
 .heat-map {
   display: grid;
   grid-template-columns: repeat(3, minmax(110px, 1fr));
