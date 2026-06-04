@@ -641,22 +641,165 @@ paths:
   /v1/gitlab/profiles/{profileID}/repositories:
     get:
       summary: List selectable repositories for a GitLab profile
-      description: Local MVP adapter returns configured repository selection or deterministic stub repositories.
+      description: Returns sanitized repository discovery results with search, pagination, and last sync metadata.
       parameters:
         - name: profileID
           in: path
           required: true
           schema:
             type: string
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
       responses:
         "200":
-          description: Repositories
+          description: Repository discovery page
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/GitLabRepository"
+                $ref: "#/components/schemas/GitLabRepositoryPage"
+  /v1/gitlab/profiles/{profileID}/repositories/sync:
+    post:
+      summary: Sync accessible GitLab repositories for a profile
+      description: Uses the profile credential inside the VCS boundary. Raw tokens are never returned.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitLabRepositorySyncRequest"
+      responses:
+        "200":
+          description: Synced repository discovery page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitLabRepositoryPage"
+  /v1/gitlab/profiles/{profileID}/repositories/{repositoryID}/branches:
+    get:
+      summary: List GitLab repository branches
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Branches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitLabBranchList"
+    post:
+      summary: Create a GitLab repository branch
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitLabBranchCreate"
+      responses:
+        "201":
+          description: VCS operation record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VCSOperation"
+  /v1/gitlab/profiles/{profileID}/repositories/{repositoryID}/merge-requests:
+    post:
+      summary: Create a GitLab merge request
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitLabMergeRequestCreate"
+      responses:
+        "201":
+          description: VCS operation record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VCSOperation"
+  /v1/gitlab/profiles/{profileID}/repositories/{repositoryID}/merge-requests/{mergeRequestIID}:
+    get:
+      summary: Get GitLab merge request status
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: mergeRequestIID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Merge request status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitLabMergeRequestStatus"
   /v1/vcs/operations:
     get:
       summary: List local VCS operation records
@@ -1562,6 +1705,100 @@ components:
           type: string
         web_url:
           type: string
+    GitLabRepositoryPage:
+      type: object
+      required: [items, page, per_page, total, has_next, last_synced_at]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitLabRepository"
+        page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+        has_next:
+          type: boolean
+        last_synced_at:
+          type: string
+          description: Empty until the profile has synced repositories.
+    GitLabRepositorySyncRequest:
+      type: object
+      properties:
+        search:
+          type: string
+        page:
+          type: integer
+          default: 1
+        per_page:
+          type: integer
+          default: 20
+    GitLabBranch:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        default:
+          type: boolean
+        protected:
+          type: boolean
+        ref:
+          type: string
+    GitLabBranchList:
+      type: object
+      required: [repository, branches]
+      properties:
+        repository:
+          $ref: "#/components/schemas/GitLabRepository"
+        branches:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitLabBranch"
+    GitLabBranchCreate:
+      type: object
+      required: [branch, ref]
+      properties:
+        branch:
+          type: string
+        ref:
+          type: string
+    GitLabMergeRequestCreate:
+      type: object
+      required: [source_branch, target_branch, title]
+      properties:
+        source_branch:
+          type: string
+        target_branch:
+          type: string
+        title:
+          type: string
+    GitLabMergeRequest:
+      type: object
+      required: [iid, state, source_branch, target_branch, title]
+      properties:
+        iid:
+          type: string
+        state:
+          type: string
+        source_branch:
+          type: string
+        target_branch:
+          type: string
+        title:
+          type: string
+        web_url:
+          type: string
+    GitLabMergeRequestStatus:
+      type: object
+      required: [repository, merge_request]
+      properties:
+        repository:
+          $ref: "#/components/schemas/GitLabRepository"
+        merge_request:
+          $ref: "#/components/schemas/GitLabMergeRequest"
     GitLabProfileCreate:
       type: object
       required: [name, base_url, credential_ref_id]
@@ -1597,10 +1834,13 @@ components:
       allOf:
         - $ref: "#/components/schemas/GitLabProfileCreate"
         - type: object
-          required: [id, status, created_at, updated_at]
+          required: [id, status, repository_synced_at, created_at, updated_at]
           properties:
             id:
               type: string
+            repository_synced_at:
+              type: string
+              description: Empty until repository discovery has synced successfully.
             created_at:
               type: string
               format: date-time
@@ -1633,7 +1873,7 @@ components:
         repository_id:
           type: string
         operation_type:
-          enum: [create_branch, open_merge_request, merge_merge_request]
+          enum: [create_branch, open_merge_request, merge_merge_request, read_branches, read_merge_request]
         branch:
           type: string
         source_branch:

@@ -12,8 +12,8 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 - DEV/QA/QE environments with project, member, asset, and endpoint bindings
 - file metadata with local upload/download grant stubs
 - credential references with redacted secret handling
-- GitLab API profiles, repository listing stubs, and project-to-repository bindings
-- GitLab/VCS operation records and webhook-event ingestion through a local adapter boundary
+- GitLab API profiles, repository discovery sync/search/pagination, and project-to-repository bindings
+- GitLab/VCS branch and merge-request operations plus webhook-event ingestion through a VCS adapter boundary
 - file upload sessions, completion state, and local download grants
 - agent registry and skill catalog metadata
 - model provider configuration through safe credential references
@@ -54,4 +54,36 @@ Optional local infrastructure placeholders are in `infra/docker-compose/docker-c
 docker compose -f infra/docker-compose/docker-compose.yml up -d
 ```
 
-The current service uses in-memory persistence so the backend slice is immediately testable without third-party dependencies. MySQL migrations and concrete persistence adapters should be added behind the existing repository boundary.
+The current service uses in-memory persistence so the backend slice is immediately testable without third-party dependencies. By default, GitLab calls use the local adapter for deterministic development and tests. Set `OPSPILOT_GITLAB_LIVE=1` before `make run-foundation` to use the standard-library GitLab HTTP adapter; token material still stays behind credential references and is not returned in responses or audit events.
+
+GitLab MVP flow:
+
+```sh
+curl -X POST http://localhost:8080/v1/credentials \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"gitlab","name":"GitLab Ops","secret":"glpat-..."}'
+
+curl -X POST http://localhost:8080/v1/gitlab/profiles \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Primary GitLab","base_url":"https://gitlab.example.com","credential_ref_id":"cred_000001"}'
+
+curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/sync \
+  -H 'Content-Type: application/json' \
+  -d '{"search":"platform","page":1,"per_page":20}'
+
+curl 'http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories?search=platform&page=1&per_page=20'
+
+curl -X POST http://localhost:8080/v1/projects/prj_000010/repositories \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"gitlab","profile_id":"glp_000003","repository_id":"100"}'
+
+curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/100/branches \
+  -H 'Content-Type: application/json' \
+  -d '{"branch":"feature/opspilot","ref":"main"}'
+
+curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/100/merge-requests \
+  -H 'Content-Type: application/json' \
+  -d '{"source_branch":"feature/opspilot","target_branch":"main","title":"OpsPilot change"}'
+```
+
+MySQL migrations and concrete persistence adapters should be added behind the existing repository boundary.

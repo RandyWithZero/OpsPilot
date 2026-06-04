@@ -8,6 +8,49 @@ sys.path.insert(0, str(ROOT))
 
 from opspilot_foundation.store import MemoryStore  # noqa: E402
 from opspilot_foundation.server import FoundationHandler  # noqa: E402
+from opspilot_foundation.domain import InvalidInput  # noqa: E402
+
+
+class FakeGitLabClient:
+    def __init__(self) -> None:
+        self.projects = [
+            {"id": "100", "path": "platform/opspilot", "name": "OpsPilot", "web_url": "https://gitlab.example.com/platform/opspilot"},
+            {"id": "200", "path": "platform/infra", "name": "Infra", "web_url": "https://gitlab.example.com/platform/infra"},
+            {"id": "300", "path": "apps/console", "name": "Console", "web_url": "https://gitlab.example.com/apps/console"},
+        ]
+        self.branches = {"100": [{"name": "main", "default": True, "protected": False}]}
+        self.merge_requests = {}
+        self.fail_next_merge_request = False
+
+    def list_projects(self, base_url, token, search="", page=1, per_page=20):
+        return [project for project in self.projects if not search or search.lower() in project["path"].lower() or search.lower() in project["name"].lower()]
+
+    def list_branches(self, base_url, token, repository_id):
+        return [dict(branch) for branch in self.branches.get(repository_id, [])]
+
+    def create_branch(self, base_url, token, repository_id, branch, ref):
+        created = {"name": branch, "default": False, "protected": False, "ref": ref}
+        self.branches.setdefault(repository_id, []).append(created)
+        return dict(created)
+
+    def create_merge_request(self, base_url, token, repository_id, source_branch, target_branch, title):
+        if self.fail_next_merge_request:
+            self.fail_next_merge_request = False
+            raise InvalidInput("gitlab rejected merge request")
+        iid = str(len(self.merge_requests) + 1)
+        merge_request = {
+            "iid": iid,
+            "state": "opened",
+            "source_branch": source_branch,
+            "target_branch": target_branch,
+            "title": title,
+            "web_url": f"{base_url}/platform/opspilot/-/merge_requests/{iid}",
+        }
+        self.merge_requests[(repository_id, iid)] = merge_request
+        return dict(merge_request)
+
+    def get_merge_request(self, base_url, token, repository_id, merge_request_iid):
+        return dict(self.merge_requests[(repository_id, str(merge_request_iid))])
 
 
 class FoundationSliceTest(unittest.TestCase):
@@ -232,6 +275,85 @@ class FoundationSliceTest(unittest.TestCase):
 
         unlinked = self.store.unlink_project_repository("usr_test_actor", project["id"], profile["id"], "100")
         self.assertEqual(unlinked["repository_bindings"], [])
+
+    def test_gitlab_repository_sync_search_pagination_and_project_binding_audit(self) -> None:
+        gitlab = FakeGitLabClient()
+        self.store = MemoryStore(gitlab_client=gitlab)
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        credential = self.store.create_credential("usr_test_actor", {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"})
+        profile = self.store.create_gitlab_profile(
+            "usr_test_actor",
+            {"name": "Primary GitLab", "base_url": "https://gitlab.example.com", "credential_ref_id": credential["id"]},
+        )
+
+        synced = self.store.sync_gitlab_repositories("usr_test_actor", profile["id"])
+        self.assertEqual(synced["total"], 3)
+        self.assertTrue(synced["last_synced_at"])
+
+        filtered = self.store.discover_gitlab_repositories(profile["id"], search="platform", page=1, per_page=1)
+        self.assertEqual(filtered["total"], 2)
+        self.assertEqual(len(filtered["items"]), 1)
+        self.assertTrue(filtered["has_next"])
+
+        linked = self.store.link_project_repository("usr_test_actor", project["id"], {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100"})
+        self.assertEqual(linked["repository_bindings"][0]["path"], "platform/opspilot")
+        audit = json.dumps(self.store.list_audit_events())
+        self.assertIn("gitlab.repositories.synced", audit)
+        self.assertIn("project.repository.linked", audit)
+        self.assertNotIn("glpat-secret-value", audit)
+
+    def test_gitlab_branch_and_merge_request_operations_use_gitlab_client(self) -> None:
+        gitlab = FakeGitLabClient()
+        self.store = MemoryStore(gitlab_client=gitlab)
+        credential = self.store.create_credential("usr_test_actor", {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"})
+        profile = self.store.create_gitlab_profile(
+            "usr_test_actor",
+            {"name": "Primary GitLab", "base_url": "https://gitlab.example.com", "credential_ref_id": credential["id"]},
+        )
+        self.store.sync_gitlab_repositories("usr_test_actor", profile["id"])
+
+        branch_operation = self.store.create_gitlab_branch("usr_test_actor", profile["id"], "100", {"branch": "feature/gitlab-mvp", "ref": "main"})
+        branches = self.store.list_gitlab_branches("usr_test_actor", profile["id"], "100")
+        merge_operation = self.store.create_gitlab_merge_request(
+            "usr_test_actor",
+            profile["id"],
+            "100",
+            {"source_branch": "feature/gitlab-mvp", "target_branch": "main", "title": "GitLab MVP"},
+        )
+        status = self.store.get_gitlab_merge_request("usr_test_actor", profile["id"], "100", merge_operation["external_id"])
+
+        self.assertEqual(branch_operation["status"], "completed")
+        self.assertEqual(branches["branches"][1]["name"], "feature/gitlab-mvp")
+        self.assertEqual(merge_operation["status"], "completed")
+        self.assertEqual(merge_operation["result"]["merge_request"]["state"], "opened")
+        self.assertEqual(status["merge_request"]["iid"], merge_operation["external_id"])
+        self.assertNotIn("glpat-secret-value", json.dumps({"ops": self.store.list_vcs_operations(), "audit": self.store.list_audit_events()}))
+
+    def test_gitlab_merge_request_failure_records_failed_operation_without_secret_leakage(self) -> None:
+        gitlab = FakeGitLabClient()
+        gitlab.fail_next_merge_request = True
+        self.store = MemoryStore(gitlab_client=gitlab)
+        credential = self.store.create_credential("usr_test_actor", {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"})
+        profile = self.store.create_gitlab_profile(
+            "usr_test_actor",
+            {"name": "Primary GitLab", "base_url": "https://gitlab.example.com", "credential_ref_id": credential["id"]},
+        )
+        self.store.sync_gitlab_repositories("usr_test_actor", profile["id"])
+
+        with self.assertRaises(Exception) as raised:
+            self.store.create_gitlab_merge_request(
+                "usr_test_actor",
+                profile["id"],
+                "100",
+                {"source_branch": "feature/bad", "target_branch": "main", "title": "Bad MR"},
+            )
+
+        self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+        operations = self.store.list_vcs_operations()
+        self.assertEqual(operations[0]["status"], "failed")
+        self.assertEqual(operations[0]["operation_type"], "open_merge_request")
+        self.assertNotIn("glpat-secret-value", json.dumps({"ops": operations, "audit": self.store.list_audit_events()}))
 
     def test_gitlab_token_bearing_urls_are_rejected_before_audit_or_response(self) -> None:
         credential = self.store.create_credential(

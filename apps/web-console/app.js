@@ -2312,7 +2312,8 @@ function sanitizeGitLabProfile(profile = {}, options = {}) {
 function sanitizeGitLabRepositoryMap(repositoryMap = {}) {
   return Object.fromEntries(Object.entries(repositoryMap).map(([profileId, repositories]) => {
     const profile = state.gitlabProfiles.find((item) => item.id === profileId);
-    return [profileId, (repositories || []).map((repository) => sanitizeGitLabRepository(repository, profile?.base_url || "")).filter(Boolean)];
+    const items = Array.isArray(repositories) ? repositories : repositories?.items || [];
+    return [profileId, items.map((repository) => sanitizeGitLabRepository(repository, profile?.base_url || "")).filter(Boolean)];
   }));
 }
 

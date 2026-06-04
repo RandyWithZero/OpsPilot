@@ -38,12 +38,13 @@ from .domain import (
     redact_sensitive_payload,
     sanitize_public_url,
 )
+from .vcs import GitLabAPIClient, GitLabClient, LocalGitLabClient
 
 T = TypeVar("T")
 
 
 class MemoryStore:
-    def __init__(self) -> None:
+    def __init__(self, gitlab_client: GitLabClient | None = None) -> None:
         self._lock = RLock()
         self._ids = 0
         self.users: dict[str, User] = {}
@@ -67,6 +68,7 @@ class MemoryStore:
         self.reports: dict[str, Report] = {}
         self.quality_gates: dict[str, QualityGate] = {}
         self.secret_store = LocalSecretStore()
+        self.gitlab_client = gitlab_client or (GitLabAPIClient() if os.environ.get("OPSPILOT_GITLAB_LIVE") == "1" else LocalGitLabClient())
         self.audit_events: list[AuditEvent] = []
 
     def health(self) -> dict[str, str]:
@@ -526,6 +528,36 @@ class MemoryStore:
             self._audit(actor_id, "gitlab.profile.deleted", "gitlab_profile", profile_id, {"name": profile.name})
             return {"status": "deleted"}
 
+    def sync_gitlab_repositories(self, actor_id: str, profile_id: str, search: str = "", page: int = 1, per_page: int = 20) -> dict[str, Any]:
+        with self._lock:
+            profile = self._active_gitlab_profile(profile_id)
+            credential = self._active_credential(profile.credential_ref_id)
+            repositories = self.gitlab_client.list_projects(profile.base_url, self.secret_store.get(credential.secret_ref), search=search, page=page, per_page=per_page)
+            profile.repository_selection = normalize_repositories(repositories, profile.base_url)
+            profile.repository_synced_at = now_utc()
+            profile.updated_at = profile.repository_synced_at
+            self._audit(actor_id, "gitlab.repositories.synced", "gitlab_profile", profile.id, {"repository_count": len(profile.repository_selection)})
+            return self.discover_gitlab_repositories(profile_id, search=search, page=page, per_page=per_page)
+
+    def discover_gitlab_repositories(self, profile_id: str, search: str = "", page: int = 1, per_page: int = 20) -> dict[str, Any]:
+        repositories = self.list_gitlab_repositories(profile_id)
+        needle = search.lower().strip()
+        if needle:
+            repositories = [repo for repo in repositories if needle in repo["path"].lower() or needle in repo["name"].lower()]
+        page = max(int(page), 1)
+        per_page = min(max(int(per_page), 1), 100)
+        start = (page - 1) * per_page
+        items = repositories[start : start + per_page]
+        profile = self._gitlab_profile(profile_id)
+        return {
+            "items": items,
+            "page": page,
+            "per_page": per_page,
+            "total": len(repositories),
+            "has_next": start + per_page < len(repositories),
+            "last_synced_at": profile.repository_synced_at,
+        }
+
     def list_gitlab_repositories(self, profile_id: str) -> list[dict[str, str]]:
         profile = self._gitlab_profile(profile_id)
         if profile.repository_selection:
@@ -537,6 +569,87 @@ class MemoryStore:
             ],
             profile.base_url,
         )
+
+    def list_gitlab_branches(self, actor_id: str, profile_id: str, repository_id: str) -> dict[str, Any]:
+        with self._lock:
+            profile = self._active_gitlab_profile(profile_id)
+            credential = self._active_credential(profile.credential_ref_id)
+            repository = self._gitlab_repository(profile_id, repository_id)
+            branches = self.gitlab_client.list_branches(profile.base_url, self.secret_store.get(credential.secret_ref), repository_id)
+            self._audit(actor_id, "gitlab.branches.read", "gitlab_repository", repository_id, {"profile_id": profile_id})
+            return {"repository": repository, "branches": branches}
+
+    def create_gitlab_branch(self, actor_id: str, profile_id: str, repository_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        branch = str(data.get("branch", "")).strip()
+        ref = str(data.get("ref", "")).strip()
+        with self._lock:
+            profile = self._active_gitlab_profile(profile_id)
+            credential = self._active_credential(profile.credential_ref_id)
+            repository = self._gitlab_repository(profile_id, repository_id)
+            created = self.gitlab_client.create_branch(profile.base_url, self.secret_store.get(credential.secret_ref), repository_id, branch, ref)
+            operation = VCSOperation(provider="gitlab", profile_id=profile_id, repository_id=repository_id, operation_type="create_branch", branch=branch)
+            operation.validate()
+            operation.status = "completed"
+            operation.external_id = f"branch:{created.get('name', branch)}"
+            operation.result = {"repository_id": repository["id"], "repository_path": repository["path"], "branch": created}
+            operation.id = self._id("vcs")
+            stamp(operation)
+            self.vcs_operations[operation.id] = operation
+            self._audit(actor_id, "gitlab.branch.created", "vcs_operation", operation.id, {"profile_id": profile_id, "repository_id": repository_id, "branch": branch})
+            return asdict(operation)
+
+    def create_gitlab_merge_request(self, actor_id: str, profile_id: str, repository_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        source_branch = str(data.get("source_branch", "")).strip()
+        target_branch = str(data.get("target_branch", "")).strip()
+        title = str(data.get("title", "")).strip()
+        with self._lock:
+            profile = self._active_gitlab_profile(profile_id)
+            credential = self._active_credential(profile.credential_ref_id)
+            repository = self._gitlab_repository(profile_id, repository_id)
+            operation = VCSOperation(
+                provider="gitlab",
+                profile_id=profile_id,
+                repository_id=repository_id,
+                operation_type="open_merge_request",
+                source_branch=source_branch,
+                target_branch=target_branch,
+                title=title,
+            )
+            operation.validate()
+            try:
+                merge_request = self.gitlab_client.create_merge_request(
+                    profile.base_url,
+                    self.secret_store.get(credential.secret_ref),
+                    repository_id,
+                    source_branch,
+                    target_branch,
+                    title,
+                )
+            except Exception as exc:
+                operation.status = "failed"
+                operation.result = {"error": getattr(exc, "code", "gitlab_error")}
+                operation.id = self._id("vcs")
+                stamp(operation)
+                self.vcs_operations[operation.id] = operation
+                self._audit(actor_id, "gitlab.merge_request.failed", "vcs_operation", operation.id, {"profile_id": profile_id, "repository_id": repository_id})
+                raise
+            operation.status = "completed"
+            operation.external_id = str(merge_request.get("iid", ""))
+            operation.result = {"repository_id": repository["id"], "repository_path": repository["path"], "merge_request": merge_request}
+            operation.id = self._id("vcs")
+            stamp(operation)
+            self.vcs_operations[operation.id] = operation
+            self._audit(actor_id, "gitlab.merge_request.created", "vcs_operation", operation.id, {"profile_id": profile_id, "repository_id": repository_id, "iid": operation.external_id})
+            return asdict(operation)
+
+    def get_gitlab_merge_request(self, actor_id: str, profile_id: str, repository_id: str, merge_request_iid: str) -> dict[str, Any]:
+        with self._lock:
+            profile = self._active_gitlab_profile(profile_id)
+            credential = self._active_credential(profile.credential_ref_id)
+            repository = self._gitlab_repository(profile_id, repository_id)
+            merge_request = self.gitlab_client.get_merge_request(profile.base_url, self.secret_store.get(credential.secret_ref), repository_id, merge_request_iid)
+            self._audit(actor_id, "gitlab.merge_request.read", "gitlab_repository", repository_id, {"profile_id": profile_id, "iid": str(merge_request_iid)})
+            return {"repository": repository, "merge_request": merge_request}
 
     def create_vcs_operation(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
         operation = VCSOperation(**pick(data, VCSOperation))
@@ -963,6 +1076,18 @@ class MemoryStore:
             raise NotFound("gitlab profile not found")
         return self.gitlab_profiles[profile_id]
 
+    def _active_credential(self, credential_id: str) -> CredentialReference:
+        credential = self._credential(credential_id)
+        if credential.status != "active":
+            raise Conflict("credential is inactive")
+        return credential
+
+    def _active_gitlab_profile(self, profile_id: str) -> GitLabProfile:
+        profile = self._gitlab_profile(profile_id)
+        if profile.status != "active":
+            raise Conflict("gitlab profile is inactive")
+        return profile
+
     def _gitlab_repository(self, profile_id: str, repository_id: str) -> dict[str, str]:
         repositories = {repository["id"]: repository for repository in self.list_gitlab_repositories(profile_id)}
         if repository_id not in repositories:
@@ -1114,6 +1239,11 @@ class LocalSecretStore:
 
     def delete(self, secret_ref: str) -> None:
         self._vault.pop(secret_ref, None)
+
+    def get(self, secret_ref: str) -> str:
+        if secret_ref not in self._vault:
+            raise NotFound("secret reference not found")
+        return self._vault[secret_ref]
 
     def verify(self, secret_ref: str, candidate: str) -> bool:
         if secret_ref not in self._vault:

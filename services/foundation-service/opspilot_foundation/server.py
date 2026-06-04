@@ -5,7 +5,7 @@ import os
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .domain import DomainError
 from .store import MemoryStore
@@ -42,10 +42,25 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/quality-gates": self.store.list_quality_gates,
             "/v1/audit-events": self.store.list_audit_events,
         }
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
         parts = [part for part in path.split("/") if part]
         if len(parts) == 5 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories":
-            self._call(lambda: self.store.list_gitlab_repositories(parts[3]))
+            self._call(
+                lambda: self.store.discover_gitlab_repositories(
+                    parts[3],
+                    search=first(query, "search"),
+                    page=int(first(query, "page", "1")),
+                    per_page=int(first(query, "per_page", "20")),
+                )
+            )
+            return
+        if len(parts) == 7 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories" and parts[6] == "branches":
+            self._call(lambda: self.store.list_gitlab_branches(self.headers.get("X-Actor-ID", ""), parts[3], parts[5]))
+            return
+        if len(parts) == 8 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories" and parts[6] == "merge-requests":
+            self._call(lambda: self.store.get_gitlab_merge_request(self.headers.get("X-Actor-ID", ""), parts[3], parts[5], parts[7]))
             return
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
             self._call(lambda: self.store.list_workflow_versions(parts[2]))
@@ -143,6 +158,15 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
             self._call(lambda: self.store.create_workflow_version(actor_id, parts[2], body), HTTPStatus.CREATED)
+            return
+        if len(parts) == 6 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories" and parts[5] == "sync":
+            self._call(lambda: self.store.sync_gitlab_repositories(actor_id, parts[3], search=str(body.get("search", "")), page=int(body.get("page", 1)), per_page=int(body.get("per_page", 20))))
+            return
+        if len(parts) == 7 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories" and parts[6] == "branches":
+            self._call(lambda: self.store.create_gitlab_branch(actor_id, parts[3], parts[5], body), HTTPStatus.CREATED)
+            return
+        if len(parts) == 7 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories" and parts[6] == "merge-requests":
+            self._call(lambda: self.store.create_gitlab_merge_request(actor_id, parts[3], parts[5], body), HTTPStatus.CREATED)
             return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
@@ -285,6 +309,11 @@ class FoundationHandler(BaseHTTPRequestHandler):
 
 class BadJSON(Exception):
     pass
+
+
+def first(query: dict[str, list[str]], key: str, default: str = "") -> str:
+    values = query.get(key)
+    return values[0] if values else default
 
 
 def run() -> None:
