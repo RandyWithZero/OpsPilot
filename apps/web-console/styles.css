@@ -715,6 +715,124 @@ tr:hover td {
   margin-bottom: 12px;
 }
 
+.ops-grid,
+.run-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 24px;
+  min-width: 0;
+}
+
+.stack-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.file-toolbar {
+  grid-template-columns: minmax(180px, 1fr) repeat(4, minmax(130px, 180px)) auto;
+}
+
+.repository-matrix {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.repository-matrix section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  padding: 12px;
+}
+
+.repository-matrix section > div,
+.step-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.repository-matrix ul,
+.mini-timeline,
+.run-step-list {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.repository-matrix li {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.repository-matrix span,
+.repository-matrix small,
+.mini-timeline strong,
+.mini-timeline small,
+.run-step-list strong,
+.run-step-list small,
+.run-step-list p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mini-timeline li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+}
+
+.mini-timeline li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.run-step-list {
+  counter-reset: step;
+}
+
+.run-step-list li {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  padding: 12px;
+}
+
+.run-step-list li > span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--blue);
+  color: #fff;
+  font-weight: 800;
+}
+
+.run-step-list .manual-step {
+  border-color: rgba(201, 165, 92, 0.65);
+  background: #fffaf0;
+}
+
 .workflow-panel-actions {
   margin-bottom: 14px;
 }
@@ -1406,6 +1524,10 @@ dialog::backdrop {
     gap: 12px;
   }
 
+  .topbar {
+    position: static;
+  }
+
   .nav-list {
     display: flex;
     overflow-x: auto;
@@ -1417,6 +1539,7 @@ dialog::backdrop {
 
   .topbar,
   .toolbar,
+  .file-toolbar,
   .metric-grid,
   .setup-grid,
   .insight-grid,
@@ -1424,7 +1547,9 @@ dialog::backdrop {
   .builder-shell,
   .command-grid,
   .command-panels,
-  .task-layout {
+  .task-layout,
+  .ops-grid,
+  .run-layout {
     grid-template-columns: 1fr;
   }
 
@@ -1507,6 +1632,10 @@ dialog::backdrop {
   .command-header {
     display: grid;
     gap: 8px;
+  }
+
+  .page-head {
+    display: grid;
   }
 
   .command-header h1 {
