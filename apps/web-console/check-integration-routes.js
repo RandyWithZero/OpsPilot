@@ -1,6 +1,25 @@
 const fs = require("node:fs");
 const vm = require("node:vm");
 
+const styles = fs.readFileSync("apps/web-console/styles.css", "utf8");
+
+function assertStyle(selector, declarations) {
+  const rule = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([\\s\\S]*?)\\}`, "g");
+  const blocks = [...styles.matchAll(rule)].map((match) => match[1]).join("\n");
+  if (!blocks) throw new Error(`missing style selector: ${selector}`);
+  for (const declaration of declarations) {
+    if (!blocks.includes(declaration)) throw new Error(`missing ${declaration} on ${selector}`);
+  }
+}
+
+assertStyle(".detail-grid", ["min-width: 0"]);
+assertStyle(".detail-panel", ["overflow: hidden"]);
+assertStyle(".kv", ["min-width: 0"]);
+assertStyle(".kv dd", ["min-width: 0", "overflow-wrap: anywhere"]);
+assertStyle(".link-list", ["min-width: 0"]);
+assertStyle(".link-list li", ["min-width: 0", "overflow-wrap: anywhere"]);
+assertStyle(".json-block", ["max-width: 100%", "white-space: pre-wrap", "overflow-wrap: anywhere"]);
+
 function createNode() {
   return {
     innerHTML: "",
@@ -140,6 +159,12 @@ const result = vm.runInContext(`
   const webhookDetails = detailPairs("vcsWebhooks", state.vcsWebhooks[0]).map(([, value]) => value).join(" ");
   const webhookRelationships = relationshipControls("vcsWebhooks", state.vcsWebhooks[0]);
   if (webhookDetails.includes("raw-private-key") || webhookRelationships.includes("raw-private-key") || webhookDetails.includes("raw-webhook-token") || webhookRelationships.includes("raw-webhook-token")) throw new Error("raw webhook payload rendered in detail");
+
+  const longValue = "https://gitlab.example.com/platform/" + "nested/".repeat(40) + "repo?already=redacted";
+  state.vcsOperations = [{ id: "vcs_long", profile_id: "glp_long", repository_id: "repo_long", operation_type: "open_merge_request", branch: longValue, result: { web_url: longValue, response: { commit: "a".repeat(260) } }, status: "completed" }];
+  const vcsDetails = detailPairs("vcsOperations", state.vcsOperations[0]).map(([, value]) => value).join(" ");
+  const vcsRelationships = relationshipControls("vcsOperations", state.vcsOperations[0]);
+  if (!vcsDetails.includes("json-block") || !vcsRelationships.includes("json-block")) throw new Error("long VCS detail JSON is not rendered in contained blocks");
 })()
 `, context);
 

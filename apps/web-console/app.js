@@ -802,20 +802,20 @@ function detailPairs(type, row) {
   const common = [["ID", escapeHtml(row.id)], ["状态", statusPill(row.status || "active")], ["更新时间", date(row.updated_at)]];
   if (type === "identity") return [["邮箱", escapeHtml(row.email)], ["角色", roles(row.roles)], ...common];
   if (type === "projects") return [["项目编号", escapeHtml(row.key)], ["负责人", nameFor("users", row.owner_id)], ["说明", escapeHtml(row.description || "暂无说明")], ["成员", String(row.member_ids?.length || 0)], ...common];
-  if (type === "assets") return [["类别", escapeHtml(row.category)], ["负责人", nameFor("users", row.owner_id)], ["位置", escapeHtml(row.location || "未分配")], ["能力", tags(row.capabilities)], ["属性", escapeHtml(JSON.stringify(row.properties || {}))], ...common];
+  if (type === "assets") return [["类别", escapeHtml(row.category)], ["负责人", nameFor("users", row.owner_id)], ["位置", escapeHtml(row.location || "未分配")], ["能力", tags(row.capabilities)], ["属性", jsonBlock(row.properties || {})], ...common];
   if (type === "environments") {
     const ready = readiness(row);
     return [["类型", escapeHtml(row.type)], ["项目", projectName(row.project_id)], ["负责人", nameFor("users", row.owner_id)], ["就绪状态", `<span class="pill ${ready.level === "ok" ? "ok" : "warn"}">${ready.message}</span>`], ["端点", String(row.endpoints?.length || 0)], ...common];
   }
   if (type === "gitlabProfiles") return [["Base URL", escapeHtml(row.base_url)], ["Credential", credentialName(row.credential_ref_id)], ["仓库选择", String((state.gitlabRepositories[row.id] || row.repository_selection || []).length)], ...common];
-  if (type === "vcsOperations") return [["Profile", gitlabProfileName(row.profile_id)], ["仓库", repositoryName(row.profile_id, row.repository_id)], ["操作", escapeHtml(translateOperation(row.operation_type))], ["分支", escapeHtml(row.branch || "-")], ["Source", escapeHtml(row.source_branch || "-")], ["Target", escapeHtml(row.target_branch || "-")], ["标题", escapeHtml(row.title || "-")], ["结果", escapeHtml(JSON.stringify(row.result || {}))], ...common];
-  if (type === "vcsWebhooks") return [["Profile", gitlabProfileName(row.profile_id)], ["仓库", repositoryName(row.profile_id, row.repository_id)], ["事件", escapeHtml(row.event_type)], ["Payload", escapeHtml(JSON.stringify(sanitizeWebhookEvent(row).payload || {}))], ...common];
+  if (type === "vcsOperations") return [["Profile", gitlabProfileName(row.profile_id)], ["仓库", repositoryName(row.profile_id, row.repository_id)], ["操作", escapeHtml(translateOperation(row.operation_type))], ["分支", escapeHtml(row.branch || "-")], ["Source", escapeHtml(row.source_branch || "-")], ["Target", escapeHtml(row.target_branch || "-")], ["标题", escapeHtml(row.title || "-")], ["结果", jsonBlock(row.result || {})], ...common];
+  if (type === "vcsWebhooks") return [["Profile", gitlabProfileName(row.profile_id)], ["仓库", repositoryName(row.profile_id, row.repository_id)], ["事件", escapeHtml(row.event_type)], ["Payload", jsonBlock(sanitizeWebhookEvent(row).payload || {})], ...common];
   if (type === "files") return [["文件名", escapeHtml(row.filename)], ["Content-Type", escapeHtml(row.content_type)], ["大小", formatBytes(row.size_bytes)], ["Checksum", escapeHtml(row.checksum || "未记录")], ["Owner", nameFor("users", row.owner_id)], ["授权/会话", fileGrantSummary(row.id)], ...common];
   if (type === "testCases") return [["项目", projectName(row.project_id)], ["类型", escapeHtml(row.case_type)], ["优先级", statusPill(row.priority)], ["步骤", String(row.steps?.length || 0)], ...common];
   if (type === "testSuites") return [["项目", projectName(row.project_id)], ["用例", linkedNameList(row.case_ids || [], "testCases")], ...common];
-  if (type === "testRuns") return [["项目", projectName(row.project_id)], ["套件", testSuiteName(row.suite_id)], ["环境", environmentName(row.environment_id)], ["结果", escapeHtml(JSON.stringify(row.results || []))], ...common];
-  if (type === "reports") return [["项目", projectName(row.project_id)], ["类型", escapeHtml(row.report_type)], ["测试运行", testRunName(row.test_run_id)], ["文件", linkedNameList(row.file_ids || [], "files")], ["摘要", escapeHtml(JSON.stringify(row.summary || {}))], ...common];
-  if (type === "qualityGates") return [["项目", projectName(row.project_id)], ["最近报告", reportName(row.last_report_id)], ["条件", escapeHtml(JSON.stringify(row.conditions || []))], ...common];
+  if (type === "testRuns") return [["项目", projectName(row.project_id)], ["套件", testSuiteName(row.suite_id)], ["环境", environmentName(row.environment_id)], ["结果", jsonBlock(row.results || [])], ...common];
+  if (type === "reports") return [["项目", projectName(row.project_id)], ["类型", escapeHtml(row.report_type)], ["测试运行", testRunName(row.test_run_id)], ["文件", linkedNameList(row.file_ids || [], "files")], ["摘要", jsonBlock(row.summary || {})], ...common];
+  if (type === "qualityGates") return [["项目", projectName(row.project_id)], ["最近报告", reportName(row.last_report_id)], ["条件", jsonBlock(row.conditions || [])], ...common];
   if (type === "agents") return [["类型", escapeHtml(row.kind)], ["说明", escapeHtml(row.description || "暂无说明")], ["能力", tags(row.capabilities)], ["关联 Skill", linkedNameList(row.skill_ids || [], "skills")], ["模型供应商", modelProviderName(row.model_provider_id)], ...common];
   if (type === "skills") return [["版本", escapeHtml(row.version)], ["运行时", escapeHtml(row.runtime)], ["说明", escapeHtml(row.description || "暂无说明")], ["能力", tags(row.capabilities)], ["包文件", escapeHtml(row.package_file_id || "未绑定")], ...common];
   if (type === "credentials") return [["Provider", escapeHtml(row.provider)], ["Secret Ref", escapeHtml(row.secret_ref || "安全引用")], ["指纹", escapeHtml(row.secret_fingerprint || "未生成")], ...common];
@@ -867,14 +867,14 @@ function relationshipControls(type, row) {
   }
   if (type === "agents") return `<h4>关联 Skill</h4>${linkedNameList(row.skill_ids || [], "skills")}<h4>模型供应商</h4>${listItems([modelProviderName(row.model_provider_id)])}<h4>能力</h4>${listItems((row.capabilities || []).map(escapeHtml))}`;
   if (type === "gitlabProfiles") return `<h4>仓库选择</h4>${repositoryList(row.id)}<h4>引用项目</h4>${listItems(state.projects.filter((project) => (project.repository_bindings || []).some((binding) => binding.profile_id === row.id)).map((project) => escapeHtml(project.name)))}`;
-  if (type === "vcsOperations") return `<h4>操作结果</h4>${listItems(Object.entries(row.result || {}).map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(value)}`))}<h4>Profile</h4>${listItems([gitlabProfileName(row.profile_id)])}`;
-  if (type === "vcsWebhooks") return `<h4>脱敏 Payload</h4>${listItems(Object.entries(sanitizeWebhookEvent(row).payload || {}).map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(JSON.stringify(value))}`))}<h4>Profile</h4>${listItems([gitlabProfileName(row.profile_id)])}`;
+  if (type === "vcsOperations") return `<h4>操作结果</h4>${jsonBlock(row.result || {})}<h4>Profile</h4>${listItems([gitlabProfileName(row.profile_id)])}`;
+  if (type === "vcsWebhooks") return `<h4>脱敏 Payload</h4>${jsonBlock(sanitizeWebhookEvent(row).payload || {})}<h4>Profile</h4>${listItems([gitlabProfileName(row.profile_id)])}`;
   if (type === "files") return fileActionPanel(row);
   if (type === "testCases") return `<h4>步骤</h4>${listItems((row.steps || []).map((step) => escapeHtml(step.name || step.expected || JSON.stringify(step))))}<h4>所属套件</h4>${listItems(state.testSuites.filter((suite) => suite.case_ids?.includes(row.id)).map((suite) => escapeHtml(suite.name)))}`;
   if (type === "testSuites") return `<h4>用例清单</h4>${linkedNameList(row.case_ids || [], "testCases")}<h4>运行记录</h4>${listItems(state.testRuns.filter((run) => run.suite_id === row.id).map((run) => `运行 ${escapeHtml(run.id)} · ${statusPill(run.status)}`))}`;
   if (type === "testRuns") return `<h4>结果摘要</h4>${listItems((row.results || []).map((result) => `${testCaseName(result.case_id)} · ${statusPill(result.status || "pending")}`))}<h4>关联报告</h4>${listItems(state.reports.filter((report) => report.test_run_id === row.id).map((report) => escapeHtml(report.title)))}`;
   if (type === "reports") return `<h4>文件</h4>${linkedNameList(row.file_ids || [], "files")}<h4>质量门禁</h4>${listItems(state.qualityGates.filter((gate) => gate.last_report_id === row.id).map((gate) => `${escapeHtml(gate.name)} · ${statusPill(gate.status)}`))}`;
-  if (type === "qualityGates") return `<h4>条件</h4>${listItems((row.conditions || []).map((condition) => escapeHtml(JSON.stringify(condition))))}<h4>最近报告</h4>${listItems([reportName(row.last_report_id)])}`;
+  if (type === "qualityGates") return `<h4>条件</h4>${jsonBlock(row.conditions || [])}<h4>最近报告</h4>${listItems([reportName(row.last_report_id)])}`;
   if (type === "skills") return `<h4>能力标签</h4>${listItems((row.capabilities || []).map(escapeHtml))}<h4>引用智能体</h4>${listItems(state.agents.filter((agent) => agent.skill_ids?.includes(row.id)).map((agent) => escapeHtml(agent.name)))}`;
   if (type === "credentials") return `<h4>使用此 Key 的供应商</h4>${listItems(state.modelProviders.filter((provider) => provider.credential_ref_id === row.id).map((provider) => escapeHtml(provider.name)))}`;
   if (type === "modelProviders") return `<h4>可用模型</h4>${listItems((row.models || []).map(escapeHtml))}<h4>引用智能体</h4>${listItems(state.agents.filter((agent) => agent.model_provider_id === row.id).map((agent) => escapeHtml(agent.name)))}`;
@@ -1807,6 +1807,10 @@ function csv(value) {
 
 function listItems(items) {
   return items.length ? `<ul class="link-list">${items.map((item) => `<li>${item}</li>`).join("")}</ul>` : `<div class="empty-state compact">暂无相关记录。</div>`;
+}
+
+function jsonBlock(value) {
+  return `<pre class="json-block">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
 }
 
 function activeCount(items) {

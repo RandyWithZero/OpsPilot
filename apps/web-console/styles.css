@@ -410,6 +410,7 @@ small {
 .content {
   display: grid;
   gap: 24px;
+  min-width: 0;
   padding: 40px 32px;
 }
 
@@ -572,6 +573,7 @@ tr:hover td {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
   gap: 24px;
+  min-width: 0;
 }
 
 .detail-heading {
@@ -579,6 +581,12 @@ tr:hover td {
   justify-content: space-between;
   gap: 12px;
   align-items: start;
+  min-width: 0;
+}
+
+.detail-heading h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .kv {
@@ -586,6 +594,7 @@ tr:hover td {
   grid-template-columns: 130px minmax(0, 1fr);
   gap: 9px 12px;
   margin: 12px 0;
+  min-width: 0;
 }
 
 .kv dt {
@@ -593,7 +602,44 @@ tr:hover td {
 }
 
 .kv dd {
+  min-width: 0;
   margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.detail-panel,
+.detail-panel h3,
+.detail-panel h4,
+.detail-panel p,
+.detail-panel small,
+.detail-panel .muted,
+.detail-panel .pill {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.detail-panel {
+  overflow: hidden;
+}
+
+.json-block {
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 10px 12px;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .tab-strip,
@@ -623,6 +669,7 @@ tr:hover td {
 .link-list {
   display: grid;
   gap: 10px;
+  min-width: 0;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -634,12 +681,24 @@ tr:hover td {
   justify-content: space-between;
   gap: 10px;
   align-items: center;
+  min-width: 0;
   border-bottom: 1px solid var(--line);
   padding: 12px 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .activity-list li {
   display: block;
+}
+
+.link-list li > span,
+.link-list li > a,
+.link-list li > button,
+.link-list li > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .inline-form {
