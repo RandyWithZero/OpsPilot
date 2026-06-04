@@ -5,8 +5,7 @@ import os
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
-from urllib.parse import urlparse
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from .auth import ROLE_ADMIN, ActorContext, PermissionDenied, actor_from_headers, permission_for_request, require_permission
 from .domain import DomainError
@@ -51,16 +50,31 @@ class FoundationHandler(BaseHTTPRequestHandler):
         actor = actor_from_headers(self.headers)
         if not self._authorize(actor, "GET", path):
             return
-        query = self._query_filters(parsed.query)
+        query = parse_qs(parsed.query)
+        actor_id = actor.actor_id
+        file_query = self._query_filters(parsed.query)
         parts = [part for part in path.split("/") if part]
         if path == "/v1/files":
-            self._call(lambda: self.store.list_file_objects(self._file_access_filters(actor, query)))
+            self._call(lambda: self.store.list_file_objects(self._file_access_filters(actor, file_query)))
             return
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "download":
-            self._call(lambda: self.store.download_file_object(actor.actor_id, parts[2], self._file_access_filters(actor, query)))
+            self._call(lambda: self.store.download_file_object(actor_id, parts[2], self._file_access_filters(actor, file_query)))
             return
         if len(parts) == 5 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories":
-            self._call(lambda: self.store.list_gitlab_repositories(parts[3]))
+            self._call(
+                lambda: self.store.discover_gitlab_repositories(
+                    parts[3],
+                    search=first(query, "search"),
+                    page=int(first(query, "page", "1")),
+                    per_page=int(first(query, "per_page", "20")),
+                )
+            )
+            return
+        if len(parts) == 7 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories" and parts[6] == "branches":
+            self._call(lambda: self.store.list_gitlab_branches(actor_id, first(query, "project_id"), parts[3], parts[5]))
+            return
+        if len(parts) == 8 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories" and parts[6] == "merge-requests":
+            self._call(lambda: self.store.get_gitlab_merge_request(actor_id, first(query, "project_id"), parts[3], parts[5], parts[7]))
             return
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
             self._call(lambda: self.store.list_workflow_versions(parts[2]))
@@ -113,6 +127,8 @@ class FoundationHandler(BaseHTTPRequestHandler):
             self._call(lambda: self.store.create_vcs_operation(actor_id, body), HTTPStatus.CREATED)
             return
         if path == "/v1/vcs/webhook-events":
+            if self.headers.get("X-Gitlab-Token"):
+                body["authenticity_token"] = self.headers.get("X-Gitlab-Token", "")
             self._call(lambda: self.store.ingest_vcs_webhook_event(actor_id, body), HTTPStatus.CREATED)
             return
         if path == "/v1/agents":
@@ -167,6 +183,15 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
             self._call(lambda: self.store.create_workflow_version(actor_id, parts[2], body), HTTPStatus.CREATED)
+            return
+        if len(parts) == 6 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories" and parts[5] == "sync":
+            self._call(lambda: self.store.sync_gitlab_repositories(actor_id, parts[3], search=str(body.get("search", "")), page=int(body.get("page", 1)), per_page=int(body.get("per_page", 20))))
+            return
+        if len(parts) == 7 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories" and parts[6] == "branches":
+            self._call(lambda: self.store.create_gitlab_branch(actor_id, parts[3], parts[5], body), HTTPStatus.CREATED)
+            return
+        if len(parts) == 7 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories" and parts[6] == "merge-requests":
+            self._call(lambda: self.store.create_gitlab_merge_request(actor_id, parts[3], parts[5], body), HTTPStatus.CREATED)
             return
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "runs":
             self._call(lambda: self.store.create_workflow_run(actor_id, parts[2], body), HTTPStatus.CREATED)
@@ -333,7 +358,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
     def _cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID,X-Actor-Role")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID,X-Actor-Role,X-Gitlab-Token")
 
     def _query_filters(self, query: str) -> dict[str, str]:
         filters: dict[str, str] = {}
@@ -363,6 +388,11 @@ class FoundationHandler(BaseHTTPRequestHandler):
 
 class BadJSON(Exception):
     pass
+
+
+def first(query: dict[str, list[str]], key: str, default: str = "") -> str:
+    values = query.get(key)
+    return values[0] if values else default
 
 
 def run() -> None:

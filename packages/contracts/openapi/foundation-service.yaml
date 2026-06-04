@@ -783,22 +783,182 @@ paths:
   /v1/gitlab/profiles/{profileID}/repositories:
     get:
       summary: List selectable repositories for a GitLab profile
-      description: Local MVP adapter returns configured repository selection or deterministic stub repositories.
+      description: Returns sanitized repository discovery results with search, pagination, and last sync metadata.
       parameters:
         - name: profileID
           in: path
           required: true
           schema:
             type: string
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
       responses:
         "200":
-          description: Repositories
+          description: Repository discovery page
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/GitLabRepository"
+                $ref: "#/components/schemas/GitLabRepositoryPage"
+  /v1/gitlab/profiles/{profileID}/repositories/sync:
+    post:
+      summary: Sync accessible GitLab repositories for a profile
+      description: Uses the profile credential inside the VCS boundary. Raw tokens are never returned.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitLabRepositorySyncRequest"
+      responses:
+        "200":
+          description: Synced repository discovery page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitLabRepositoryPage"
+  /v1/gitlab/profiles/{profileID}/repositories/{repositoryID}/branches:
+    get:
+      summary: List GitLab repository branches
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: OpsPilot project that has this repository bound. Actor must own or belong to the project before the stored GitLab credential is used.
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Branches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitLabBranchList"
+    post:
+      summary: Create a GitLab repository branch
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitLabBranchCreate"
+      responses:
+        "201":
+          description: VCS operation record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VCSOperation"
+  /v1/gitlab/profiles/{profileID}/repositories/{repositoryID}/merge-requests:
+    post:
+      summary: Create a GitLab merge request
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitLabMergeRequestCreate"
+      responses:
+        "201":
+          description: VCS operation record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VCSOperation"
+  /v1/gitlab/profiles/{profileID}/repositories/{repositoryID}/merge-requests/{mergeRequestIID}:
+    get:
+      summary: Get GitLab merge request status
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: mergeRequestIID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: OpsPilot project that has this repository bound. Actor must own or belong to the project before the stored GitLab credential is used.
+      responses:
+        "200":
+          description: Merge request status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitLabMergeRequestStatus"
   /v1/vcs/operations:
     get:
       summary: List local VCS operation records
@@ -846,6 +1006,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
+        - $ref: "#/components/parameters/GitLabWebhookToken"
       requestBody:
         required: true
         content:
@@ -1426,6 +1587,7 @@ paths:
                   $ref: "#/components/schemas/Report"
     post:
       summary: Create report
+      description: Attached file_ids must reference available files owned by the report project owner/member scope and bound to either the same project or the report test_run_id.
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -1504,6 +1666,13 @@ components:
         type: string
         enum: [Admin, Operator, Viewer]
       description: Local MVP role context. Admin may manage secrets, GitLab profiles, and destructive/archive actions; Operator may perform operational workflow/file/VCS actions; Viewer is read-only. Omitted locally is treated as Viewer; invalid roles have no permissions.
+    GitLabWebhookToken:
+      name: X-Gitlab-Token
+      in: header
+      required: false
+      schema:
+        type: string
+      description: GitLab webhook secret token. Prefer this header over a request-body token; it is validated against the profile webhook secret, not the outbound GitLab API credential.
   responses:
     Conflict:
       description: Resource conflicts with an existing value.
@@ -1882,6 +2051,106 @@ components:
           type: string
         web_url:
           type: string
+    GitLabRepositoryPage:
+      type: object
+      required: [items, page, per_page, total, has_next, last_synced_at]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitLabRepository"
+        page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+        has_next:
+          type: boolean
+        last_synced_at:
+          type: string
+          description: Empty until the profile has synced repositories.
+    GitLabRepositorySyncRequest:
+      type: object
+      properties:
+        search:
+          type: string
+        page:
+          type: integer
+          default: 1
+        per_page:
+          type: integer
+          default: 20
+    GitLabBranch:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        default:
+          type: boolean
+        protected:
+          type: boolean
+        ref:
+          type: string
+    GitLabBranchList:
+      type: object
+      required: [repository, branches]
+      properties:
+        repository:
+          $ref: "#/components/schemas/GitLabRepository"
+        branches:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitLabBranch"
+    GitLabBranchCreate:
+      type: object
+      required: [project_id, branch, ref]
+      properties:
+        project_id:
+          type: string
+          description: OpsPilot project that has this repository bound. Actor must own or belong to the project before the stored GitLab credential is used.
+        branch:
+          type: string
+        ref:
+          type: string
+    GitLabMergeRequestCreate:
+      type: object
+      required: [project_id, source_branch, target_branch, title]
+      properties:
+        project_id:
+          type: string
+          description: OpsPilot project that has this repository bound. Actor must own or belong to the project before the stored GitLab credential is used.
+        source_branch:
+          type: string
+        target_branch:
+          type: string
+        title:
+          type: string
+    GitLabMergeRequest:
+      type: object
+      required: [iid, state, source_branch, target_branch, title]
+      properties:
+        iid:
+          type: string
+        state:
+          type: string
+        source_branch:
+          type: string
+        target_branch:
+          type: string
+        title:
+          type: string
+        web_url:
+          type: string
+    GitLabMergeRequestStatus:
+      type: object
+      required: [repository, merge_request]
+      properties:
+        repository:
+          $ref: "#/components/schemas/GitLabRepository"
+        merge_request:
+          $ref: "#/components/schemas/GitLabMergeRequest"
     GitLabProfileCreate:
       type: object
       required: [name, base_url, credential_ref_id]
@@ -1892,10 +2161,10 @@ components:
           type: string
         credential_ref_id:
           type: string
-        repository_selection:
-          type: array
-          items:
-            $ref: "#/components/schemas/GitLabRepository"
+        webhook_secret:
+          type: string
+          writeOnly: true
+          description: Optional GitLab webhook secret. Stored separately from the outbound API credential and never returned.
         status:
           enum: [active, inactive]
     GitLabProfileUpdate:
@@ -1907,26 +2176,44 @@ components:
           type: string
         credential_ref_id:
           type: string
-        repository_selection:
-          type: array
-          items:
-            $ref: "#/components/schemas/GitLabRepository"
+        webhook_secret:
+          type: string
+          writeOnly: true
+          description: Rotates or creates the separate GitLab webhook secret.
         status:
           enum: [active, inactive]
     GitLabProfile:
-      allOf:
-        - $ref: "#/components/schemas/GitLabProfileCreate"
-        - type: object
-          required: [id, status, created_at, updated_at]
-          properties:
-            id:
-              type: string
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
+      type: object
+      required: [id, name, base_url, credential_ref_id, repository_selection, repository_synced_at, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        base_url:
+          type: string
+        credential_ref_id:
+          type: string
+        webhook_secret_ref:
+          type: string
+          description: Server-side reference for the separate webhook secret, when configured. The secret value is never returned.
+        repository_selection:
+          type: array
+          readOnly: true
+          description: Last synced repository discovery results. Clients cannot author this catalog through profile create/update.
+          items:
+            $ref: "#/components/schemas/GitLabRepository"
+        repository_synced_at:
+          type: string
+          description: Empty until repository discovery has synced successfully.
+        status:
+          enum: [active, inactive]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     RepositoryBinding:
       type: object
       required: [provider, profile_id, repository_id]
@@ -1936,11 +2223,6 @@ components:
         profile_id:
           type: string
         repository_id:
-          type: string
-        path:
-          type: string
-          description: Optional request field. The service infers and returns the selected repository path.
-        web_url:
           type: string
     VCSOperationCreate:
       type: object
@@ -1953,7 +2235,7 @@ components:
         repository_id:
           type: string
         operation_type:
-          enum: [create_branch, open_merge_request, merge_merge_request]
+          enum: [create_branch, open_merge_request, merge_merge_request, read_branches, read_merge_request]
         branch:
           type: string
         source_branch:
@@ -1998,7 +2280,7 @@ components:
         authenticity_token:
           type: string
           writeOnly: true
-          description: GitLab webhook token checked against the profile credential; never stored or returned.
+          description: GitLab webhook token checked against the profile webhook secret; never stored or returned. Prefer the X-Gitlab-Token header for real webhook deliveries.
         payload:
           type: object
           description: Payload is recursively redacted before persistence or response.
@@ -2445,6 +2727,7 @@ components:
           type: string
         file_ids:
           type: array
+          description: Available file refs scoped to this report project. Each file must be owned by a project owner/member, use module reports or the report_type, and bind to resource_type/resource_id of the project or test_run_id.
           items:
             type: string
         summary:

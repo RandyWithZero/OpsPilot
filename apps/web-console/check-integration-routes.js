@@ -26,6 +26,8 @@ assertStyle(".builder-mode .sidebar,\n.builder-mode .topbar", ["display: none"])
 assertStyle(".builder-shell", ["grid-template-columns: 220px minmax(520px, 1fr) 300px", "min-width: 0"]);
 assertStyle(".workflow-canvas", ["overflow: auto"]);
 assertStyle(".workflow-list-fallback", ["display: none"]);
+assertStyle(".ops-grid,\n.run-layout", ["min-width: 0"]);
+assertStyle(".run-step-list li", ["min-width: 0", "grid-template-columns: 34px minmax(0, 1fr)"]);
 
 function createNode() {
   return {
@@ -107,6 +109,13 @@ const result = vm.runInContext(`
     render();
     if (!content.innerHTML.includes(resourceConfig(route).title)) throw new Error("route title missing: " + route);
   }
+
+  state.route = "workflowRuns";
+  state.filters = {};
+  state.detail = null;
+  render();
+  if (!content.innerHTML.includes("运行状态复核入口")) throw new Error("workflow run page missing");
+  if (!content.innerHTML.includes("人工控制节点") || !content.innerHTML.includes("不能自动跳过")) throw new Error("manual approval step guard missing");
 
   state.apiOnline = true;
   for (const route of newRoutes) {

@@ -12,8 +12,8 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 - DEV/QA/QE environments with project, member, asset, and endpoint bindings
 - file metadata and local file-service MVP upload/download/list/delete APIs
 - credential references with redacted secret handling
-- GitLab API profiles, repository listing stubs, and project-to-repository bindings
-- GitLab/VCS operation records and webhook-event ingestion through a local adapter boundary
+- GitLab API profiles, repository discovery sync/search/pagination, and project-to-repository bindings
+- GitLab/VCS branch and merge-request operations plus webhook-event ingestion through a VCS adapter boundary
 - file upload sessions, completion state, and local download grants
 - agent registry and skill catalog metadata
 - model provider configuration through safe credential references
@@ -55,7 +55,39 @@ Optional local infrastructure placeholders are in `infra/docker-compose/docker-c
 docker compose -f infra/docker-compose/docker-compose.yml up -d
 ```
 
-The current service uses in-memory persistence so the backend slice is immediately testable without third-party dependencies. MySQL migrations and concrete persistence adapters should be added behind the existing repository boundary.
+The current service uses in-memory persistence so the backend slice is immediately testable without third-party dependencies. By default, GitLab calls use the local adapter for deterministic development and tests. Set `OPSPILOT_GITLAB_LIVE=1` before `make run-foundation` to use the standard-library GitLab HTTP adapter; token material still stays behind credential references and is not returned in responses or audit events.
+
+GitLab MVP flow:
+
+```sh
+curl -X POST http://localhost:8080/v1/credentials \
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Admin' \
+  -d '{"provider":"gitlab","name":"GitLab Ops","secret":"glpat-..."}'
+
+curl -X POST http://localhost:8080/v1/gitlab/profiles \
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Admin' \
+  -d '{"name":"Primary GitLab","base_url":"https://gitlab.example.com","credential_ref_id":"cred_000001","webhook_secret":"gitlab-webhook-secret"}'
+
+curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/sync \
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
+  -d '{"search":"platform","page":1,"per_page":20}'
+
+curl 'http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories?search=platform&page=1&per_page=20'
+
+curl -X POST http://localhost:8080/v1/projects/prj_000010/repositories \
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
+  -d '{"provider":"gitlab","profile_id":"glp_000003","repository_id":"100"}'
+
+curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/100/branches \
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
+  -d '{"project_id":"prj_000010","branch":"feature/opspilot","ref":"main"}'
+
+curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/100/merge-requests \
+  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
+  -d '{"project_id":"prj_000010","source_branch":"feature/opspilot","target_branch":"main","title":"OpsPilot change"}'
+```
+
+Repository catalogs are owned by GitLab discovery sync. Project repository bindings store only `provider`, `profile_id`, and `repository_id`; branch/MR calls require a bound `project_id` before the stored GitLab API credential is used. GitLab webhook deliveries should send `X-Gitlab-Token`, which is checked against the profile webhook secret, not the outbound API token.
 
 ### File Service Storage
 
@@ -69,3 +101,5 @@ The storage adapter is selected with `OPSPILOT_OBJECT_STORAGE_ADAPTER`:
 The API never returns internal storage keys. Upload/download grants and upload sessions expose opaque `opspilot://file-capabilities/...` URLs generated at the storage boundary. Business modules should keep only the returned file `id` or reference fields (`owner_id`, `resource_type`, `resource_id`, `module`).
 
 Local MVP uploads accept base64 JSON content up to `OPSPILOT_MAX_FILE_UPLOAD_BYTES` bytes after decode (default 5 MiB). HTTP request bodies are capped by `OPSPILOT_MAX_REQUEST_BODY_BYTES` (default 8 MiB). Non-admin HTTP callers are scoped to their `X-Actor-ID` as `owner_id`; admin callers may filter across owners.
+
+MySQL migrations and concrete persistence adapters should be added behind the existing repository boundary.
