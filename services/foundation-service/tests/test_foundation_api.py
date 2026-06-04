@@ -60,6 +60,33 @@ class FoundationSliceTest(unittest.TestCase):
             self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin 2"})
         self.assertEqual(getattr(raised.exception, "code", ""), "conflict")
 
+    def test_update_unlink_and_delete_inventory_slice(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        asset = self.store.create_asset("usr_test_actor", {"category": "vm", "name": "runner-01"})
+        environment = self.store.create_environment(
+            "usr_test_actor",
+            {"project_id": project["id"], "name": "DEV", "type": "DEV", "owner_id": user["id"], "asset_ids": [asset["id"]]},
+        )
+
+        updated_user = self.store.update_user("usr_test_actor", user["id"], {"status": "inactive"})
+        self.assertEqual(updated_user["status"], "inactive")
+
+        linked = self.store.link_project_asset("usr_test_actor", project["id"], asset["id"])
+        self.assertEqual(linked["asset_ids"], [asset["id"]])
+        unlinked = self.store.unlink_project_asset("usr_test_actor", project["id"], asset["id"])
+        self.assertEqual(unlinked["asset_ids"], [])
+
+        updated_environment = self.store.update_environment(
+            "usr_test_actor",
+            environment["id"],
+            {"name": "DEV Primary", "type": "DEV", "project_id": project["id"], "owner_id": user["id"], "asset_ids": []},
+        )
+        self.assertEqual(updated_environment["name"], "DEV Primary")
+
+        self.store.delete_environment("usr_test_actor", environment["id"])
+        self.assertEqual(self.store.list_environments(), [])
+
     def test_json_contract_uses_snake_case(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
         encoded = json.dumps(user)
@@ -76,7 +103,7 @@ class FoundationSliceTest(unittest.TestCase):
         FoundationHandler._cors_headers(HandlerDouble())  # type: ignore[arg-type]
 
         self.assertIn(("Access-Control-Allow-Origin", "*"), headers)
-        self.assertIn(("Access-Control-Allow-Methods", "GET,POST,OPTIONS"), headers)
+        self.assertIn(("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS"), headers)
         self.assertIn(("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID"), headers)
 
 

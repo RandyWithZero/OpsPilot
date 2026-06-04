@@ -66,6 +66,57 @@ class FoundationHandler(BaseHTTPRequestHandler):
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
 
+    def do_PATCH(self) -> None:
+        path = urlparse(self.path).path
+        try:
+            body = self._body()
+        except BadJSON:
+            self._json({"error": "invalid_json"}, HTTPStatus.BAD_REQUEST)
+            return
+        actor_id = self.headers.get("X-Actor-ID", "")
+        parts = [part for part in path.split("/") if part]
+
+        if len(parts) == 3 and parts[:2] == ["v1", "users"]:
+            self._call(lambda: self.store.update_user(actor_id, parts[2], body))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "projects"]:
+            self._call(lambda: self.store.update_project(actor_id, parts[2], body))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "assets"]:
+            self._call(lambda: self.store.update_asset(actor_id, parts[2], body))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "environments"]:
+            self._call(lambda: self.store.update_environment(actor_id, parts[2], body))
+            return
+
+        self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
+
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+        actor_id = self.headers.get("X-Actor-ID", "")
+        parts = [part for part in path.split("/") if part]
+
+        if len(parts) == 3 and parts[:2] == ["v1", "users"]:
+            self._call(lambda: self.store.delete_user(actor_id, parts[2]))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "projects"]:
+            self._call(lambda: self.store.delete_project(actor_id, parts[2]))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "assets"]:
+            self._call(lambda: self.store.delete_asset(actor_id, parts[2]))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "environments"]:
+            self._call(lambda: self.store.delete_environment(actor_id, parts[2]))
+            return
+        if len(parts) == 5 and parts[:2] == ["v1", "projects"] and parts[3] == "assets":
+            self._call(lambda: self.store.unlink_project_asset(actor_id, parts[2], parts[4]))
+            return
+        if len(parts) == 5 and parts[:2] == ["v1", "projects"] and parts[3] == "environments":
+            self._call(lambda: self.store.unlink_project_environment(actor_id, parts[2], parts[4]))
+            return
+
+        self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
+
     def log_message(self, format: str, *args: Any) -> None:
         return
 
@@ -100,7 +151,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
 
     def _cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID")
 
 

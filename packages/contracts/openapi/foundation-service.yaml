@@ -43,6 +43,41 @@ paths:
                 $ref: "#/components/schemas/User"
         "409":
           $ref: "#/components/responses/Conflict"
+  /v1/users/{userID}:
+    patch:
+      summary: Update identity user
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: userID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserCreate"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    delete:
+      summary: Delete identity user
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: userID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted user
   /v1/projects:
     get:
       summary: List projects
@@ -72,6 +107,41 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Project"
+  /v1/projects/{projectID}:
+    patch:
+      summary: Update project
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectCreate"
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+    delete:
+      summary: Delete project
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted project
   /v1/projects/{projectID}/assets/{assetID}:
     post:
       summary: Link an asset to a project
@@ -94,9 +164,51 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Project"
+    delete:
+      summary: Unlink an asset from a project
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: assetID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
   /v1/projects/{projectID}/environments/{environmentID}:
     post:
       summary: Link an environment to a project
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+    delete:
+      summary: Unlink an environment from a project
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - name: projectID
@@ -145,6 +257,41 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Asset"
+  /v1/assets/{assetID}:
+    patch:
+      summary: Update asset
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: assetID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetCreate"
+      responses:
+        "200":
+          description: Updated asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+    delete:
+      summary: Delete asset
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: assetID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted asset
   /v1/environments:
     get:
       summary: List environments
@@ -174,6 +321,41 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Environment"
+  /v1/environments/{environmentID}:
+    patch:
+      summary: Update environment
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvironmentCreate"
+      responses:
+        "200":
+          description: Updated environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+    delete:
+      summary: Delete environment
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted environment
   /v1/audit-events:
     get:
       summary: List audit events, newest first
@@ -232,6 +414,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Role"
+        status:
+          enum: [active, inactive]
     User:
       allOf:
         - $ref: "#/components/schemas/UserCreate"
@@ -264,6 +448,8 @@ components:
           type: array
           items:
             type: string
+        status:
+          enum: [active, archived]
     Project:
       allOf:
         - $ref: "#/components/schemas/ProjectCreate"
