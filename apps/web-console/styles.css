@@ -402,6 +402,12 @@ small {
   font-size: 12px;
 }
 
+.primary-button.small {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 .ghost-button.danger {
   border-color: rgba(201, 56, 56, 0.35);
   color: var(--red);
@@ -709,6 +715,284 @@ tr:hover td {
   margin-bottom: 12px;
 }
 
+.workflow-panel-actions {
+  margin-bottom: 14px;
+}
+
+.workflow-builder {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.builder-topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 18px 22px;
+}
+
+.builder-shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) 360px;
+  gap: 18px;
+  min-width: 0;
+}
+
+.builder-palette,
+.builder-stage,
+.builder-inspector,
+.run-preview {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.builder-palette,
+.builder-inspector {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+}
+
+.palette-group {
+  display: grid;
+  gap: 8px;
+}
+
+.palette-item,
+.workflow-list-item {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  color: var(--text);
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.palette-item {
+  grid-template-columns: 34px 1fr;
+  gap: 2px 10px;
+}
+
+.palette-item span {
+  display: grid;
+  grid-row: 1 / span 2;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.palette-item small,
+.workflow-list-item small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.edge-form,
+.node-config-form {
+  display: grid;
+  gap: 12px;
+}
+
+.builder-stage {
+  display: grid;
+  grid-template-rows: auto minmax(420px, 1fr);
+  overflow: hidden;
+}
+
+.builder-stage-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 14px;
+}
+
+.segmented-control {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.segmented-control button {
+  background: #fff;
+  color: var(--muted);
+  padding: 7px 12px;
+}
+
+.segmented-control button.active {
+  background: var(--blue);
+  color: #fff;
+}
+
+.workflow-canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 520px;
+  overflow: auto;
+  background:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px),
+    #f8fafc;
+  background-size: 28px 28px;
+}
+
+.workflow-edges {
+  position: absolute;
+  inset: 0;
+  width: 920px;
+  height: 520px;
+  min-width: 920px;
+  pointer-events: none;
+}
+
+.workflow-edges path {
+  fill: none;
+  stroke: #7f8fa8;
+  stroke-width: 2;
+}
+
+.workflow-edges circle {
+  fill: var(--blue);
+}
+
+.workflow-node {
+  position: absolute;
+  display: grid;
+  gap: 5px;
+  width: 170px;
+  min-height: 88px;
+  border: 2px solid var(--line-strong);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--text);
+  padding: 10px 12px;
+  text-align: left;
+  box-shadow: 0 12px 28px rgba(22, 28, 42, 0.08);
+}
+
+.workflow-node.ok {
+  border-color: rgba(22, 163, 106, 0.45);
+}
+
+.workflow-node.warn,
+.workflow-list-item.warn {
+  border-color: var(--gold);
+}
+
+.workflow-node.bad,
+.workflow-list-item.bad {
+  border-color: var(--red);
+}
+
+.node-type {
+  width: fit-content;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workflow-node small,
+.workflow-node strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.workflow-list-fallback {
+  display: none;
+  gap: 10px;
+  padding: 14px;
+}
+
+.workflow-list-item {
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.workflow-list-item > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--blue);
+  color: #fff;
+  font-weight: 700;
+}
+
+.validation-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.validation-list button {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--text);
+  padding: 8px;
+  text-align: left;
+}
+
+.run-preview {
+  padding: 18px 22px;
+}
+
+.timeline {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline li {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.timeline li > span {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--green);
+  color: #fff;
+  font-weight: 800;
+}
+
 .permission-denied {
   display: grid;
   gap: 4px;
@@ -1010,10 +1294,25 @@ dialog::backdrop {
   .setup-grid,
   .insight-grid,
   .detail-grid,
+  .builder-shell,
   .command-grid,
   .command-panels,
   .task-layout {
     grid-template-columns: 1fr;
+  }
+
+  .builder-topbar,
+  .builder-stage-head {
+    display: grid;
+  }
+
+  .builder-palette {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .builder-palette h2,
+  .edge-form {
+    grid-column: 1 / -1;
   }
 
   .login-panel > div:first-child {
@@ -1052,8 +1351,30 @@ dialog::backdrop {
 
   .command-center > *,
   .command-card,
-  .command-panels .panel {
+  .command-panels .panel,
+  .workflow-builder,
+  .builder-topbar,
+  .builder-shell,
+  .builder-palette,
+  .builder-stage,
+  .builder-inspector {
     min-width: 0;
+  }
+
+  .builder-palette {
+    grid-template-columns: 1fr;
+  }
+
+  .builder-stage {
+    grid-template-rows: auto auto;
+  }
+
+  .workflow-canvas {
+    display: none;
+  }
+
+  .workflow-list-fallback {
+    display: grid;
   }
 
   .command-header {

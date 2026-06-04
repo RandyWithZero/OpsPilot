@@ -96,6 +96,7 @@ const state = {
   modelProviders: [],
   workflows: [],
   workflowVersions: {},
+  workflowBuilder: null,
   auditEvents: [],
 };
 
@@ -337,6 +338,7 @@ function renderNav() {
     state.route = button.dataset.route;
     state.filters = {};
     state.detail = null;
+    state.workflowBuilder = null;
     render();
   };
 }
@@ -368,7 +370,7 @@ function render() {
   if (state.route === "skills") renderResource("skills");
   if (state.route === "credentials") renderResource("credentials");
   if (state.route === "modelProviders") renderResource("modelProviders");
-  if (state.route === "workflows") renderResource("workflows");
+  if (state.route === "workflows") state.workflowBuilder ? renderWorkflowBuilder() : renderResource("workflows");
 }
 
 function renderDashboard() {
@@ -758,6 +760,13 @@ function rowFor(type, row) {
 
 function rowActions(type, row) {
   const statusLabel = statusActionLabel(type, row);
+  if (type === "workflows") return `<div class="action-row">
+    ${actionButton("open", "详情", "ghost-button small", `open-${type}-${row.id}`, { id: row.id, type })}
+    ${actionButton("link", "编辑画布", "primary-button small", `builder-${row.id}`, { actionName: "open-workflow-builder", id: row.id })}
+    ${actionButton("edit", "编辑", "ghost-button small", `edit-${type}-${row.id}`, { type, id: row.id })}
+    ${statusLabel ? actionButton("status", statusLabel, "ghost-button small", `status-${type}-${row.id}`, { type, id: row.id }) : ""}
+    ${supportsDelete(type) ? actionButton("delete", "删除", "ghost-button small danger", `delete-${type}-${row.id}`, { type, id: row.id }) : ""}
+  </div>`;
   if (type === "files") return `<div class="action-row">
     ${actionButton("open", "详情", "ghost-button small", `open-${type}-${row.id}`, { id: row.id, type })}
     ${actionButton("link", "上传授权", "ghost-button small", `upload-grant-${row.id}`, { actionName: "create-upload-grant", id: row.id })}
@@ -903,6 +912,532 @@ function relationshipList(type, row) {
   return listItems(state.projects.filter((project) => project.member_ids?.includes(row.id) || project.owner_id === row.id).map((project) => `项目 ${escapeHtml(project.key)}`));
 }
 
+const workflowPalette = [
+  { type: "trigger", group: "触发器", icon: "TR", name: "触发器", help: "手动、GitLab Webhook 或测试报告完成触发" },
+  { type: "agent_task", group: "智能体任务", icon: "AI", name: "智能体任务", help: "绑定智能体、Skill 与模型供应商执行运维动作" },
+  { type: "approval", group: "人工控制", icon: "OK", name: "人工确认", help: "发布准入、回滚确认或人工复核" },
+  { type: "result", group: "结果/通知", icon: "RS", name: "结果/通知", help: "沉淀执行结果、报告备注和审计映射" },
+];
+
+function openWorkflowBuilder(workflowId, options = {}) {
+  const workflow = state.workflows.find((row) => row.id === workflowId);
+  if (!workflow) return showError("未找到流程定义。");
+  state.route = "workflows";
+  state.workflowBuilder = {
+    workflowId,
+    selectedNodeId: "",
+    selectedEdgeKey: "",
+    validation: null,
+    preview: Boolean(options.preview),
+    draft: workflowDraftFromVersion(workflow),
+  };
+  state.workflowBuilder.validation = validateWorkflowDraft(state.workflowBuilder.draft);
+  render();
+}
+
+function workflowDraftFromVersion(workflow) {
+  const versions = state.workflowVersions[workflow.id] || [];
+  const source = versions.find((version) => version.id === workflow.active_version_id) || versions.at(-1);
+  const nextVersion = String(Math.max(0, ...versions.map((version) => Number(version.version) || 0)) + 1);
+  const baseNodes = source?.nodes?.length ? source.nodes : [
+    { id: "trigger", type: "trigger", name: "发布触发", trigger_mode: "manual", project_id: workflow.project_id || "" },
+    { id: "agent-task", type: "agent_task", name: "发布前巡检", agent_id: state.agents[0]?.id || "", skill_id: state.agents[0]?.skill_ids?.[0] || "", model_provider_id: state.agents[0]?.model_provider_id || "", input: "读取项目、环境和最近测试报告，输出发布风险结论。", timeout_seconds: 900, failure_strategy: "stop" },
+    { id: "approval", type: "approval", name: "人工确认", approval_role: "Operator", instructions: "确认巡检结果后继续发布。", timeout_strategy: "转人工复核" },
+  ];
+  const nodes = baseNodes.map((node, index) => ({
+    ...node,
+    id: String(node.id || `node-${index + 1}`),
+    name: node.name || defaultWorkflowNodeName(node.type, index + 1),
+    x: Number(node.x ?? 80 + index * 220),
+    y: Number(node.y ?? 120 + (index % 2) * 24),
+  }));
+  const edges = (source?.edges?.length ? source.edges : nodes.slice(0, -1).map((node, index) => ({ from_node_id: node.id, to_node_id: nodes[index + 1].id }))).map((edge) => ({ from_node_id: edge.from_node_id, to_node_id: edge.to_node_id }));
+  return { workflow_id: workflow.id, base_version_id: source?.id || "", version: nextVersion, status: "draft", nodes, edges };
+}
+
+function renderWorkflowBuilder() {
+  const builder = state.workflowBuilder;
+  const workflow = state.workflows.find((row) => row.id === builder.workflowId);
+  if (!builder || !workflow) {
+    state.workflowBuilder = null;
+    renderResource("workflows");
+    return;
+  }
+  const validation = builder.validation || validateWorkflowDraft(builder.draft);
+  const selectedNode = builder.draft.nodes.find((node) => node.id === builder.selectedNodeId);
+  content.innerHTML = `
+    <section class="workflow-builder">
+      <header class="builder-topbar">
+        <div>
+          <p class="eyebrow">运维流程 Builder</p>
+          <h1>${escapeHtml(workflow.name)}</h1>
+          <p class="muted">${projectName(workflow.project_id)} · 草稿版本 ${escapeHtml(builder.draft.version)} · ${builder.draft.nodes.length} 节点 / ${builder.draft.edges.length} 边</p>
+        </div>
+        <div class="action-row">
+          <button class="ghost-button" data-builder-action="validate">校验</button>
+          <button class="ghost-button" data-builder-action="preview" ${validation.errors.length ? "disabled title=\"请先修复 Error\"" : ""}>运行预览</button>
+          <button class="primary-button" data-builder-action="save">保存版本</button>
+          <button class="ghost-button" data-builder-action="exit">退出画布</button>
+        </div>
+      </header>
+      <div class="builder-shell">
+        <aside class="builder-palette">
+          <h2>节点 Palette</h2>
+          ${workflowPaletteGroups()}
+          <form class="edge-form" data-builder-action="add-edge">
+            <h3>连接节点</h3>
+            <label>起点<select name="from_node_id">${workflowNodeOptions(builder.draft.nodes, "")}</select></label>
+            <label>终点<select name="to_node_id">${workflowNodeOptions(builder.draft.nodes, "")}</select></label>
+            <button class="ghost-button small" type="submit">创建连线</button>
+          </form>
+        </aside>
+        <main class="builder-stage">
+          <div class="builder-stage-head">
+            <div class="segmented-control"><button class="active">画布</button><button>列表</button></div>
+            <div class="action-row"><button class="ghost-button small" data-builder-action="fit">适配画布</button><span class="pill">${validation.errors.length ? `${validation.errors.length} Error` : validation.warnings.length ? `${validation.warnings.length} Warning` : "校验通过"}</span></div>
+          </div>
+          <div class="workflow-canvas" data-builder-dropzone>
+            <svg class="workflow-edges" viewBox="0 0 920 520" preserveAspectRatio="none" aria-hidden="true">${workflowEdgesSvg(builder.draft)}</svg>
+            ${builder.draft.nodes.map((node) => workflowNodeCard(node, validation)).join("")}
+          </div>
+          <div class="workflow-list-fallback">
+            <h3>移动端节点列表</h3>
+            ${builder.draft.nodes.map((node, index) => workflowNodeListItem(node, index, validation)).join("")}
+          </div>
+        </main>
+        <aside class="builder-inspector">
+          ${selectedNode ? workflowNodeInspector(selectedNode, validation) : workflowSummaryInspector(workflow, validation)}
+        </aside>
+      </div>
+      ${builder.preview ? workflowRunPreview(builder.draft, validation) : ""}
+    </section>
+  `;
+  bindWorkflowBuilder();
+}
+
+function workflowPaletteGroups() {
+  const groups = [...new Set(workflowPalette.map((item) => item.group))];
+  return groups.map((group) => `
+    <div class="palette-group">
+      <h3>${group}</h3>
+      ${workflowPalette.filter((item) => item.group === group).map((item) => `
+        <button class="palette-item" draggable="true" data-builder-action="add-node" data-node-type="${item.type}">
+          <span>${item.icon}</span><strong>${item.name}</strong><small>${item.help}</small>
+        </button>
+      `).join("")}
+    </div>
+  `).join("");
+}
+
+function workflowNodeCard(node, validation) {
+  const tone = workflowNodeValidationTone(node.id, validation);
+  const summary = workflowNodeSummary(node);
+  return `<button class="workflow-node ${tone}" draggable="true" data-builder-action="select-node" data-node-id="${escapeAttr(node.id)}" style="left:${Number(node.x || 0)}px;top:${Number(node.y || 0)}px">
+    <span class="node-type">${workflowNodeTypeLabel(node.type)}</span>
+    <strong>${escapeHtml(node.name)}</strong>
+    <small>${summary}</small>
+  </button>`;
+}
+
+function workflowNodeListItem(node, index, validation) {
+  const tone = workflowNodeValidationTone(node.id, validation);
+  return `<button class="workflow-list-item ${tone}" data-builder-action="select-node" data-node-id="${escapeAttr(node.id)}">
+    <span>${index + 1}</span><div><strong>${escapeHtml(node.name)}</strong><small>${workflowNodeTypeLabel(node.type)} · ${workflowNodeSummary(node)}</small></div>
+  </button>`;
+}
+
+function workflowEdgesSvg(draft) {
+  const byId = Object.fromEntries(draft.nodes.map((node) => [node.id, node]));
+  return draft.edges.map((edge) => {
+    const from = byId[edge.from_node_id];
+    const to = byId[edge.to_node_id];
+    if (!from || !to) return "";
+    const x1 = Number(from.x || 0) + 170;
+    const y1 = Number(from.y || 0) + 44;
+    const x2 = Number(to.x || 0);
+    const y2 = Number(to.y || 0) + 44;
+    const mid = Math.max(x1 + 40, (x1 + x2) / 2);
+    return `<path d="M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}" /><circle cx="${x2}" cy="${y2}" r="4" />`;
+  }).join("");
+}
+
+function workflowNodeInspector(node, validation) {
+  const nodeErrors = validation.errors.filter((item) => item.nodeId === node.id);
+  const nodeWarnings = validation.warnings.filter((item) => item.nodeId === node.id);
+  return `
+    <h2>节点详情</h2>
+    <form class="node-config-form" data-builder-action="update-node" data-node-id="${escapeAttr(node.id)}">
+      <label>节点名<input name="name" value="${escapeAttr(node.name)}" required /></label>
+      ${workflowNodeFields(node)}
+      <div class="action-row">
+        <button class="primary-button" type="submit">保存节点配置</button>
+        <button class="ghost-button danger" type="button" data-builder-action="delete-node" data-node-id="${escapeAttr(node.id)}">删除节点</button>
+      </div>
+    </form>
+    ${validationList("Error", nodeErrors, "bad")}
+    ${validationList("Warning", nodeWarnings, "warn")}
+  `;
+}
+
+function workflowNodeFields(node) {
+  if (node.type === "trigger") return `
+    <label>触发方式<select name="trigger_mode">${selectedOptions(["manual", "gitlab_webhook", "test_report_completed"], node.trigger_mode || "manual")}</select></label>
+    <label>关联项目<select name="project_id"><option value="">平台级</option>${state.projects.map((project) => `<option value="${project.id}" ${node.project_id === project.id ? "selected" : ""}>${escapeHtml(project.key)} · ${escapeHtml(project.name)}</option>`).join("")}</select></label>
+  `;
+  if (node.type === "agent_task") return `
+    <label>智能体<select name="agent_id">${workflowAgentOptions(node.agent_id)}</select></label>
+    <label>Skill<select name="skill_id">${workflowSkillOptions(node.agent_id, node.skill_id)}</select></label>
+    <label>模型供应商<select name="model_provider_id">${workflowProviderOptions(node.agent_id, node.model_provider_id)}</select></label>
+    <label>输入说明<textarea name="input">${escapeHtml(node.input || "")}</textarea></label>
+    <label>超时秒数<input name="timeout_seconds" type="number" min="30" value="${escapeAttr(node.timeout_seconds || 900)}" /></label>
+    <label>失败策略<select name="failure_strategy">${selectedOptions(["stop", "continue_mark", "manual_review"], node.failure_strategy || "")}</select></label>
+  `;
+  if (node.type === "approval") return `
+    <label>审批角色<select name="approval_role">${selectedOptions(["Admin", "Operator", "Viewer"], node.approval_role || "Operator")}</select></label>
+    <label>确认说明<textarea name="instructions">${escapeHtml(node.instructions || "")}</textarea></label>
+    <label>超时策略<input name="timeout_strategy" value="${escapeAttr(node.timeout_strategy || "转人工复核")}" /></label>
+  `;
+  return `
+    <label>结果名<input name="result_name" value="${escapeAttr(node.result_name || node.name)}" /></label>
+    <label>状态映射<input name="status_mapping" value="${escapeAttr(node.status_mapping || "passed=通过,failed=阻断")}" /></label>
+    <label>审计备注<textarea name="audit_note">${escapeHtml(node.audit_note || "")}</textarea></label>
+  `;
+}
+
+function workflowSummaryInspector(workflow, validation) {
+  return `
+    <h2>流程摘要</h2>
+    <dl class="kv">
+      <dt>流程</dt><dd>${escapeHtml(workflow.name)}</dd>
+      <dt>项目</dt><dd>${projectName(workflow.project_id)}</dd>
+      <dt>校验</dt><dd>${validation.errors.length ? statusPill("failed") : validation.warnings.length ? statusPill("warning") : statusPill("passed")}</dd>
+    </dl>
+    ${validationList("Error", validation.errors, "bad")}
+    ${validationList("Warning", validation.warnings, "warn")}
+  `;
+}
+
+function workflowRunPreview(draft, validation) {
+  if (validation.errors.length) return "";
+  const ordered = workflowExecutionOrder(draft);
+  return `<section class="run-preview panel">
+    <div class="detail-heading"><div><p class="eyebrow">运行预览</p><h2>只读执行计划</h2></div>${validation.warnings.length ? statusPill("warning") : statusPill("passed")}</div>
+    <ol class="timeline">${ordered.map((node, index) => `<li><span>${index + 1}</span><div><strong>${escapeHtml(node.name)}</strong><small>${workflowNodeTypeLabel(node.type)} · ${workflowPreviewCopy(node)}</small></div></li>`).join("")}</ol>
+  </section>`;
+}
+
+function bindWorkflowBuilder() {
+  const builder = state.workflowBuilder;
+  content.querySelectorAll("[data-builder-action]").forEach((node) => {
+    if (node.tagName === "FORM") {
+      node.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await handleWorkflowBuilderAction(node.dataset.builderAction, node, new FormData(node)).catch((error) => showError(error.message));
+      });
+      return;
+    }
+    node.addEventListener("click", async () => {
+      await handleWorkflowBuilderAction(node.dataset.builderAction, node, null).catch((error) => showError(error.message));
+    });
+    if (node.dataset.builderAction === "add-node") {
+      node.addEventListener("dragstart", (event) => event.dataTransfer.setData("text/plain", node.dataset.nodeType));
+    }
+    if (node.dataset.builderAction === "select-node") {
+      node.addEventListener("dragstart", (event) => event.dataTransfer.setData("application/x-node-id", node.dataset.nodeId));
+    }
+  });
+  const dropzone = content.querySelector("[data-builder-dropzone]");
+  if (dropzone) {
+    dropzone.addEventListener("dragover", (event) => event.preventDefault());
+    dropzone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const rect = dropzone.getBoundingClientRect();
+      const nodeId = event.dataTransfer.getData("application/x-node-id");
+      const type = event.dataTransfer.getData("text/plain");
+      if (nodeId) {
+        const node = builder.draft.nodes.find((item) => item.id === nodeId);
+        if (node) {
+          node.x = Math.max(16, Math.round(event.clientX - rect.left - 85));
+          node.y = Math.max(16, Math.round(event.clientY - rect.top - 40));
+        }
+      } else if (type) {
+        addWorkflowNode(type, Math.max(16, Math.round(event.clientX - rect.left)), Math.max(16, Math.round(event.clientY - rect.top)));
+      }
+      refreshWorkflowBuilder();
+    });
+  }
+}
+
+async function handleWorkflowBuilderAction(action, node, form) {
+  if (action === "exit") {
+    const workflowId = state.workflowBuilder.workflowId;
+    state.workflowBuilder = null;
+    state.detail = { type: "workflows", id: workflowId };
+    renderResource("workflows");
+    return;
+  }
+  if (action === "fit") {
+    fitWorkflowDraft();
+    refreshWorkflowBuilder();
+    return;
+  }
+  if (action === "validate") {
+    state.workflowBuilder.validation = validateWorkflowDraft(state.workflowBuilder.draft);
+    state.workflowBuilder.preview = false;
+    refreshWorkflowBuilder("校验已完成。");
+    return;
+  }
+  if (action === "preview") {
+    state.workflowBuilder.validation = validateWorkflowDraft(state.workflowBuilder.draft);
+    if (state.workflowBuilder.validation.errors.length) return showError("存在 Error，请先修复后再预览。");
+    state.workflowBuilder.preview = true;
+    refreshWorkflowBuilder();
+    return;
+  }
+  if (action === "save") return saveWorkflowBuilderVersion();
+  if (action === "add-node") {
+    addWorkflowNode(node.dataset.nodeType);
+    refreshWorkflowBuilder();
+    return;
+  }
+  if (action === "select-node") {
+    state.workflowBuilder.selectedNodeId = node.dataset.nodeId;
+    state.workflowBuilder.selectedEdgeKey = "";
+    state.workflowBuilder.preview = false;
+    refreshWorkflowBuilder();
+    return;
+  }
+  if (action === "delete-node") {
+    deleteWorkflowNode(node.dataset.nodeId);
+    refreshWorkflowBuilder();
+    return;
+  }
+  if (action === "update-node") {
+    updateWorkflowNode(node.dataset.nodeId, form);
+    refreshWorkflowBuilder("节点配置已更新。");
+    return;
+  }
+  if (action === "add-edge") {
+    addWorkflowEdge(form.get("from_node_id"), form.get("to_node_id"));
+    refreshWorkflowBuilder();
+  }
+}
+
+function refreshWorkflowBuilder(message = "") {
+  state.workflowBuilder.validation = validateWorkflowDraft(state.workflowBuilder.draft);
+  renderWorkflowBuilder();
+  if (message) toast(message);
+}
+
+function addWorkflowNode(type, x = 80, y = 120) {
+  const draft = state.workflowBuilder.draft;
+  const count = draft.nodes.filter((node) => node.type === type).length + 1;
+  const id = `${type.replace("_", "-")}-${Date.now().toString(36)}-${count}`;
+  const node = { id, type, name: defaultWorkflowNodeName(type, count), x, y };
+  if (type === "trigger") Object.assign(node, { trigger_mode: "manual", project_id: state.workflows.find((workflow) => workflow.id === draft.workflow_id)?.project_id || "" });
+  if (type === "agent_task") Object.assign(node, { agent_id: state.agents[0]?.id || "", skill_id: state.agents[0]?.skill_ids?.[0] || "", model_provider_id: state.agents[0]?.model_provider_id || "", input: "", timeout_seconds: 900, failure_strategy: "stop" });
+  if (type === "approval") Object.assign(node, { approval_role: "Operator", instructions: "", timeout_strategy: "转人工复核" });
+  if (type === "result") Object.assign(node, { result_name: node.name, status_mapping: "passed=通过,failed=阻断", audit_note: "" });
+  draft.nodes.push(node);
+  state.workflowBuilder.selectedNodeId = id;
+}
+
+function updateWorkflowNode(nodeId, form) {
+  const node = state.workflowBuilder.draft.nodes.find((item) => item.id === nodeId);
+  if (!node) return;
+  for (const [key, value] of form.entries()) {
+    node[key] = key === "timeout_seconds" ? Number(value || 0) : value;
+  }
+  if (node.type === "agent_task") {
+    const agent = state.agents.find((item) => item.id === node.agent_id);
+    if (!node.skill_id && agent?.skill_ids?.length) node.skill_id = agent.skill_ids[0];
+    if (!node.model_provider_id && agent?.model_provider_id) node.model_provider_id = agent.model_provider_id;
+  }
+}
+
+function deleteWorkflowNode(nodeId) {
+  const draft = state.workflowBuilder.draft;
+  const node = draft.nodes.find((item) => item.id === nodeId);
+  if (!node) return;
+  if (node.type === "trigger" && !confirm("确认删除触发器？流程需要重新添加一个触发器后才能保存。")) return;
+  draft.nodes = draft.nodes.filter((item) => item.id !== nodeId);
+  draft.edges = draft.edges.filter((edge) => edge.from_node_id !== nodeId && edge.to_node_id !== nodeId);
+  state.workflowBuilder.selectedNodeId = "";
+}
+
+function addWorkflowEdge(fromNodeId, toNodeId) {
+  const draft = state.workflowBuilder.draft;
+  if (!fromNodeId || !toNodeId) return showError("请选择连线起点和终点。");
+  if (fromNodeId === toNodeId) return showError("不支持节点自连。");
+  if (draft.edges.some((edge) => edge.from_node_id === fromNodeId && edge.to_node_id === toNodeId)) return showError("重复连线已存在。");
+  draft.edges.push({ from_node_id: fromNodeId, to_node_id: toNodeId });
+}
+
+async function saveWorkflowBuilderVersion() {
+  const builder = state.workflowBuilder;
+  builder.validation = validateWorkflowDraft(builder.draft);
+  if (builder.validation.errors.length) {
+    refreshWorkflowBuilder();
+    return showError("存在 Error，请修复后再保存版本。");
+  }
+  const payload = workflowVersionPayload(builder.draft);
+  if (state.apiOnline) {
+    const created = await apiRequest("POST", `/v1/workflows/${builder.workflowId}/versions`, payload);
+    state.workflowVersions[builder.workflowId] = [...(state.workflowVersions[builder.workflowId] || []).filter((version) => version.id !== created.id), created];
+  } else {
+    const item = { ...payload, id: `wfv_local_${Date.now()}`, workflow_id: builder.workflowId, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    state.workflowVersions[builder.workflowId] = [...(state.workflowVersions[builder.workflowId] || []), item];
+    const workflow = state.workflows.find((row) => row.id === builder.workflowId);
+    if (workflow && !workflow.active_version_id) workflow.active_version_id = item.id;
+  }
+  state.workflowBuilder = null;
+  state.detail = { type: "workflows", id: builder.workflowId };
+  if (state.apiOnline) await loadData();
+  else render();
+  toast("流程版本已保存。");
+}
+
+function workflowVersionPayload(draft) {
+  return {
+    version: String(draft.version || "1"),
+    status: draft.status || "draft",
+    nodes: draft.nodes.map((node) => Object.fromEntries(Object.entries(node).filter(([key, value]) => !["x", "y"].includes(key) && value !== "" && value !== undefined))),
+    edges: draft.edges.map((edge) => ({ from_node_id: edge.from_node_id, to_node_id: edge.to_node_id })),
+  };
+}
+
+function validateWorkflowDraft(draft = { nodes: [], edges: [] }) {
+  const errors = [];
+  const warnings = [];
+  const nodes = draft.nodes || [];
+  const edges = draft.edges || [];
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const triggers = nodes.filter((node) => node.type === "trigger");
+  if (!triggers.length) errors.push({ message: "流程必须包含 1 个触发器。" });
+  if (triggers.length > 1) errors.push({ message: "流程只能包含 1 个触发器。", nodeId: triggers[1]?.id });
+  for (const edge of edges) {
+    if (!nodeIds.has(edge.from_node_id) || !nodeIds.has(edge.to_node_id)) errors.push({ message: "存在引用不存在节点的边。" });
+  }
+  for (const node of nodes) {
+    const inbound = edges.some((edge) => edge.to_node_id === node.id);
+    const outbound = edges.some((edge) => edge.from_node_id === node.id);
+    if (node.type !== "trigger" && !inbound) errors.push({ message: `${node.name} 是孤立节点，缺少入边。`, nodeId: node.id });
+    if (nodes.length > 1 && !outbound && !["approval", "result"].includes(node.type)) warnings.push({ message: `${node.name} 未连接到终点。`, nodeId: node.id });
+    if (node.type === "agent_task") {
+      const agent = state.agents.find((item) => item.id === node.agent_id);
+      if (!node.agent_id) errors.push({ message: `${node.name} 缺少智能体。`, nodeId: node.id });
+      if (node.skill_id && agent && !(agent.skill_ids || []).includes(node.skill_id)) errors.push({ message: `${node.name} 的 Skill 不属于所选智能体。`, nodeId: node.id });
+      if (node.model_provider_id && agent && agent.model_provider_id && node.model_provider_id !== agent.model_provider_id) errors.push({ message: `${node.name} 的模型供应商不匹配智能体。`, nodeId: node.id });
+      if (!node.input) warnings.push({ message: `${node.name} 未填写输入说明。`, nodeId: node.id });
+      if (!node.failure_strategy) warnings.push({ message: `${node.name} 未配置失败策略。`, nodeId: node.id });
+    }
+  }
+  if (!nodes.some((node) => node.type === "approval")) warnings.push({ message: "流程缺少人工确认节点。" });
+  if (hasWorkflowCycle(nodes, edges)) errors.push({ message: "流程存在环，请调整连线。" });
+  if (triggers[0] && workflowExecutionOrder(draft).length < Math.min(nodes.length, 1)) errors.push({ message: "触发器无法到达任何节点。", nodeId: triggers[0].id });
+  return { errors, warnings };
+}
+
+function hasWorkflowCycle(nodes, edges) {
+  const visiting = new Set();
+  const visited = new Set();
+  const next = (id) => edges.filter((edge) => edge.from_node_id === id).map((edge) => edge.to_node_id);
+  function walk(id) {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    for (const target of next(id)) if (walk(target)) return true;
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  }
+  return nodes.some((node) => walk(node.id));
+}
+
+function workflowExecutionOrder(draft) {
+  const byId = Object.fromEntries((draft.nodes || []).map((node) => [node.id, node]));
+  const start = (draft.nodes || []).find((node) => node.type === "trigger") || draft.nodes?.[0];
+  if (!start) return [];
+  const seen = new Set();
+  const ordered = [];
+  let current = start.id;
+  while (current && byId[current] && !seen.has(current)) {
+    seen.add(current);
+    ordered.push(byId[current]);
+    current = (draft.edges || []).find((edge) => edge.from_node_id === current)?.to_node_id;
+  }
+  return ordered;
+}
+
+function validationList(title, items, tone) {
+  if (!items.length) return `<div class="empty-state compact">暂无${title}。</div>`;
+  return `<h3>${title}</h3><ul class="validation-list">${items.map((item) => `<li><button data-builder-action="select-node" data-node-id="${escapeAttr(item.nodeId || "")}" ${item.nodeId ? "" : "disabled"}><span class="pill ${tone}">${title}</span>${escapeHtml(item.message)}</button></li>`).join("")}</ul>`;
+}
+
+function workflowNodeValidationTone(nodeId, validation) {
+  if (validation.errors.some((item) => item.nodeId === nodeId)) return "bad";
+  if (validation.warnings.some((item) => item.nodeId === nodeId)) return "warn";
+  return "ok";
+}
+
+function workflowNodeSummary(node) {
+  if (node.type === "trigger") return escapeHtml({ manual: "手动触发", gitlab_webhook: "GitLab Webhook", test_report_completed: "测试报告完成" }[node.trigger_mode] || "未配置触发方式");
+  if (node.type === "agent_task") return `${agentName(node.agent_id)} · ${skillName(node.skill_id)} · ${modelProviderName(node.model_provider_id)}`;
+  if (node.type === "approval") return `${displayRole(node.approval_role || "Operator")} · ${escapeHtml(node.timeout_strategy || "未配置超时")}`;
+  return escapeHtml(node.result_name || "输出执行结果");
+}
+
+function workflowPreviewCopy(node) {
+  if (node.type === "trigger") return workflowNodeSummary(node);
+  if (node.type === "agent_task") return `${workflowNodeSummary(node)} · 失败策略 ${escapeHtml(translateWorkflowFailure(node.failure_strategy))}`;
+  if (node.type === "approval") return `${workflowNodeSummary(node)} · ${escapeHtml(node.instructions || "等待人工确认")}`;
+  return escapeHtml(node.audit_note || node.status_mapping || "写入流程审计与报告备注");
+}
+
+function workflowNodeTypeLabel(type) {
+  return { trigger: "触发器", agent_task: "智能体任务", approval: "人工确认", result: "结果/通知" }[type] || type;
+}
+
+function defaultWorkflowNodeName(type, count) {
+  return `${workflowNodeTypeLabel(type)} ${count}`;
+}
+
+function workflowAgentOptions(selected) {
+  return `<option value="">请选择智能体</option>${state.agents.map((agent) => `<option value="${agent.id}" ${selected === agent.id ? "selected" : ""}>${escapeHtml(agent.name)}</option>`).join("")}`;
+}
+
+function workflowSkillOptions(agentId, selected) {
+  const agent = state.agents.find((item) => item.id === agentId);
+  const allowed = agent?.skill_ids?.length ? state.skills.filter((skill) => agent.skill_ids.includes(skill.id)) : state.skills;
+  return `<option value="">请选择 Skill</option>${allowed.map((skill) => `<option value="${skill.id}" ${selected === skill.id ? "selected" : ""}>${escapeHtml(skill.name)} · ${escapeHtml(skill.version)}</option>`).join("")}`;
+}
+
+function workflowProviderOptions(agentId, selected) {
+  const agent = state.agents.find((item) => item.id === agentId);
+  const providers = agent?.model_provider_id ? state.modelProviders.filter((provider) => provider.id === agent.model_provider_id) : state.modelProviders;
+  return `<option value="">请选择模型供应商</option>${providers.map((provider) => `<option value="${provider.id}" ${selected === provider.id ? "selected" : ""}>${escapeHtml(provider.name)}</option>`).join("")}`;
+}
+
+function workflowNodeOptions(nodes, selected) {
+  return `<option value="">请选择节点</option>${nodes.map((node) => `<option value="${node.id}" ${selected === node.id ? "selected" : ""}>${escapeHtml(node.name)}</option>`).join("")}`;
+}
+
+function agentName(id) {
+  const agent = state.agents.find((item) => item.id === id);
+  return escapeHtml(agent ? agent.name : id || "未绑定智能体");
+}
+
+function translateWorkflowFailure(value) {
+  return { stop: "停止", continue_mark: "继续并标记", manual_review: "转人工" }[value] || "未配置";
+}
+
+function fitWorkflowDraft() {
+  state.workflowBuilder.draft.nodes.forEach((node, index) => {
+    node.x = 72 + (index % 4) * 210;
+    node.y = 96 + Math.floor(index / 4) * 130;
+  });
+}
+
 function workflowVersionPanel(workflow) {
   const versions = state.workflowVersions[workflow.id] || [];
   const latest = String(versions.length + 1);
@@ -911,6 +1446,10 @@ function workflowVersionPanel(workflow) {
   const providerOptions = `<option value="">使用智能体默认模型</option>${state.modelProviders.map((provider) => `<option value="${provider.id}">${escapeHtml(provider.name)}</option>`).join("")}`;
   return `
     <h4>流程版本</h4>${workflowVersionList(workflow.id)}
+    <div class="action-row workflow-panel-actions">
+      ${actionButton("link", "编辑画布", "primary-button", `detail-builder-${workflow.id}`, { actionName: "open-workflow-builder", id: workflow.id })}
+      ${actionButton("link", "运行预览", "ghost-button", `detail-preview-${workflow.id}`, { actionName: "open-workflow-builder-preview", id: workflow.id })}
+    </div>
     ${can("create") ? `<form class="form-grid" data-action="create-workflow-version" data-id="${workflow.id}">
       <label>版本号<input name="version" value="${latest}" required /></label>
       <label>状态<select name="status">${selectedOptions(["draft", "active", "deprecated"], "draft")}</select></label>
@@ -924,7 +1463,11 @@ function workflowVersionPanel(workflow) {
 
 function workflowVersionList(workflowId) {
   const versions = state.workflowVersions[workflowId] || [];
-  return versions.length ? `<ul class="link-list">${versions.map((version) => `<li><span>版本 ${escapeHtml(version.version)} · ${statusPill(version.status)} · ${version.nodes?.length || 0} 节点 / ${version.edges?.length || 0} 边</span></li>`).join("")}</ul>` : `<div class="empty-state compact">暂无流程版本。</div>`;
+  return versions.length ? `<ul class="link-list">${versions.map((version) => {
+    const validation = validateWorkflowDraft(version);
+    const validationStatus = validation.errors.length ? "failed" : validation.warnings.length ? "warning" : "passed";
+    return `<li><span>版本 ${escapeHtml(version.version)} · ${statusPill(version.status)} · ${version.nodes?.length || 0} 节点 / ${version.edges?.length || 0} 边 · ${statusPill(validationStatus)}</span></li>`;
+  }).join("")}</ul>` : `<div class="empty-state compact">暂无流程版本。</div>`;
 }
 
 function linkedList(ids, source, action, ownerId) {
@@ -1134,6 +1677,8 @@ async function handleDelete(type, id) {
 
 async function handleRelationship(actionName, id, targetId, form) {
   if (!can("link")) return deny("change bindings");
+  if (actionName === "open-workflow-builder") return openWorkflowBuilder(id);
+  if (actionName === "open-workflow-builder-preview") return openWorkflowBuilder(id, { preview: true });
   if (actionName === "create-workflow-version") return createWorkflowVersion(id, new FormData(form));
   if (actionName?.startsWith("create-upload-") || actionName === "complete-upload-session" || actionName === "create-download-grant") return handleFileAction(actionName, id);
   const value = targetId || new FormData(form).get(actionValueKey(actionName));
