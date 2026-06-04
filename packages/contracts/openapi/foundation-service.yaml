@@ -491,7 +491,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CredentialUpdate"
+              $ref: "#/components/schemas/CredentialCreate"
       responses:
         "201":
           description: Created credential reference
@@ -514,7 +514,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CredentialCreate"
+              $ref: "#/components/schemas/CredentialUpdate"
       responses:
         "200":
           description: Updated credential reference
