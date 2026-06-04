@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from .auth import actor_from_headers, permission_for_request, require_permission
 from .domain import DomainError
 from .store import MemoryStore
 
@@ -44,6 +45,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/audit-events": self.store.list_audit_events,
         }
         path = urlparse(self.path).path
+        actor = actor_from_headers(self.headers)
+        if not self._authorize(actor, "GET", path):
+            return
         parts = [part for part in path.split("/") if part]
         if len(parts) == 5 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories":
             self._call(lambda: self.store.list_gitlab_repositories(parts[3]))
@@ -66,7 +70,10 @@ class FoundationHandler(BaseHTTPRequestHandler):
         except BadJSON:
             self._json({"error": "invalid_json"}, HTTPStatus.BAD_REQUEST)
             return
-        actor_id = self.headers.get("X-Actor-ID", "")
+        actor = actor_from_headers(self.headers)
+        if not self._authorize(actor, "POST", path, body):
+            return
+        actor_id = actor.actor_id
 
         if path == "/v1/users":
             self._call(lambda: self.store.create_user(actor_id, body), HTTPStatus.CREATED)
@@ -164,8 +171,11 @@ class FoundationHandler(BaseHTTPRequestHandler):
         except BadJSON:
             self._json({"error": "invalid_json"}, HTTPStatus.BAD_REQUEST)
             return
-        actor_id = self.headers.get("X-Actor-ID", "")
         parts = [part for part in path.split("/") if part]
+        actor = actor_from_headers(self.headers)
+        if not self._authorize(actor, "PATCH", path, body):
+            return
+        actor_id = actor.actor_id
 
         if len(parts) == 3 and parts[:2] == ["v1", "users"]:
             self._call(lambda: self.store.update_user(actor_id, parts[2], body))
@@ -211,7 +221,10 @@ class FoundationHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         path = urlparse(self.path).path
-        actor_id = self.headers.get("X-Actor-ID", "")
+        actor = actor_from_headers(self.headers)
+        if not self._authorize(actor, "DELETE", path):
+            return
+        actor_id = actor.actor_id
         parts = [part for part in path.split("/") if part]
 
         if len(parts) == 3 and parts[:2] == ["v1", "users"]:
@@ -281,6 +294,14 @@ class FoundationHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             self._json({"error": "invalid_input"}, HTTPStatus.BAD_REQUEST)
 
+    def _authorize(self, actor: Any, method: str, path: str, body: dict[str, Any] | None = None) -> bool:
+        try:
+            require_permission(actor, permission_for_request(method, path, body))
+            return True
+        except DomainError as exc:
+            self._json({"error": exc.code}, exc.status)
+            return False
+
     def _json(self, payload: Any, status: int | HTTPStatus) -> None:
         data = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         self.send_response(int(status))
@@ -293,7 +314,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
     def _cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID,X-Actor-Role")
 
 
 class BadJSON(Exception):

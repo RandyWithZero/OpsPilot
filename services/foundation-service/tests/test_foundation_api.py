@@ -8,6 +8,13 @@ sys.path.insert(0, str(ROOT))
 
 from opspilot_foundation.store import MemoryStore  # noqa: E402
 from opspilot_foundation.server import FoundationHandler  # noqa: E402
+from opspilot_foundation.auth import (  # noqa: E402
+    ActorContext,
+    PermissionDenied,
+    actor_from_headers,
+    permission_for_request,
+    require_permission,
+)
 
 
 class FoundationSliceTest(unittest.TestCase):
@@ -104,7 +111,42 @@ class FoundationSliceTest(unittest.TestCase):
 
         self.assertIn(("Access-Control-Allow-Origin", "*"), headers)
         self.assertIn(("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS"), headers)
-        self.assertIn(("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID"), headers)
+        self.assertIn(("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID,X-Actor-Role"), headers)
+
+    def test_local_rbac_permission_matrix_for_high_risk_apis(self) -> None:
+        self.assertEqual(actor_from_headers({}).role, "Admin")
+        self.assertEqual(actor_from_headers({"X-Actor-ID": "usr_operator", "X-Actor-Role": "operator"}).actor_id, "usr_operator")
+        self.assertEqual(actor_from_headers({"X-Actor-Role": "viewer"}).role, "Viewer")
+
+        self.assert_allowed("Viewer", "GET", "/v1/projects")
+        self.assert_denied("Viewer", "GET", "/v1/credentials")
+        self.assert_denied("Viewer", "POST", "/v1/files/fil_1/upload-grants")
+        self.assert_denied("Viewer", "PATCH", "/v1/workflow-runs/wfr_1/steps/wfs_1")
+        self.assert_denied("Viewer", "DELETE", "/v1/projects/prj_1")
+
+        self.assert_allowed("Operator", "POST", "/v1/files/fil_1/upload-grants")
+        self.assert_allowed("Operator", "POST", "/v1/vcs/operations")
+        self.assert_allowed("Operator", "POST", "/v1/workflows/wfl_1/runs")
+        self.assert_allowed("Operator", "POST", "/v1/workflow-runs/wfr_1/start")
+        self.assert_allowed("Operator", "PATCH", "/v1/workflow-runs/wfr_1/steps/wfs_1", {"status": "completed"})
+        self.assert_allowed("Operator", "PATCH", "/v1/workflows/wfl_1/versions/wfv_1", {"status": "published"})
+        self.assert_denied("Operator", "POST", "/v1/credentials")
+        self.assert_denied("Operator", "PATCH", "/v1/credentials/cred_1")
+        self.assert_denied("Operator", "PATCH", "/v1/gitlab/profiles/glp_1")
+        self.assert_denied("Operator", "PATCH", "/v1/projects/prj_1", {"status": "archived"})
+        self.assert_denied("Operator", "DELETE", "/v1/projects/prj_1")
+
+        self.assert_allowed("Admin", "GET", "/v1/credentials")
+        self.assert_allowed("Admin", "POST", "/v1/credentials")
+        self.assert_allowed("Admin", "PATCH", "/v1/gitlab/profiles/glp_1")
+        self.assert_allowed("Admin", "DELETE", "/v1/projects/prj_1")
+
+    def assert_allowed(self, role: str, method: str, path: str, body: dict | None = None) -> None:
+        require_permission(ActorContext(actor_id="usr_test_actor", role=role), permission_for_request(method, path, body))
+
+    def assert_denied(self, role: str, method: str, path: str, body: dict | None = None) -> None:
+        with self.assertRaises(PermissionDenied):
+            require_permission(ActorContext(actor_id="usr_test_actor", role=role), permission_for_request(method, path, body))
 
     def test_file_grants_are_metadata_only(self) -> None:
         file_object = self.store.create_file_object(
