@@ -618,7 +618,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/GitLabProfileCreate"
+              $ref: "#/components/schemas/GitLabProfileUpdate"
       responses:
         "200":
           description: Updated GitLab profile
@@ -1437,11 +1437,9 @@ components:
       allOf:
         - $ref: "#/components/schemas/FileObjectCreate"
         - type: object
-          required: [id, storage_key, status, created_at, updated_at]
+          required: [id, status, created_at, updated_at]
           properties:
             id:
-              type: string
-            storage_key:
               type: string
             status:
               enum: [pending_upload, available, deleted]
@@ -1519,8 +1517,6 @@ components:
     CredentialUpdate:
       type: object
       properties:
-        provider:
-          enum: [gitlab, model_provider]
         name:
           type: string
         secret:
@@ -1569,6 +1565,21 @@ components:
     GitLabProfileCreate:
       type: object
       required: [name, base_url, credential_ref_id]
+      properties:
+        name:
+          type: string
+        base_url:
+          type: string
+        credential_ref_id:
+          type: string
+        repository_selection:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitLabRepository"
+        status:
+          enum: [active, inactive]
+    GitLabProfileUpdate:
+      type: object
       properties:
         name:
           type: string
@@ -1654,8 +1665,30 @@ components:
               format: date-time
     VCSWebhookEventCreate:
       type: object
-      required: [provider, profile_id, event_type]
+      required: [provider, profile_id, event_type, authenticity_token]
       properties:
+        provider:
+          enum: [gitlab]
+        profile_id:
+          type: string
+        repository_id:
+          type: string
+        event_type:
+          type: string
+        authenticity_token:
+          type: string
+          writeOnly: true
+          description: GitLab webhook token checked against the profile credential; never stored or returned.
+        payload:
+          type: object
+          description: Payload is recursively redacted before persistence or response.
+          additionalProperties: true
+    VCSWebhookEvent:
+      type: object
+      required: [id, provider, profile_id, event_type, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
         provider:
           enum: [gitlab]
         profile_id:
@@ -1666,23 +1699,16 @@ components:
           type: string
         payload:
           type: object
+          description: Redacted payload summary retained after authenticity validation.
           additionalProperties: true
-    VCSWebhookEvent:
-      allOf:
-        - $ref: "#/components/schemas/VCSWebhookEventCreate"
-        - type: object
-          required: [id, status, created_at, updated_at]
-          properties:
-            id:
-              type: string
-            status:
-              enum: [received, processed, rejected]
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
+        status:
+          enum: [received, processed, rejected]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     AgentCreate:
       type: object
       required: [name, kind]

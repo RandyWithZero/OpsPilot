@@ -131,6 +131,7 @@ class FileObject:
     updated_at: str = ""
 
     def validate(self) -> None:
+        self.filename = sanitize_filename(self.filename)
         if not self.filename or not self.content_type or int(self.size_bytes) < 0:
             raise InvalidInput("files require filename, content_type, and non-negative size_bytes")
 
@@ -459,6 +460,34 @@ class AuditEvent:
 
 
 TOKEN_QUERY_NAMES = {"access_token", "auth_token", "api_token", "private_token", "token", "key", "secret", "password"}
+SENSITIVE_FIELD_NAMES = TOKEN_QUERY_NAMES | {"authorization", "cookie", "set-cookie", "x-gitlab-token"}
+
+
+def sanitize_filename(value: str) -> str:
+    filename = str(value).strip()
+    if not filename or filename in {".", ".."}:
+        raise InvalidInput("filename is invalid")
+    if "/" in filename or "\\" in filename:
+        raise InvalidInput("filename must not contain path separators")
+    if any(ord(character) < 32 for character in filename):
+        raise InvalidInput("filename must not contain control characters")
+    return filename
+
+
+def redact_sensitive_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            key_string = str(key)
+            key_lower = key_string.lower()
+            if key_lower in SENSITIVE_FIELD_NAMES or "token" in key_lower or "secret" in key_lower or "password" in key_lower:
+                redacted[key_string] = "[REDACTED]"
+            else:
+                redacted[key_string] = redact_sensitive_payload(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact_sensitive_payload(item) for item in value]
+    return value
 
 
 def sanitize_public_url(value: str, *, allow_path: bool) -> str:

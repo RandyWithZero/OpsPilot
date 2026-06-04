@@ -35,6 +35,7 @@ from .domain import (
     WorkflowDefinition,
     WorkflowVersion,
     now_utc,
+    redact_sensitive_payload,
     sanitize_public_url,
 )
 
@@ -361,15 +362,15 @@ class MemoryStore:
         file_object.validate()
         with self._lock:
             file_object.id = self._id("fil")
-            file_object.storage_key = file_object.storage_key or f"local/{file_object.id}/{file_object.filename}"
+            file_object.storage_key = self._new_storage_key()
             stamp(file_object)
             self.files[file_object.id] = file_object
             self._audit(actor_id, "file.created", "file", file_object.id, {"filename": file_object.filename, "size_bytes": file_object.size_bytes})
-            return asdict(file_object)
+            return self._public_file(file_object)
 
     def list_file_objects(self) -> list[dict[str, Any]]:
         with self._lock:
-            return [asdict(file_object) for file_object in self.files.values()]
+            return [self._public_file(file_object) for file_object in self.files.values()]
 
     def create_upload_grant(self, actor_id: str, file_id: str) -> dict[str, Any]:
         with self._lock:
@@ -410,7 +411,7 @@ class MemoryStore:
             session.status = "completed"
             session.updated_at = file_object.updated_at
             self._audit(actor_id, "file.upload_session.completed", "file", file_object.id, {"upload_session_id": session.id})
-            return {"upload_session": asdict(session), "file": asdict(file_object)}
+            return {"upload_session": asdict(session), "file": self._public_file(file_object)}
 
     def create_download_grant(self, actor_id: str, file_id: str) -> dict[str, Any]:
         with self._lock:
@@ -446,7 +447,9 @@ class MemoryStore:
     def update_credential(self, actor_id: str, credential_id: str, data: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             credential = self._credential(credential_id)
-            for key in ("provider", "name", "status"):
+            if "provider" in data and data["provider"] != credential.provider:
+                raise InvalidInput("credential provider is immutable")
+            for key in ("name", "status"):
                 if key in data:
                     setattr(credential, key, data[key])
             if "secret" in data:
@@ -568,9 +571,14 @@ class MemoryStore:
         event = VCSWebhookEvent(**pick(data, VCSWebhookEvent))
         event.validate()
         with self._lock:
-            self._gitlab_profile(event.profile_id)
+            profile = self._gitlab_profile(event.profile_id)
+            credential = self._credential(profile.credential_ref_id)
+            authenticity_token = str(data.get("authenticity_token", ""))
+            if not authenticity_token or not self.secret_store.verify(credential.secret_ref, authenticity_token):
+                raise InvalidInput("webhook authenticity token is invalid")
             if event.repository_id:
                 self._gitlab_repository(event.profile_id, event.repository_id)
+            event.payload = redact_sensitive_payload(event.payload)
             event.id = self._id("whk")
             stamp(event)
             self.vcs_webhook_events[event.id] = event
@@ -1045,6 +1053,14 @@ class MemoryStore:
             return f"mr:{operation.source_branch}:{operation.target_branch}"
         return f"merge:{operation.external_id}"
 
+    def _new_storage_key(self) -> str:
+        return f"objects/{secrets.token_urlsafe(24)}"
+
+    def _public_file(self, file_object: FileObject) -> dict[str, Any]:
+        public = asdict(file_object)
+        public.pop("storage_key", None)
+        return public
+
     def _audit(self, actor_id: str, action: str, resource_type: str, resource_id: str, metadata: dict[str, Any]) -> None:
         event = AuditEvent(
             id=self._id("aud"),
@@ -1098,6 +1114,11 @@ class LocalSecretStore:
 
     def delete(self, secret_ref: str) -> None:
         self._vault.pop(secret_ref, None)
+
+    def verify(self, secret_ref: str, candidate: str) -> bool:
+        if secret_ref not in self._vault:
+            raise NotFound("secret reference not found")
+        return hmac.compare_digest(self._vault[secret_ref], candidate)
 
     def fingerprint(self, secret: str) -> str:
         digest = hmac.new(self._fingerprint_key, secret.encode("utf-8"), hashlib.sha256).hexdigest()
