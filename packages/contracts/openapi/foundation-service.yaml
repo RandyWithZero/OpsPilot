@@ -536,6 +536,9 @@ paths:
     get:
       summary: List credential references
       description: Returns credential references only. Secret material is never returned.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       responses:
         "200":
           description: Credential references
@@ -1362,6 +1365,9 @@ paths:
   /v1/audit-events:
     get:
       summary: List audit events, newest first
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
       responses:
         "200":
           description: Audit events
@@ -1387,7 +1393,7 @@ components:
       schema:
         type: string
         enum: [Admin, Operator, Viewer]
-      description: Local MVP role context. Admin may manage secrets, GitLab profiles, and destructive/archive actions; Operator may perform operational workflow/file/VCS actions; Viewer is read-only. Omitted locally defaults to Admin for development compatibility.
+      description: Local MVP role context. Admin may manage secrets, GitLab profiles, and destructive/archive actions; Operator may perform operational workflow/file/VCS actions; Viewer is read-only. Omitted locally is treated as Viewer; invalid roles have no permissions.
   responses:
     Conflict:
       description: Resource conflicts with an existing value.

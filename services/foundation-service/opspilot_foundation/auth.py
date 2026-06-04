@@ -44,7 +44,7 @@ def actor_from_headers(headers: Mapping[str, str]) -> ActorContext:
 def normalize_role(raw_role: str | None) -> str:
     role = str(raw_role or "").strip().lower()
     if not role:
-        return ROLE_ADMIN
+        return ROLE_VIEWER
     aliases = {
         "admin": ROLE_ADMIN,
         "administrator": ROLE_ADMIN,
@@ -72,13 +72,20 @@ def permission_for_request(method: str, path: str, body: dict[str, Any] | None =
     if method == "DELETE":
         return PERMISSION_ADMIN
     if method == "POST":
-        if path == "/v1/credentials" or path == "/v1/gitlab/profiles" or path == "/v1/model-providers":
+        if path == "/v1/credentials" or path == "/v1/gitlab/profiles" or path == "/v1/model-providers" or path == "/v1/users":
             return PERMISSION_ADMIN
         if path == "/v1/agents" or path == "/v1/skills":
             return PERMISSION_ADMIN
         return PERMISSION_OPERATE
     if method == "PATCH":
-        if path.startswith("/v1/credentials/") or path.startswith("/v1/gitlab/profiles/") or path.startswith("/v1/model-providers/"):
+        if (
+            path.startswith("/v1/credentials/")
+            or path.startswith("/v1/gitlab/profiles/")
+            or path.startswith("/v1/model-providers/")
+            or path.startswith("/v1/users/")
+            or path.startswith("/v1/agents/")
+            or path.startswith("/v1/skills/")
+        ):
             return PERMISSION_ADMIN
         if _is_archive_update(body):
             return PERMISSION_ADMIN
