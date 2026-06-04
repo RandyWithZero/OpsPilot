@@ -211,6 +211,43 @@ const result = vm.runInContext(`
   await updateWorkflowStep(run.id, resultStep.id + "|completed");
   run = state.workflowRuns.find((item) => item.id === run.id);
   if (run.status !== "completed" || !resultStep.output) throw new Error("offline workflow run did not roll up to completed with step output");
+  agentStep.output = {
+    api_key: "sk-output-api-key",
+    nested: {
+      authorization: "Bearer output-authorization-token",
+      token: "output-token-value",
+      secret: "output-secret-value",
+      password: "output-password-value",
+      cookie: "sessionid=output-cookie-value; csrftoken=output-csrf-value",
+      note: "authorization=Bearer inline-authorization-value token=inline-token-value secret=inline-secret-value password=inline-password-value Cookie: sessionid=inline-cookie-value; csrftoken=inline-csrf-value",
+    },
+  };
+  agentStep.error = "request failed api_key=error-api-key authorization=Bearer error-authorization-token token=error-token-value secret=error-secret-value password=error-password-value Cookie: sessionid=error-cookie-value; csrftoken=error-csrf-value";
+  const sensitiveTimelineHtml = workflowRunTimeline(run);
+  const forbiddenTimelineValues = [
+    "sk-output-api-key",
+    "output-authorization-token",
+    "output-token-value",
+    "output-secret-value",
+    "output-password-value",
+    "output-cookie-value",
+    "output-csrf-value",
+    "inline-authorization-value",
+    "inline-token-value",
+    "inline-secret-value",
+    "inline-password-value",
+    "inline-cookie-value",
+    "inline-csrf-value",
+    "error-api-key",
+    "error-authorization-token",
+    "error-token-value",
+    "error-secret-value",
+    "error-password-value",
+    "error-cookie-value",
+    "error-csrf-value",
+  ];
+  if (forbiddenTimelineValues.some((value) => sensitiveTimelineHtml.includes(value))) throw new Error("workflow timeline leaked sensitive output/error values");
+  if (!sensitiveTimelineHtml.includes("[REDACTED]")) throw new Error("workflow timeline did not show redacted markers for sensitive output/error");
 
   openWorkflowBuilder("wfl_mock_release");
   if (!content.innerHTML.includes("节点 Palette") || !content.innerHTML.includes("workflow-canvas") || !content.innerHTML.includes("移动端节点列表")) throw new Error("workflow builder shell missing MVP regions");

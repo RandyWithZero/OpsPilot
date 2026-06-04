@@ -1585,9 +1585,19 @@ function workflowStepCard(run, step) {
     </div>
     <p class="gate-copy ${gate.ready ? "ok" : "blocked"}">${gate.message}</p>
     ${workflowStepActions(run, step, gate)}
-    ${step.output && Object.keys(step.output).length ? `<h5>输出</h5>${jsonBlock(step.output)}` : ""}
-    ${step.error ? `<h5>错误</h5><pre class="json-block error-block">${escapeHtml(step.error)}</pre>` : ""}
+    ${workflowStepOutputBlock(step)}
+    ${workflowStepErrorBlock(step)}
   </article>`;
+}
+
+function workflowStepOutputBlock(step) {
+  const output = redactClientPayload(step.output || {});
+  return output && Object.keys(output).length ? `<h5>输出</h5>${jsonBlock(output)}` : "";
+}
+
+function workflowStepErrorBlock(step) {
+  const error = redactSensitiveString(step.error || "");
+  return error ? `<h5>错误</h5><pre class="json-block error-block">${escapeHtml(error)}</pre>` : "";
 }
 
 function workflowStepActions(run, step, gate) {
@@ -2707,7 +2717,15 @@ function redactClientPayload(value) {
       return [key, sensitive ? "[REDACTED]" : redactClientPayload(item)];
     }));
   }
-  return value;
+  return typeof value === "string" ? redactSensitiveString(value) : value;
+}
+
+function redactSensitiveString(value) {
+  return String(value || "")
+    .replace(/\b(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi, "$1[REDACTED]")
+    .replace(/\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?token|token|secret|password)\s*[:=]\s*)[^\s,;&]+/gi, "$1[REDACTED]")
+    .replace(/\b(cookie\s*[:=]\s*)[^\n]+/gi, "$1[REDACTED]")
+    .replace(/(\b(?:session|sid|csrf|xsrf|jwt|auth|token)[A-Za-z0-9_.-]*=)[^;\s]+/gi, "$1[REDACTED]");
 }
 
 function formatBytes(value) {
