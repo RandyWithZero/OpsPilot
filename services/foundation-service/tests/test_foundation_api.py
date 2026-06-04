@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from opspilot_foundation.store import MemoryStore  # noqa: E402
+from opspilot_foundation.server import FoundationHandler  # noqa: E402
 
 
 class FoundationSliceTest(unittest.TestCase):
@@ -64,6 +65,19 @@ class FoundationSliceTest(unittest.TestCase):
         encoded = json.dumps(user)
         self.assertIn("created_at", encoded)
         self.assertNotIn("createdAt", encoded)
+
+    def test_cors_headers_allow_web_console_development(self) -> None:
+        headers = []
+
+        class HandlerDouble:
+            def send_header(self, key: str, value: str) -> None:
+                headers.append((key, value))
+
+        FoundationHandler._cors_headers(HandlerDouble())  # type: ignore[arg-type]
+
+        self.assertIn(("Access-Control-Allow-Origin", "*"), headers)
+        self.assertIn(("Access-Control-Allow-Methods", "GET,POST,OPTIONS"), headers)
+        self.assertIn(("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID"), headers)
 
 
 if __name__ == "__main__":

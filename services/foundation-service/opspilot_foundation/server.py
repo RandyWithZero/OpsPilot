@@ -14,6 +14,11 @@ from .store import MemoryStore
 class FoundationHandler(BaseHTTPRequestHandler):
     store = MemoryStore()
 
+    def do_OPTIONS(self) -> None:
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self._cors_headers()
+        self.end_headers()
+
     def do_GET(self) -> None:
         routes: dict[str, Callable[[], Any]] = {
             "/healthz": self.store.health,
@@ -87,10 +92,16 @@ class FoundationHandler(BaseHTTPRequestHandler):
     def _json(self, payload: Any, status: int | HTTPStatus) -> None:
         data = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         self.send_response(int(status))
+        self._cors_headers()
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _cors_headers(self) -> None:
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID")
 
 
 class BadJSON(Exception):
