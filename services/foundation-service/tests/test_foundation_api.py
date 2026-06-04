@@ -979,7 +979,7 @@ class FoundationSliceTest(unittest.TestCase):
             },
         )
         report = self.store.create_report(
-            "usr_test_actor",
+            user["id"],
             {"project_id": project["id"], "title": "QA Smoke Report", "test_run_id": run["id"], "file_ids": [artifact["id"]], "summary": {"passed": 1}},
         )
         gate = self.store.create_quality_gate(
@@ -1009,8 +1009,11 @@ class FoundationSliceTest(unittest.TestCase):
             },
         )
         with self.assertRaises(Exception) as cross_project_file:
-            self.store.create_report("usr_test_actor", {"project_id": project["id"], "title": "Bad File Project", "file_ids": [other_project_artifact["id"]]})
+            self.store.create_report(user["id"], {"project_id": project["id"], "title": "Bad File Project", "file_ids": [other_project_artifact["id"]]})
         self.assertEqual(getattr(cross_project_file.exception, "code", ""), "conflict")
+
+        with self.assertRaises(PermissionDenied):
+            self.store.create_report("usr_project_outsider", {"project_id": project["id"], "title": "Outsider Report", "file_ids": [artifact["id"]]})
 
         other_owner_artifact = self.store.upload_file_object(
             "usr_test_actor",
@@ -1025,7 +1028,7 @@ class FoundationSliceTest(unittest.TestCase):
             },
         )
         with self.assertRaises(Exception) as cross_owner_file:
-            self.store.create_report("usr_test_actor", {"project_id": project["id"], "title": "Bad File Owner", "file_ids": [other_owner_artifact["id"]]})
+            self.store.create_report(user["id"], {"project_id": project["id"], "title": "Bad File Owner", "file_ids": [other_owner_artifact["id"]]})
         self.assertEqual(getattr(cross_owner_file.exception, "code", ""), "conflict")
 
         audit = json.dumps(self.store.list_audit_events())

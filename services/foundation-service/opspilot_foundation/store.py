@@ -1193,6 +1193,7 @@ class MemoryStore:
         report.validate()
         with self._lock:
             project = self._project(report.project_id)
+            self._require_project_actor(actor_id, project)
             run = None
             if report.test_run_id:
                 run = self._test_run(report.test_run_id)
@@ -1288,12 +1289,17 @@ class MemoryStore:
         if not project_id:
             raise InvalidInput("gitlab repository operations require project_id")
         project = self._project(project_id)
-        if actor_id not in unique([project.owner_id, *project.member_ids]):
-            raise PermissionDenied("actor is not a project member")
+        self._require_project_actor(actor_id, project)
         for binding in project.repository_bindings:
             if binding.get("provider") == "gitlab" and binding.get("profile_id") == profile_id and binding.get("repository_id") == repository_id:
                 return project
         raise Conflict("repository is not bound to project")
+
+    def _require_project_actor(self, actor_id: str, project: Project) -> None:
+        if not actor_id or actor_id == "system":
+            raise PermissionDenied("authenticated actor is required")
+        if actor_id not in unique([project.owner_id, *project.member_ids]):
+            raise PermissionDenied("actor is not a project member")
 
     def _agent(self, agent_id: str) -> Agent:
         if agent_id not in self.agents:
