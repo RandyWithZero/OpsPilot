@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: OpsPilot Foundation Service API
-  version: 0.2.0
-  description: Foundation APIs for identity, projects, inventory, files, credential references, GitLab profiles, repository bindings, and audit events.
+  version: 0.3.0
+  description: Foundation APIs for identity, projects, inventory, files, credential references, GitLab profiles, VCS operations, test/report records, and audit events.
 servers:
   - url: http://localhost:8080
 paths:
@@ -452,6 +452,46 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FileGrant"
+  /v1/files/{fileID}/upload-sessions:
+    post:
+      summary: Create a local upload session for a file object
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: fileID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Upload session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadSession"
+  /v1/files/upload-sessions/{sessionID}/complete:
+    post:
+      summary: Mark a local upload session complete
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: sessionID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadSessionComplete"
+      responses:
+        "200":
+          description: Completed upload session and updated file object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadSessionCompleteResponse"
   /v1/files/{fileID}/download-grants:
     post:
       summary: Create a local download grant for a file object
@@ -578,7 +618,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/GitLabProfileCreate"
+              $ref: "#/components/schemas/GitLabProfileUpdate"
       responses:
         "200":
           description: Updated GitLab profile
@@ -617,6 +657,64 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/GitLabRepository"
+  /v1/vcs/operations:
+    get:
+      summary: List local VCS operation records
+      responses:
+        "200":
+          description: VCS operations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VCSOperation"
+    post:
+      summary: Queue a GitLab VCS operation through the local adapter boundary
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VCSOperationCreate"
+      responses:
+        "201":
+          description: Created VCS operation record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VCSOperation"
+  /v1/vcs/webhook-events:
+    get:
+      summary: List received VCS webhook events
+      responses:
+        "200":
+          description: Webhook events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VCSWebhookEvent"
+    post:
+      summary: Record a GitLab webhook event
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VCSWebhookEventCreate"
+      responses:
+        "201":
+          description: Created webhook event record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VCSWebhookEvent"
   /v1/agents:
     get:
       summary: List agents
@@ -942,6 +1040,174 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkflowVersion"
+  /v1/test-cases:
+    get:
+      summary: List test cases
+      responses:
+        "200":
+          description: Test cases
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TestCase"
+    post:
+      summary: Create test case
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestCaseCreate"
+      responses:
+        "201":
+          description: Created test case
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestCase"
+  /v1/test-suites:
+    get:
+      summary: List test suites
+      responses:
+        "200":
+          description: Test suites
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TestSuite"
+    post:
+      summary: Create test suite
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestSuiteCreate"
+      responses:
+        "201":
+          description: Created test suite
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestSuite"
+  /v1/test-runs:
+    get:
+      summary: List test runs
+      responses:
+        "200":
+          description: Test runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TestRun"
+    post:
+      summary: Create test run
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestRunCreate"
+      responses:
+        "201":
+          description: Created test run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestRun"
+  /v1/test-runs/{runID}:
+    patch:
+      summary: Update test run status/results
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestRunUpdate"
+      responses:
+        "200":
+          description: Updated test run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestRun"
+  /v1/reports:
+    get:
+      summary: List reports
+      responses:
+        "200":
+          description: Reports
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Report"
+    post:
+      summary: Create report
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportCreate"
+      responses:
+        "201":
+          description: Created report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Report"
+  /v1/quality-gates:
+    get:
+      summary: List quality gates
+      responses:
+        "200":
+          description: Quality gates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QualityGate"
+    post:
+      summary: Create quality gate
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QualityGateCreate"
+      responses:
+        "201":
+          description: Created quality gate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QualityGate"
   /v1/audit-events:
     get:
       summary: List audit events, newest first
@@ -1171,14 +1437,14 @@ components:
       allOf:
         - $ref: "#/components/schemas/FileObjectCreate"
         - type: object
-          required: [id, storage_key, status, created_at, updated_at]
+          required: [id, status, created_at, updated_at]
           properties:
             id:
               type: string
-            storage_key:
-              type: string
             status:
               enum: [pending_upload, available, deleted]
+            checksum:
+              type: string
             created_at:
               type: string
               format: date-time
@@ -1197,6 +1463,44 @@ components:
           type: string
         expires_in_seconds:
           type: integer
+    UploadSession:
+      type: object
+      required: [id, file_id, method, status, url, expires_in_seconds, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        file_id:
+          type: string
+        method:
+          enum: [PUT]
+        status:
+          enum: [open, completed, cancelled]
+        url:
+          type: string
+        expires_in_seconds:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    UploadSessionComplete:
+      type: object
+      properties:
+        checksum:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 0
+    UploadSessionCompleteResponse:
+      type: object
+      required: [upload_session, file]
+      properties:
+        upload_session:
+          $ref: "#/components/schemas/UploadSession"
+        file:
+          $ref: "#/components/schemas/FileObject"
     CredentialCreate:
       type: object
       required: [provider, name, secret]
@@ -1213,8 +1517,6 @@ components:
     CredentialUpdate:
       type: object
       properties:
-        provider:
-          enum: [gitlab, model_provider]
         name:
           type: string
         secret:
@@ -1276,6 +1578,21 @@ components:
             $ref: "#/components/schemas/GitLabRepository"
         status:
           enum: [active, inactive]
+    GitLabProfileUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        base_url:
+          type: string
+        credential_ref_id:
+          type: string
+        repository_selection:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitLabRepository"
+        status:
+          enum: [active, inactive]
     GitLabProfile:
       allOf:
         - $ref: "#/components/schemas/GitLabProfileCreate"
@@ -1305,6 +1622,93 @@ components:
           description: Optional request field. The service infers and returns the selected repository path.
         web_url:
           type: string
+    VCSOperationCreate:
+      type: object
+      required: [provider, profile_id, repository_id, operation_type]
+      properties:
+        provider:
+          enum: [gitlab]
+        profile_id:
+          type: string
+        repository_id:
+          type: string
+        operation_type:
+          enum: [create_branch, open_merge_request, merge_merge_request]
+        branch:
+          type: string
+        source_branch:
+          type: string
+        target_branch:
+          type: string
+        title:
+          type: string
+        external_id:
+          type: string
+    VCSOperation:
+      allOf:
+        - $ref: "#/components/schemas/VCSOperationCreate"
+        - type: object
+          required: [id, status, result, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            status:
+              enum: [queued, completed, failed]
+            result:
+              type: object
+              additionalProperties: true
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    VCSWebhookEventCreate:
+      type: object
+      required: [provider, profile_id, event_type, authenticity_token]
+      properties:
+        provider:
+          enum: [gitlab]
+        profile_id:
+          type: string
+        repository_id:
+          type: string
+        event_type:
+          type: string
+        authenticity_token:
+          type: string
+          writeOnly: true
+          description: GitLab webhook token checked against the profile credential; never stored or returned.
+        payload:
+          type: object
+          description: Payload is recursively redacted before persistence or response.
+          additionalProperties: true
+    VCSWebhookEvent:
+      type: object
+      required: [id, provider, profile_id, event_type, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        provider:
+          enum: [gitlab]
+        profile_id:
+          type: string
+        repository_id:
+          type: string
+        event_type:
+          type: string
+        payload:
+          type: object
+          description: Redacted payload summary retained after authenticity validation.
+          additionalProperties: true
+        status:
+          enum: [received, processed, rejected]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     AgentCreate:
       type: object
       required: [name, kind]
@@ -1490,6 +1894,174 @@ components:
             id:
               type: string
             workflow_id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    TestCaseCreate:
+      type: object
+      required: [project_id, name]
+      properties:
+        project_id:
+          type: string
+        name:
+          type: string
+        case_type:
+          enum: [manual, automated]
+        priority:
+          enum: [low, medium, high, critical]
+        status:
+          enum: [active, inactive, deprecated]
+        steps:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    TestCase:
+      allOf:
+        - $ref: "#/components/schemas/TestCaseCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    TestSuiteCreate:
+      type: object
+      required: [project_id, name]
+      properties:
+        project_id:
+          type: string
+        name:
+          type: string
+        case_ids:
+          type: array
+          items:
+            type: string
+        status:
+          enum: [active, inactive, archived]
+    TestSuite:
+      allOf:
+        - $ref: "#/components/schemas/TestSuiteCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    TestRunCreate:
+      type: object
+      required: [project_id, suite_id]
+      properties:
+        project_id:
+          type: string
+        suite_id:
+          type: string
+        environment_id:
+          type: string
+        status:
+          enum: [queued, running, passed, failed, cancelled]
+        results:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    TestRunUpdate:
+      type: object
+      properties:
+        status:
+          enum: [queued, running, passed, failed, cancelled]
+        results:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    TestRun:
+      allOf:
+        - $ref: "#/components/schemas/TestRunCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    ReportCreate:
+      type: object
+      required: [project_id, title]
+      properties:
+        project_id:
+          type: string
+        title:
+          type: string
+        report_type:
+          enum: [test, qa, qe, operations]
+        test_run_id:
+          type: string
+        file_ids:
+          type: array
+          items:
+            type: string
+        summary:
+          type: object
+          additionalProperties: true
+        status:
+          enum: [draft, published, archived]
+    Report:
+      allOf:
+        - $ref: "#/components/schemas/ReportCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    QualityGateCreate:
+      type: object
+      required: [project_id, name]
+      properties:
+        project_id:
+          type: string
+        name:
+          type: string
+        conditions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        last_report_id:
+          type: string
+        status:
+          enum: [pending, passed, failed, waived]
+    QualityGate:
+      allOf:
+        - $ref: "#/components/schemas/QualityGateCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
               type: string
             created_at:
               type: string

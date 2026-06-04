@@ -117,8 +117,52 @@ class FoundationSliceTest(unittest.TestCase):
 
         self.assertEqual(upload["method"], "PUT")
         self.assertEqual(download["method"], "GET")
-        self.assertIn(file_object["storage_key"], upload["url"])
-        self.assertIn(file_object["storage_key"], download["url"])
+        self.assertNotIn("storage_key", file_object)
+        self.assertTrue(upload["url"].startswith("local://uploads/objects/"))
+        self.assertTrue(download["url"].startswith("local://downloads/objects/"))
+        self.assertNotIn("report.txt", upload["url"])
+        self.assertNotIn("report.txt", download["url"])
+
+    def test_file_upload_session_completion_marks_file_available(self) -> None:
+        file_object = self.store.create_file_object(
+            "usr_test_actor",
+            {"filename": "run.log", "content_type": "text/plain", "size_bytes": 0, "owner_id": "usr_external"},
+        )
+
+        session = self.store.create_upload_session("usr_test_actor", file_object["id"])
+        completed = self.store.complete_upload_session(
+            "usr_test_actor",
+            session["id"],
+            {"checksum": "sha256:abc123", "size_bytes": 64},
+        )
+        download = self.store.create_download_grant("usr_test_actor", file_object["id"])
+
+        self.assertEqual(session["status"], "open")
+        self.assertEqual(completed["upload_session"]["status"], "completed")
+        self.assertEqual(completed["file"]["status"], "available")
+        self.assertEqual(completed["file"]["checksum"], "sha256:abc123")
+        self.assertEqual(completed["file"]["size_bytes"], 64)
+        self.assertEqual(download["method"], "GET")
+
+        with self.assertRaises(Exception) as raised:
+            self.store.complete_upload_session("usr_test_actor", session["id"], {})
+        self.assertEqual(getattr(raised.exception, "code", ""), "conflict")
+
+    def test_file_storage_key_is_server_generated_and_filename_is_sanitized(self) -> None:
+        file_object = self.store.create_file_object(
+            "usr_test_actor",
+            {"filename": "safe-name.txt", "content_type": "text/plain", "size_bytes": 1, "storage_key": "../../secrets.txt"},
+        )
+        download = self.store.create_download_grant("usr_test_actor", file_object["id"])
+
+        self.assertNotIn("storage_key", file_object)
+        self.assertNotIn("../../secrets.txt", json.dumps({"file": file_object, "grant": download, "files": self.store.list_file_objects()}))
+        self.assertNotIn("safe-name.txt", download["url"])
+
+        for unsafe_filename in ("../secrets.txt", "/tmp/secret.txt", "nested\\secret.txt", "bad\nname.txt"):
+            with self.assertRaises(Exception) as raised:
+                self.store.create_file_object("usr_test_actor", {"filename": unsafe_filename, "content_type": "text/plain", "size_bytes": 1})
+            self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
 
     def test_credentials_store_secret_references_without_response_secret_leakage(self) -> None:
         credential = self.store.create_credential(
@@ -137,6 +181,18 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertNotIn("rotated-secret-value", json.dumps(updated))
         self.assertNotIn("rotated-secret-value", json.dumps(self.store.list_audit_events()))
         self.assertNotIn("secret_fingerprint", json.dumps(self.store.list_audit_events()))
+
+    def test_credential_provider_is_immutable_after_create(self) -> None:
+        credential = self.store.create_credential(
+            "usr_test_actor",
+            {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"},
+        )
+        self.store.create_gitlab_profile("usr_test_actor", {"name": "Primary GitLab", "base_url": "https://gitlab.example.com", "credential_ref_id": credential["id"]})
+
+        with self.assertRaises(Exception) as raised:
+            self.store.update_credential("usr_test_actor", credential["id"], {"provider": "model_provider"})
+        self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+        self.assertEqual(self.store.list_credentials()[0]["provider"], "gitlab")
 
     def test_secret_fingerprint_uses_store_local_hmac_key(self) -> None:
         first = MemoryStore().create_credential("usr_test_actor", {"provider": "gitlab", "name": "GitLab Ops", "secret": "same-secret"})
@@ -239,6 +295,64 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertEqual(linked["repository_bindings"][0]["web_url"], "https://gitlab.example.com/platform/opspilot")
         self.assertNotIn("glpat-token", serialized)
         self.assertNotIn("oauth2", serialized)
+
+    def test_gitlab_vcs_operations_and_webhook_events_use_selected_repository(self) -> None:
+        credential = self.store.create_credential(
+            "usr_test_actor",
+            {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"},
+        )
+        profile = self.store.create_gitlab_profile(
+            "usr_test_actor",
+            {
+                "name": "Primary GitLab",
+                "base_url": "https://gitlab.example.com",
+                "credential_ref_id": credential["id"],
+                "repository_selection": [{"id": "100", "path": "platform/opspilot", "name": "OpsPilot"}],
+            },
+        )
+
+        operation = self.store.create_vcs_operation(
+            "usr_test_actor",
+            {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100", "operation_type": "create_branch", "branch": "feature/report-api"},
+        )
+        webhook = self.store.ingest_vcs_webhook_event(
+            "usr_test_actor",
+            {
+                "provider": "gitlab",
+                "profile_id": profile["id"],
+                "repository_id": "100",
+                "event_type": "merge_request",
+                "authenticity_token": "glpat-secret-value",
+                "payload": {"iid": 12, "token": "leaked", "nested": {"private_token": "nested-leak", "private_key": "private-key-should-redact", "safe": "value"}},
+            },
+        )
+
+        self.assertEqual(operation["status"], "completed")
+        self.assertEqual(operation["result"]["repository_path"], "platform/opspilot")
+        self.assertEqual(webhook["status"], "received")
+        self.assertEqual(webhook["payload"]["token"], "[REDACTED]")
+        self.assertEqual(webhook["payload"]["nested"]["private_token"], "[REDACTED]")
+        self.assertEqual(webhook["payload"]["nested"]["private_key"], "[REDACTED]")
+        self.assertEqual(webhook["payload"]["nested"]["safe"], "value")
+        serialized = json.dumps({"operations": self.store.list_vcs_operations(), "webhooks": self.store.list_vcs_webhook_events(), "audit": self.store.list_audit_events()})
+        self.assertIn("vcs.operation.created", serialized)
+        self.assertNotIn("glpat-secret-value", serialized)
+        self.assertNotIn("leaked", serialized)
+        self.assertNotIn("private-key-should-redact", serialized)
+
+        with self.assertRaises(Exception) as raised:
+            self.store.create_vcs_operation(
+                "usr_test_actor",
+                {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "missing", "operation_type": "create_branch", "branch": "bad"},
+            )
+        self.assertEqual(getattr(raised.exception, "code", ""), "not_found")
+
+        with self.assertRaises(Exception) as webhook_error:
+            self.store.ingest_vcs_webhook_event(
+                "usr_test_actor",
+                {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100", "event_type": "merge_request", "authenticity_token": "wrong"},
+            )
+        self.assertEqual(getattr(webhook_error.exception, "code", ""), "invalid_input")
 
     def test_agent_skill_model_provider_and_workflow_slice(self) -> None:
         credential = self.store.create_credential(
@@ -359,6 +473,46 @@ class FoundationSliceTest(unittest.TestCase):
                 },
             )
         self.assertEqual(getattr(provider_policy_error.exception, "code", ""), "conflict")
+
+    def test_test_report_quality_gate_slice_validates_project_boundaries(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        other_project = self.store.create_project("usr_test_actor", {"key": "OTHER", "name": "Other Platform", "owner_id": user["id"]})
+        environment = self.store.create_environment(
+            "usr_test_actor",
+            {"project_id": project["id"], "name": "QA Lab", "type": "QA", "owner_id": user["id"]},
+        )
+        artifact = self.store.create_file_object("usr_test_actor", {"filename": "qa-report.md", "content_type": "text/markdown", "size_bytes": 128})
+
+        test_case = self.store.create_test_case(
+            "usr_test_actor",
+            {"project_id": project["id"], "name": "Login smoke", "case_type": "automated", "steps": [{"action": "open", "expected": "login form"}]},
+        )
+        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Smoke", "case_ids": [test_case["id"], test_case["id"]]})
+        run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"], "environment_id": environment["id"]})
+        updated_run = self.store.update_test_run("usr_test_actor", run["id"], {"status": "passed", "results": [{"case_id": test_case["id"], "status": "passed"}]})
+        report = self.store.create_report(
+            "usr_test_actor",
+            {"project_id": project["id"], "title": "QA Smoke Report", "test_run_id": run["id"], "file_ids": [artifact["id"]], "summary": {"passed": 1}},
+        )
+        gate = self.store.create_quality_gate(
+            "usr_test_actor",
+            {"project_id": project["id"], "name": "Smoke Gate", "last_report_id": report["id"], "status": "passed", "conditions": [{"metric": "failed", "equals": 0}]},
+        )
+
+        self.assertEqual(suite["case_ids"], [test_case["id"]])
+        self.assertEqual(updated_run["status"], "passed")
+        self.assertEqual(report["file_ids"], [artifact["id"]])
+        self.assertEqual(gate["status"], "passed")
+
+        with self.assertRaises(Exception) as raised:
+            self.store.create_test_suite("usr_test_actor", {"project_id": other_project["id"], "name": "Bad Suite", "case_ids": [test_case["id"]]})
+        self.assertEqual(getattr(raised.exception, "code", ""), "conflict")
+
+        audit = json.dumps(self.store.list_audit_events())
+        self.assertIn("test_run.updated", audit)
+        self.assertIn("report.created", audit)
+        self.assertIn("quality_gate.created", audit)
 
 
 if __name__ == "__main__":
