@@ -18,6 +18,7 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 - agent registry and skill catalog metadata
 - model provider configuration through safe credential references
 - workflow definitions with versioned node/edge models
+- workflow run execution records with ordered step runs and manual status transitions
 - test cases, suites, runs, reports, and quality gates
 - audit events for create/link actions
 

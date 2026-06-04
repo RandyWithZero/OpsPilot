@@ -35,6 +35,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/skills": self.store.list_skills,
             "/v1/model-providers": self.store.list_model_providers,
             "/v1/workflows": self.store.list_workflows,
+            "/v1/workflow-runs": self.store.list_workflow_runs,
             "/v1/test-cases": self.store.list_test_cases,
             "/v1/test-suites": self.store.list_test_suites,
             "/v1/test-runs": self.store.list_test_runs,
@@ -49,6 +50,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
             self._call(lambda: self.store.list_workflow_versions(parts[2]))
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "runs":
+            self._call(lambda: self.store.list_workflow_runs(parts[2]))
             return
         if path in routes:
             self._call(routes[path])
@@ -144,6 +148,12 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
             self._call(lambda: self.store.create_workflow_version(actor_id, parts[2], body), HTTPStatus.CREATED)
             return
+        if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "runs":
+            self._call(lambda: self.store.create_workflow_run(actor_id, parts[2], body), HTTPStatus.CREATED)
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "workflow-runs"] and parts[3] == "start":
+            self._call(lambda: self.store.start_workflow_run(actor_id, parts[2]))
+            return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
 
@@ -192,6 +202,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 3 and parts[:2] == ["v1", "test-runs"]:
             self._call(lambda: self.store.update_test_run(actor_id, parts[2], body))
+            return
+        if len(parts) == 5 and parts[:2] == ["v1", "workflow-runs"] and parts[3] == "steps":
+            self._call(lambda: self.store.update_workflow_step_run(actor_id, parts[2], parts[4], body))
             return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)

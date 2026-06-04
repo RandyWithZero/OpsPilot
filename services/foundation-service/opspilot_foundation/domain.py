@@ -359,6 +359,60 @@ class WorkflowVersion:
 
 
 @dataclass
+class WorkflowRun:
+    workflow_id: str
+    workflow_version_id: str
+    trigger_type: str = "manual"
+    status: str = "created"
+    id: str = ""
+    started_at: str = ""
+    completed_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.workflow_id or not self.workflow_version_id:
+            raise InvalidInput("workflow runs require workflow_id and workflow_version_id")
+        if self.trigger_type not in {"manual"}:
+            raise InvalidInput("workflow run trigger_type must be manual")
+        if self.status not in {"created", "running", "completed", "failed", "cancelled"}:
+            raise InvalidInput("workflow run status must be created, running, completed, failed, or cancelled")
+
+
+@dataclass
+class WorkflowStepRun:
+    workflow_run_id: str
+    workflow_id: str
+    workflow_version_id: str
+    node_id: str
+    node_type: str
+    step_type: str
+    sequence: int
+    name: str = ""
+    status: str = "pending"
+    agent_id: str = ""
+    skill_id: str = ""
+    model_provider_id: str = ""
+    predecessor_node_ids: list[str] = field(default_factory=list)
+    input: dict[str, Any] = field(default_factory=dict)
+    output: dict[str, Any] = field(default_factory=dict)
+    error: str = ""
+    id: str = ""
+    started_at: str = ""
+    completed_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.workflow_run_id or not self.workflow_id or not self.workflow_version_id or not self.node_id or not self.node_type:
+            raise InvalidInput("workflow step runs require run, workflow, version, node_id, and node_type")
+        if self.step_type not in {"trigger", "agent", "manual", "result"}:
+            raise InvalidInput("workflow step run step_type must be trigger, agent, manual, or result")
+        if self.status not in {"pending", "running", "completed", "failed", "skipped"}:
+            raise InvalidInput("workflow step run status must be pending, running, completed, failed, or skipped")
+
+
+@dataclass
 class TestCase:
     project_id: str
     name: str
