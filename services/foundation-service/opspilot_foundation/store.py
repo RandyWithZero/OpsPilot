@@ -841,6 +841,7 @@ class MemoryStore:
             run.id = self._id("wfr")
             stamp(run)
             self.workflow_runs[run.id] = run
+            predecessors_by_node_id = self._workflow_predecessor_snapshot(version)
             for sequence, node in enumerate(ordered_nodes, start=1):
                 step = WorkflowStepRun(
                     workflow_run_id=run.id,
@@ -854,6 +855,7 @@ class MemoryStore:
                     agent_id=str(node.get("agent_id", "")),
                     skill_id=str(node.get("skill_id", "")),
                     model_provider_id=str(node.get("model_provider_id", "")),
+                    predecessor_node_ids=predecessors_by_node_id[str(node["id"])],
                     input=dict(node.get("config", {})) if isinstance(node.get("config", {}), dict) else {},
                 )
                 step.validate()
@@ -1170,7 +1172,7 @@ class MemoryStore:
     def _ordered_workflow_nodes(self, version: WorkflowVersion) -> list[dict[str, Any]]:
         nodes = [dict(node) for node in version.nodes]
         node_by_id = {str(node["id"]): node for node in nodes}
-        edges = [(str(edge["from_node_id"]), str(edge["to_node_id"])) for edge in version.edges]
+        edges = self._workflow_edge_pairs(version)
         incoming: dict[str, int] = {node_id: 0 for node_id in node_by_id}
         outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_by_id}
         for from_node_id, to_node_id in edges:
@@ -1188,6 +1190,15 @@ class MemoryStore:
         if len(ordered_ids) != len(nodes):
             raise InvalidInput("workflow version edges must not contain cycles")
         return [node_by_id[node_id] for node_id in ordered_ids]
+
+    def _workflow_edge_pairs(self, version: WorkflowVersion) -> list[tuple[str, str]]:
+        return [(str(edge["from_node_id"]), str(edge["to_node_id"])) for edge in version.edges]
+
+    def _workflow_predecessor_snapshot(self, version: WorkflowVersion) -> dict[str, list[str]]:
+        predecessors = {str(node["id"]): [] for node in version.nodes}
+        for from_node_id, to_node_id in self._workflow_edge_pairs(version):
+            predecessors[to_node_id].append(from_node_id)
+        return predecessors
 
     def _workflow_step_type(self, node_type: str) -> str:
         if node_type == "trigger":
@@ -1214,12 +1225,10 @@ class MemoryStore:
             raise Conflict("workflow step cannot transition from current status")
 
     def _validate_step_predecessors(self, run: WorkflowRun, step: WorkflowStepRun) -> None:
-        version = self._workflow_version(run.workflow_version_id)
-        predecessor_node_ids = {str(edge["from_node_id"]) for edge in version.edges if str(edge["to_node_id"]) == step.node_id}
-        if not predecessor_node_ids:
+        if not step.predecessor_node_ids:
             return
         steps_by_node_id = {candidate.node_id: candidate for candidate in self._steps_for_run(run.id)}
-        for predecessor_node_id in predecessor_node_ids:
+        for predecessor_node_id in step.predecessor_node_ids:
             predecessor = steps_by_node_id.get(predecessor_node_id)
             if predecessor is None:
                 raise Conflict("workflow step predecessor is missing")

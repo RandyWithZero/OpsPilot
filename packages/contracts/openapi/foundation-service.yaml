@@ -2023,7 +2023,7 @@ components:
           type: string
     WorkflowStepRun:
       type: object
-      required: [id, workflow_run_id, workflow_id, workflow_version_id, node_id, node_type, step_type, sequence, status, created_at, updated_at]
+      required: [id, workflow_run_id, workflow_id, workflow_version_id, node_id, node_type, step_type, sequence, predecessor_node_ids, status, created_at, updated_at]
       properties:
         id:
           type: string
@@ -2051,6 +2051,11 @@ components:
           type: string
         model_provider_id:
           type: string
+        predecessor_node_ids:
+          type: array
+          description: Immutable predecessor node IDs snapshotted from workflow version edges when the run is created.
+          items:
+            type: string
         input:
           type: object
           additionalProperties: true

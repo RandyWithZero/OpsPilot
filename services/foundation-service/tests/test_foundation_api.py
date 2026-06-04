@@ -504,6 +504,7 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertEqual(run["status"], "created")
         self.assertEqual([step["node_id"] for step in run["steps"]], ["start", "deploy", "approve", "done"])
         self.assertEqual([step["step_type"] for step in run["steps"]], ["trigger", "agent", "manual", "result"])
+        self.assertEqual(next(step for step in run["steps"] if step["node_id"] == "done")["predecessor_node_ids"], ["approve"])
 
         started = self.store.start_workflow_run("usr_test_actor", run["id"])
         self.assertEqual(started["status"], "running")
@@ -520,10 +521,23 @@ class FoundationSliceTest(unittest.TestCase):
             self.store.update_workflow_step_run("usr_test_actor", run["id"], manual_step["id"], {"status": "skipped"})
         self.assertEqual(getattr(skipped_gate.exception, "code", ""), "invalid_input")
 
+        self.store.update_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            version["id"],
+            {
+                "edges": [
+                    {"from_node_id": "start", "to_node_id": "deploy"},
+                    {"from_node_id": "deploy", "to_node_id": "done"},
+                    {"from_node_id": "done", "to_node_id": "approve"},
+                ],
+            },
+        )
         with self.assertRaises(Exception) as downstream_bypass:
             self.store.update_workflow_step_run("usr_test_actor", run["id"], result_step["id"], {"status": "completed", "output": {"summary": "bypassed"}})
         self.assertEqual(getattr(downstream_bypass.exception, "code", ""), "conflict")
         self.assertEqual(self.store.list_workflow_runs(workflow["id"])[0]["status"], "running")
+        self.assertEqual(next(step for step in self.store.list_workflow_runs(workflow["id"])[0]["steps"] if step["node_id"] == "done")["predecessor_node_ids"], ["approve"])
 
         self.store.update_workflow_step_run("usr_test_actor", run["id"], manual_step["id"], {"status": "completed", "output": {"approved_by": "qa"}})
         completed = self.store.update_workflow_step_run("usr_test_actor", run["id"], result_step["id"], {"status": "completed", "output": {"summary": "ok"}})

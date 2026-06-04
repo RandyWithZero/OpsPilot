@@ -393,6 +393,7 @@ class WorkflowStepRun:
     agent_id: str = ""
     skill_id: str = ""
     model_provider_id: str = ""
+    predecessor_node_ids: list[str] = field(default_factory=list)
     input: dict[str, Any] = field(default_factory=dict)
     output: dict[str, Any] = field(default_factory=dict)
     error: str = ""
