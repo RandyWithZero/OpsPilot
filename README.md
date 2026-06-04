@@ -10,9 +10,14 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 - projects and project membership
 - assets with categories, capabilities, and parent asset references
 - DEV/QA/QE environments with project, member, asset, and endpoint bindings
+- file metadata with local upload/download grant stubs
+- credential references with redacted secret handling
+- GitLab API profiles, repository listing stubs, and project-to-repository bindings
 - audit events for create/link actions
 
 API contracts are kept in `packages/contracts/openapi/foundation-service.yaml`.
+
+Secrets are accepted only on credential create/rotate requests. API responses return opaque credential references and HMAC fingerprints, while audit events omit raw secrets and fingerprints. GitLab URLs are canonicalized and token-bearing userinfo/query/fragment values are rejected before storage.
 
 ## Local Development
 

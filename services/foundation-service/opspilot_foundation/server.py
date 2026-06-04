@@ -26,13 +26,20 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/projects": self.store.list_projects,
             "/v1/assets": self.store.list_assets,
             "/v1/environments": self.store.list_environments,
+            "/v1/files": self.store.list_file_objects,
+            "/v1/credentials": self.store.list_credentials,
+            "/v1/gitlab/profiles": self.store.list_gitlab_profiles,
             "/v1/audit-events": self.store.list_audit_events,
         }
         path = urlparse(self.path).path
-        if path not in routes:
-            self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
+        parts = [part for part in path.split("/") if part]
+        if len(parts) == 5 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories":
+            self._call(lambda: self.store.list_gitlab_repositories(parts[3]))
             return
-        self._call(routes[path])
+        if path in routes:
+            self._call(routes[path])
+            return
+        self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
@@ -55,13 +62,31 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if path == "/v1/environments":
             self._call(lambda: self.store.create_environment(actor_id, body), HTTPStatus.CREATED)
             return
+        if path == "/v1/files":
+            self._call(lambda: self.store.create_file_object(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/credentials":
+            self._call(lambda: self.store.create_credential(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/gitlab/profiles":
+            self._call(lambda: self.store.create_gitlab_profile(actor_id, body), HTTPStatus.CREATED)
+            return
 
         parts = [part for part in path.split("/") if part]
+        if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "upload-grants":
+            self._call(lambda: self.store.create_upload_grant(actor_id, parts[2]), HTTPStatus.CREATED)
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "download-grants":
+            self._call(lambda: self.store.create_download_grant(actor_id, parts[2]), HTTPStatus.CREATED)
+            return
         if len(parts) == 5 and parts[:2] == ["v1", "projects"] and parts[3] == "assets":
             self._call(lambda: self.store.link_project_asset(actor_id, parts[2], parts[4]))
             return
         if len(parts) == 5 and parts[:2] == ["v1", "projects"] and parts[3] == "environments":
             self._call(lambda: self.store.link_project_environment(actor_id, parts[2], parts[4]))
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "projects"] and parts[3] == "repositories":
+            self._call(lambda: self.store.link_project_repository(actor_id, parts[2], body))
             return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
@@ -88,6 +113,12 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if len(parts) == 3 and parts[:2] == ["v1", "environments"]:
             self._call(lambda: self.store.update_environment(actor_id, parts[2], body))
             return
+        if len(parts) == 3 and parts[:2] == ["v1", "credentials"]:
+            self._call(lambda: self.store.update_credential(actor_id, parts[2], body))
+            return
+        if len(parts) == 4 and parts[:3] == ["v1", "gitlab", "profiles"]:
+            self._call(lambda: self.store.update_gitlab_profile(actor_id, parts[3], body))
+            return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
 
@@ -108,11 +139,20 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if len(parts) == 3 and parts[:2] == ["v1", "environments"]:
             self._call(lambda: self.store.delete_environment(actor_id, parts[2]))
             return
+        if len(parts) == 3 and parts[:2] == ["v1", "credentials"]:
+            self._call(lambda: self.store.delete_credential(actor_id, parts[2]))
+            return
+        if len(parts) == 4 and parts[:3] == ["v1", "gitlab", "profiles"]:
+            self._call(lambda: self.store.delete_gitlab_profile(actor_id, parts[3]))
+            return
         if len(parts) == 5 and parts[:2] == ["v1", "projects"] and parts[3] == "assets":
             self._call(lambda: self.store.unlink_project_asset(actor_id, parts[2], parts[4]))
             return
         if len(parts) == 5 and parts[:2] == ["v1", "projects"] and parts[3] == "environments":
             self._call(lambda: self.store.unlink_project_environment(actor_id, parts[2], parts[4]))
+            return
+        if len(parts) == 6 and parts[:2] == ["v1", "projects"] and parts[3] == "repositories":
+            self._call(lambda: self.store.unlink_project_repository(actor_id, parts[2], parts[4], parts[5]))
             return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)

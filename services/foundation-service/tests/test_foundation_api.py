@@ -106,6 +106,140 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertIn(("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS"), headers)
         self.assertIn(("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID"), headers)
 
+    def test_file_grants_are_metadata_only(self) -> None:
+        file_object = self.store.create_file_object(
+            "usr_test_actor",
+            {"filename": "report.txt", "content_type": "text/plain", "size_bytes": 1024, "owner_id": "usr_external"},
+        )
+
+        upload = self.store.create_upload_grant("usr_test_actor", file_object["id"])
+        download = self.store.create_download_grant("usr_test_actor", file_object["id"])
+
+        self.assertEqual(upload["method"], "PUT")
+        self.assertEqual(download["method"], "GET")
+        self.assertIn(file_object["storage_key"], upload["url"])
+        self.assertIn(file_object["storage_key"], download["url"])
+
+    def test_credentials_store_secret_references_without_response_secret_leakage(self) -> None:
+        credential = self.store.create_credential(
+            "usr_test_actor",
+            {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"},
+        )
+
+        encoded = json.dumps(credential)
+        self.assertNotIn("glpat-secret-value", encoded)
+        self.assertIn("secret_ref", credential)
+        self.assertIn("secret_fingerprint", credential)
+        self.assertTrue(credential["secret_ref"].startswith("sec_"))
+
+        updated = self.store.update_credential("usr_test_actor", credential["id"], {"secret": "rotated-secret-value"})
+        self.assertNotEqual(updated["secret_fingerprint"], credential["secret_fingerprint"])
+        self.assertNotIn("rotated-secret-value", json.dumps(updated))
+        self.assertNotIn("rotated-secret-value", json.dumps(self.store.list_audit_events()))
+        self.assertNotIn("secret_fingerprint", json.dumps(self.store.list_audit_events()))
+
+    def test_secret_fingerprint_uses_store_local_hmac_key(self) -> None:
+        first = MemoryStore().create_credential("usr_test_actor", {"provider": "gitlab", "name": "GitLab Ops", "secret": "same-secret"})
+        second = MemoryStore().create_credential("usr_test_actor", {"provider": "gitlab", "name": "GitLab Ops", "secret": "same-secret"})
+
+        self.assertNotEqual(first["secret_fingerprint"], second["secret_fingerprint"])
+
+    def test_gitlab_profile_repositories_and_project_binding(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        credential = self.store.create_credential(
+            "usr_test_actor",
+            {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"},
+        )
+        profile = self.store.create_gitlab_profile(
+            "usr_test_actor",
+            {
+                "name": "Primary GitLab",
+                "base_url": "https://gitlab.example.com",
+                "credential_ref_id": credential["id"],
+                "repository_selection": [
+                    {"id": "100", "path": "platform/opspilot", "name": "OpsPilot", "web_url": "https://gitlab.example.com/platform/opspilot"}
+                ],
+            },
+        )
+
+        repositories = self.store.list_gitlab_repositories(profile["id"])
+        self.assertEqual(repositories[0]["path"], "platform/opspilot")
+
+        linked = self.store.link_project_repository(
+            "usr_test_actor",
+            project["id"],
+            {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100"},
+        )
+        self.assertEqual(linked["repository_bindings"][0]["repository_id"], "100")
+        self.assertEqual(linked["repository_bindings"][0]["path"], "platform/opspilot")
+
+        unlinked = self.store.unlink_project_repository("usr_test_actor", project["id"], profile["id"], "100")
+        self.assertEqual(unlinked["repository_bindings"], [])
+
+    def test_gitlab_token_bearing_urls_are_rejected_before_audit_or_response(self) -> None:
+        credential = self.store.create_credential(
+            "usr_test_actor",
+            {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"},
+        )
+
+        with self.assertRaises(Exception) as raised:
+            self.store.create_gitlab_profile(
+                "usr_test_actor",
+                {"name": "Unsafe GitLab", "base_url": "https://oauth2:glpat-token@gitlab.example.com", "credential_ref_id": credential["id"]},
+            )
+        self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+        self.assertNotIn("glpat-token", json.dumps(self.store.list_audit_events()))
+        self.assertEqual(self.store.list_gitlab_profiles(), [])
+
+    def test_gitlab_repository_urls_are_sanitized_and_binding_ignores_client_web_url(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        credential = self.store.create_credential(
+            "usr_test_actor",
+            {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"},
+        )
+
+        with self.assertRaises(Exception) as raised:
+            self.store.create_gitlab_profile(
+                "usr_test_actor",
+                {
+                    "name": "Unsafe Repo Selection",
+                    "base_url": "https://gitlab.example.com",
+                    "credential_ref_id": credential["id"],
+                    "repository_selection": [{"id": "100", "path": "platform/opspilot", "web_url": "https://gitlab.example.com/platform/opspilot?private_token=glpat-token"}],
+                },
+            )
+        self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+
+        profile = self.store.create_gitlab_profile(
+            "usr_test_actor",
+            {
+                "name": "Primary GitLab",
+                "base_url": "https://gitlab.example.com?utm_source=setup",
+                "credential_ref_id": credential["id"],
+                "repository_selection": [{"id": "100", "path": "platform/opspilot", "web_url": "https://gitlab.example.com/platform/opspilot?tab=readme"}],
+            },
+        )
+        self.assertEqual(profile["base_url"], "https://gitlab.example.com")
+        self.assertEqual(profile["repository_selection"][0]["web_url"], "https://gitlab.example.com/platform/opspilot")
+
+        linked = self.store.link_project_repository(
+            "usr_test_actor",
+            project["id"],
+            {
+                "provider": "gitlab",
+                "profile_id": profile["id"],
+                "repository_id": "100",
+                "path": "platform/opspilot",
+                "web_url": "https://oauth2:glpat-token@gitlab.example.com/platform/opspilot",
+            },
+        )
+        serialized = json.dumps({"projects": self.store.list_projects(), "repositories": self.store.list_gitlab_repositories(profile["id"]), "audit": self.store.list_audit_events()})
+        self.assertEqual(linked["repository_bindings"][0]["web_url"], "https://gitlab.example.com/platform/opspilot")
+        self.assertNotIn("glpat-token", serialized)
+        self.assertNotIn("oauth2", serialized)
+
 
 if __name__ == "__main__":
     unittest.main()
