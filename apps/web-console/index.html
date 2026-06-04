@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpsPilot Console</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="login" class="login-screen">
+      <section class="login-panel" aria-labelledby="login-title">
+        <div>
+          <p class="eyebrow">OpsPilot Foundation</p>
+          <h1 id="login-title">Operations console</h1>
+          <p class="login-copy">Sign in to manage the first identity, project, asset, and environment inventory slice.</p>
+        </div>
+        <form id="login-form" class="form-stack">
+          <label>
+            Operator email
+            <input id="login-email" type="email" value="admin@opspilot.local" required />
+          </label>
+          <button type="submit">Enter console</button>
+        </form>
+      </section>
+    </div>
+
+    <div id="app" class="app-shell hidden">
+      <aside class="sidebar" aria-label="Primary">
+        <div class="brand-block">
+          <span class="mark">OP</span>
+          <div>
+            <strong>OpsPilot</strong>
+            <small>Foundation console</small>
+          </div>
+        </div>
+        <nav id="nav" class="nav-list"></nav>
+        <div class="sidebar-footer">
+          <span class="status-dot"></span>
+          <span id="api-state">Checking API</span>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="search-wrap">
+            <span aria-hidden="true">⌕</span>
+            <input id="global-search" type="search" placeholder="Search projects, assets, environments, users" />
+          </div>
+          <select id="project-switcher" aria-label="Project switcher"></select>
+          <button id="refresh" class="icon-button" title="Refresh data" aria-label="Refresh data">↻</button>
+          <button id="sign-out" class="ghost-button">Sign out</button>
+        </header>
+
+        <section id="content" class="content" tabindex="-1"></section>
+      </main>
+    </div>
+
+    <dialog id="modal">
+      <div class="modal-shell">
+        <header>
+          <h2 id="modal-title"></h2>
+          <button id="modal-close" class="icon-button" type="button" aria-label="Close">×</button>
+        </header>
+        <div id="modal-body"></div>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js"></script>
+  </body>
+</html>
