@@ -6,6 +6,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import urlparse
+from urllib.parse import parse_qs
 
 from .domain import DomainError
 from .store import MemoryStore
@@ -26,7 +27,6 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/projects": self.store.list_projects,
             "/v1/assets": self.store.list_assets,
             "/v1/environments": self.store.list_environments,
-            "/v1/files": self.store.list_file_objects,
             "/v1/credentials": self.store.list_credentials,
             "/v1/gitlab/profiles": self.store.list_gitlab_profiles,
             "/v1/vcs/operations": self.store.list_vcs_operations,
@@ -42,8 +42,16 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/quality-gates": self.store.list_quality_gates,
             "/v1/audit-events": self.store.list_audit_events,
         }
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = self._query_filters(parsed.query)
         parts = [part for part in path.split("/") if part]
+        if path == "/v1/files":
+            self._call(lambda: self.store.list_file_objects(query))
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "download":
+            self._call(lambda: self.store.download_file_object(self.headers.get("X-Actor-ID", ""), parts[2], query))
+            return
         if len(parts) == 5 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories":
             self._call(lambda: self.store.list_gitlab_repositories(parts[3]))
             return
@@ -78,6 +86,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if path == "/v1/files":
             self._call(lambda: self.store.create_file_object(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/files/upload":
+            self._call(lambda: self.store.upload_file_object(actor_id, body), HTTPStatus.CREATED)
             return
         if path == "/v1/credentials":
             self._call(lambda: self.store.create_credential(actor_id, body), HTTPStatus.CREATED)
@@ -216,6 +227,10 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if len(parts) == 3 and parts[:2] == ["v1", "credentials"]:
             self._call(lambda: self.store.delete_credential(actor_id, parts[2]))
             return
+        if len(parts) == 3 and parts[:2] == ["v1", "files"]:
+            query = self._query_filters(urlparse(self.path).query)
+            self._call(lambda: self.store.delete_file_object(actor_id, parts[2], query))
+            return
         if len(parts) == 4 and parts[:3] == ["v1", "gitlab", "profiles"]:
             self._call(lambda: self.store.delete_gitlab_profile(actor_id, parts[3]))
             return
@@ -281,6 +296,13 @@ class FoundationHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID")
+
+    def _query_filters(self, query: str) -> dict[str, str]:
+        filters: dict[str, str] = {}
+        for key, values in parse_qs(query, keep_blank_values=False).items():
+            if values:
+                filters[key] = values[-1]
+        return filters
 
 
 class BadJSON(Exception):

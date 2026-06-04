@@ -409,6 +409,27 @@ paths:
   /v1/files:
     get:
       summary: List file metadata objects
+      parameters:
+        - name: owner_id
+          in: query
+          schema:
+            type: string
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+        - name: resource_id
+          in: query
+          schema:
+            type: string
+        - name: module
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            enum: [pending_upload, available, deleted]
       responses:
         "200":
           description: File objects
@@ -435,6 +456,53 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FileObject"
+  /v1/files/upload:
+    post:
+      summary: Upload a file through the configured storage adapter
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileUpload"
+      responses:
+        "201":
+          description: Uploaded file object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileObject"
+  /v1/files/{fileID}:
+    delete:
+      summary: Soft-delete a file object and remove its stored object when present
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: fileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: owner_id
+          in: query
+          schema:
+            type: string
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+        - name: resource_id
+          in: query
+          schema:
+            type: string
+        - name: module
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted file object
   /v1/files/{fileID}/upload-grants:
     post:
       summary: Create a local upload grant for a file object
@@ -509,6 +577,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FileGrant"
+  /v1/files/{fileID}/download:
+    get:
+      summary: Download a file through a controlled response
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: fileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: owner_id
+          in: query
+          schema:
+            type: string
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+        - name: resource_id
+          in: query
+          schema:
+            type: string
+        - name: module
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Download payload with public metadata and base64 content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileDownload"
   /v1/credentials:
     get:
       summary: List credential references
@@ -1433,6 +1534,31 @@ components:
           minimum: 0
         owner_id:
           type: string
+        resource_type:
+          type: string
+        resource_id:
+          type: string
+        module:
+          type: string
+    FileUpload:
+      type: object
+      required: [filename, content_type, content_base64]
+      properties:
+        filename:
+          type: string
+        content_type:
+          type: string
+        owner_id:
+          type: string
+        resource_type:
+          type: string
+        resource_id:
+          type: string
+        module:
+          type: string
+        content_base64:
+          type: string
+          description: Base64 encoded file bytes for the local MVP upload path. The service calculates size_bytes and checksum.
     FileObject:
       allOf:
         - $ref: "#/components/schemas/FileObjectCreate"
@@ -1451,6 +1577,19 @@ components:
             updated_at:
               type: string
               format: date-time
+            deleted_at:
+              type: string
+              format: date-time
+            deleted_by:
+              type: string
+    FileDownload:
+      type: object
+      required: [file, content_base64]
+      properties:
+        file:
+          $ref: "#/components/schemas/FileObject"
+        content_base64:
+          type: string
     FileGrant:
       type: object
       required: [file_id, method, url, expires_in_seconds]

@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import base64
 from dataclasses import asdict
 from threading import RLock
 from typing import Any, TypeVar
@@ -38,12 +39,13 @@ from .domain import (
     redact_sensitive_payload,
     sanitize_public_url,
 )
+from .storage import ObjectStorage, storage_from_env
 
 T = TypeVar("T")
 
 
 class MemoryStore:
-    def __init__(self) -> None:
+    def __init__(self, storage: ObjectStorage | None = None) -> None:
         self._lock = RLock()
         self._ids = 0
         self.users: dict[str, User] = {}
@@ -67,6 +69,8 @@ class MemoryStore:
         self.reports: dict[str, Report] = {}
         self.quality_gates: dict[str, QualityGate] = {}
         self.secret_store = LocalSecretStore()
+        self.storage = storage or storage_from_env()
+        self.storage.ensure_bucket()
         self.audit_events: list[AuditEvent] = []
 
     def health(self) -> dict[str, str]:
@@ -365,12 +369,57 @@ class MemoryStore:
             file_object.storage_key = self._new_storage_key()
             stamp(file_object)
             self.files[file_object.id] = file_object
-            self._audit(actor_id, "file.created", "file", file_object.id, {"filename": file_object.filename, "size_bytes": file_object.size_bytes})
+            self._audit(actor_id, "file.created", "file", file_object.id, self._file_audit_metadata(file_object))
             return self._public_file(file_object)
 
-    def list_file_objects(self) -> list[dict[str, Any]]:
+    def upload_file_object(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        content = self._decode_file_content(data)
+        payload = {**data, "size_bytes": len(content)}
+        file_object = FileObject(**pick(payload, FileObject))
+        file_object.status = "available"
+        file_object.checksum = f"sha256:{hashlib.sha256(content).hexdigest()}"
+        file_object.validate()
         with self._lock:
-            return [self._public_file(file_object) for file_object in self.files.values()]
+            file_object.id = self._id("fil")
+            file_object.storage_key = self._new_storage_key()
+            stamp(file_object)
+            self.storage.put(file_object.storage_key, content)
+            self.files[file_object.id] = file_object
+            self._audit(actor_id, "file.uploaded", "file", file_object.id, self._file_audit_metadata(file_object))
+            return self._public_file(file_object)
+
+    def list_file_objects(self, filters: dict[str, str] | None = None) -> list[dict[str, Any]]:
+        filters = filters or {}
+        with self._lock:
+            return [self._public_file(file_object) for file_object in self.files.values() if self._matches_file_filters(file_object, filters)]
+
+    def download_file_object(self, actor_id: str, file_id: str, filters: dict[str, str] | None = None) -> dict[str, Any]:
+        with self._lock:
+            file_object = self._file(file_id)
+            if file_object.status != "available":
+                raise NotFound("file is not available")
+            if not self._matches_file_filters(file_object, filters or {}):
+                raise NotFound("file not found")
+            content = self.storage.get(file_object.storage_key)
+            self._audit(actor_id, "file.downloaded", "file", file_object.id, self._file_audit_metadata(file_object))
+            return {
+                "file": self._public_file(file_object),
+                "content_base64": base64.b64encode(content).decode("ascii"),
+            }
+
+    def delete_file_object(self, actor_id: str, file_id: str, filters: dict[str, str] | None = None) -> dict[str, str]:
+        with self._lock:
+            file_object = self._file(file_id)
+            if not self._matches_file_filters(file_object, filters or {}):
+                raise NotFound("file not found")
+            if file_object.status != "deleted":
+                self.storage.delete(file_object.storage_key)
+                file_object.status = "deleted"
+                file_object.deleted_at = now_utc()
+                file_object.deleted_by = actor_id or "system"
+                file_object.updated_at = file_object.deleted_at
+                self._audit(actor_id, "file.deleted", "file", file_object.id, self._file_audit_metadata(file_object))
+            return {"status": "deleted"}
 
     def create_upload_grant(self, actor_id: str, file_id: str) -> dict[str, Any]:
         with self._lock:
@@ -1060,6 +1109,35 @@ class MemoryStore:
         public = asdict(file_object)
         public.pop("storage_key", None)
         return public
+
+    def _decode_file_content(self, data: dict[str, Any]) -> bytes:
+        encoded = data.get("content_base64")
+        if not isinstance(encoded, str) or not encoded:
+            raise InvalidInput("file upload requires content_base64")
+        try:
+            return base64.b64decode(encoded.encode("ascii"), validate=True)
+        except (ValueError, UnicodeEncodeError) as exc:
+            raise InvalidInput("content_base64 is invalid") from exc
+
+    def _matches_file_filters(self, file_object: FileObject, filters: dict[str, str]) -> bool:
+        allowed = {"owner_id", "resource_type", "resource_id", "module", "status"}
+        unknown = set(filters) - allowed
+        if unknown:
+            raise InvalidInput("unsupported file filter")
+        for key, expected in filters.items():
+            if str(getattr(file_object, key)) != str(expected):
+                return False
+        return True
+
+    def _file_audit_metadata(self, file_object: FileObject) -> dict[str, Any]:
+        return {
+            "owner_id": file_object.owner_id,
+            "resource_type": file_object.resource_type,
+            "resource_id": file_object.resource_id,
+            "module": file_object.module,
+            "size_bytes": file_object.size_bytes,
+            "storage_provider": self.storage.provider,
+        }
 
     def _audit(self, actor_id: str, action: str, resource_type: str, resource_id: str, metadata: dict[str, Any]) -> None:
         event = AuditEvent(

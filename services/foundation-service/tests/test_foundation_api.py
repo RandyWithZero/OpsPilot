@@ -1,5 +1,7 @@
 import json
+import base64
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -8,11 +10,16 @@ sys.path.insert(0, str(ROOT))
 
 from opspilot_foundation.store import MemoryStore  # noqa: E402
 from opspilot_foundation.server import FoundationHandler  # noqa: E402
+from opspilot_foundation.storage import LocalFileStorage, S3CompatibleStorage  # noqa: E402
 
 
 class FoundationSliceTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.store = MemoryStore()
+        self.storage_dir = tempfile.TemporaryDirectory()
+        self.store = MemoryStore(storage=LocalFileStorage(self.storage_dir.name))
+
+    def tearDown(self) -> None:
+        self.storage_dir.cleanup()
 
     def test_create_and_link_inventory_slice(self) -> None:
         user = self.store.create_user(
@@ -163,6 +170,75 @@ class FoundationSliceTest(unittest.TestCase):
             with self.assertRaises(Exception) as raised:
                 self.store.create_file_object("usr_test_actor", {"filename": unsafe_filename, "content_type": "text/plain", "size_bytes": 1})
             self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+
+    def test_file_upload_download_list_delete_and_audit(self) -> None:
+        uploaded = self.store.upload_file_object(
+            "usr_test_actor",
+            {
+                "owner_id": "usr_owner",
+                "resource_type": "test_run",
+                "resource_id": "trn_001",
+                "module": "qa",
+                "filename": "result.txt",
+                "content_type": "text/plain",
+                "content_base64": base64.b64encode(b"passed").decode("ascii"),
+            },
+        )
+
+        self.assertEqual(uploaded["status"], "available")
+        self.assertEqual(uploaded["size_bytes"], 6)
+        self.assertIn("checksum", uploaded)
+        self.assertNotIn("storage_key", uploaded)
+
+        listed = self.store.list_file_objects({"owner_id": "usr_owner", "resource_type": "test_run", "resource_id": "trn_001", "module": "qa"})
+        self.assertEqual([file_object["id"] for file_object in listed], [uploaded["id"]])
+        self.assertEqual(self.store.list_file_objects({"module": "ops"}), [])
+
+        downloaded = self.store.download_file_object("usr_test_actor", uploaded["id"], {"owner_id": "usr_owner"})
+        self.assertEqual(base64.b64decode(downloaded["content_base64"]), b"passed")
+        self.assertEqual(downloaded["file"]["filename"], "result.txt")
+
+        deleted = self.store.delete_file_object("usr_test_actor", uploaded["id"], {"owner_id": "usr_owner"})
+        self.assertEqual(deleted["status"], "deleted")
+        self.assertEqual(self.store.list_file_objects({"status": "deleted"})[0]["deleted_by"], "usr_test_actor")
+        with self.assertRaises(Exception) as raised:
+            self.store.download_file_object("usr_test_actor", uploaded["id"], {"owner_id": "usr_owner"})
+        self.assertEqual(getattr(raised.exception, "code", ""), "not_found")
+
+        actions = [event["action"] for event in self.store.list_audit_events()]
+        self.assertIn("file.uploaded", actions)
+        self.assertIn("file.downloaded", actions)
+        self.assertIn("file.deleted", actions)
+
+    def test_file_scoped_access_filters_reject_other_owner(self) -> None:
+        uploaded = self.store.upload_file_object(
+            "usr_test_actor",
+            {
+                "owner_id": "usr_owner",
+                "resource_type": "project",
+                "resource_id": "prj_001",
+                "module": "reports",
+                "filename": "report.txt",
+                "content_type": "text/plain",
+                "content_base64": base64.b64encode(b"private").decode("ascii"),
+            },
+        )
+
+        with self.assertRaises(Exception) as raised:
+            self.store.download_file_object("usr_test_actor", uploaded["id"], {"owner_id": "usr_other"})
+        self.assertEqual(getattr(raised.exception, "code", ""), "not_found")
+
+        with self.assertRaises(Exception) as delete_error:
+            self.store.delete_file_object("usr_test_actor", uploaded["id"], {"owner_id": "usr_other"})
+        self.assertEqual(getattr(delete_error.exception, "code", ""), "not_found")
+
+    def test_s3_compatible_storage_requires_bucket_and_defers_client_calls(self) -> None:
+        storage = S3CompatibleStorage()
+        storage.bucket = "opspilot-files"
+        storage.ensure_bucket()
+        self.assertEqual(storage.provider, "s3")
+        with self.assertRaises(NotImplementedError):
+            storage.put("objects/example", b"content")
 
     def test_credentials_store_secret_references_without_response_secret_leakage(self) -> None:
         credential = self.store.create_credential(
