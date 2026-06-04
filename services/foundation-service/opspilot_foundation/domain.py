@@ -180,6 +180,8 @@ class GitLabProfile:
     base_url: str
     credential_ref_id: str
     repository_selection: list[dict[str, str]] = field(default_factory=list)
+    repository_synced_at: str = ""
+    webhook_secret_ref: str = ""
     id: str = ""
     status: str = "active"
     created_at: str = ""
@@ -196,8 +198,6 @@ class RepositoryBinding:
     provider: str
     profile_id: str
     repository_id: str
-    path: str = ""
-    web_url: str = ""
 
     def validate(self) -> None:
         if not self.provider or not self.profile_id or not self.repository_id:
@@ -226,7 +226,7 @@ class VCSOperation:
             raise InvalidInput("only gitlab VCS operations are supported")
         if not self.profile_id or not self.repository_id or not self.operation_type:
             raise InvalidInput("VCS operations require profile_id, repository_id, and operation_type")
-        if self.operation_type not in {"create_branch", "open_merge_request", "merge_merge_request"}:
+        if self.operation_type not in {"create_branch", "open_merge_request", "merge_merge_request", "read_branches", "read_merge_request"}:
             raise InvalidInput("unsupported VCS operation_type")
         if self.status not in {"queued", "completed", "failed"}:
             raise InvalidInput("VCS operation status must be queued, completed, or failed")

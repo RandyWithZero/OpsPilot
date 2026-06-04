@@ -2057,7 +2057,7 @@ function formFor(type, row, mode) {
   if (type === "identity") return `<form class="form-grid"><label>姓名<input name="name" value="${escapeAttr(row.name)}" required /></label><label>邮箱<input name="email" type="email" value="${escapeAttr(row.email)}" required /></label><label>角色<select name="role">${selectedOptions(["Admin", "Operator", "Viewer"], row.roles?.[0]?.name || "Admin")}</select></label><label>范围<select name="scope">${selectedOptions(["platform", "project"], row.roles?.[0]?.scope || "platform")}</select></label><button class="primary-button full" type="submit">${submit}</button></form>`;
   if (type === "projects") return `<form class="form-grid"><label>项目编号<input name="key" value="${escapeAttr(row.key)}" required /></label><label>项目名称<input name="name" value="${escapeAttr(row.name)}" required /></label><label>负责人<select name="owner_id" required>${userOptions}</select></label><label>状态<select name="status">${selectedOptions(["active", "archived"], row.status || "active")}</select></label><label class="full">说明<textarea name="description">${escapeHtml(row.description || "")}</textarea></label><button class="primary-button full" type="submit">${submit}</button></form>`;
   if (type === "assets") return `<form class="form-grid"><label>资产名称<input name="name" value="${escapeAttr(row.name)}" required /></label><label>类别<select name="category">${selectedOptions(["server", "workstation", "vm", "gpu", "memory"], row.category || "server")}</select></label><label>状态<select name="status">${selectedOptions(["available", "in_use", "maintenance", "retired"], row.status || "available")}</select></label><label>负责人<select name="owner_id"><option value="">未分配</option>${userOptions}</select></label><label>父级资产<select name="parent_id">${assetOptions}</select></label><label>位置<input name="location" value="${escapeAttr(row.location)}" /></label><label class="full">能力标签<input name="capabilities" value="${escapeAttr((row.capabilities || []).join(", "))}" placeholder="cuda, linux, test-runner" /></label><button class="primary-button full" type="submit">${submit}</button></form>`;
-  if (type === "gitlabProfiles") return `<form class="form-grid"><label>Profile 名称<input name="name" value="${escapeAttr(row.name)}" required /></label><label>Base URL<input name="base_url" value="${escapeAttr(row.base_url || "https://gitlab.example.com")}" required /></label><label>Credential Ref<select name="credential_ref_id">${gitlabCredentialOptions}</select></label><label>状态<select name="status">${selectedOptions(["active", "inactive"], row.status || "active")}</select></label><label class="full">GitLab Token ${mode === "create" ? "（未选择凭据时必填）" : "（编辑时不轮换）"}<input name="gitlab_secret" type="password" ${mode === "create" ? "" : "disabled"} placeholder="只提交到凭据 API，不在前端回显" /></label><label class="full">仓库选择<textarea name="repository_selection" placeholder="每行：id,path,name,web_url">${escapeHtml(repositoryLines(row.repository_selection || []))}</textarea></label><button class="primary-button full" type="submit">${submit}</button></form>`;
+  if (type === "gitlabProfiles") return `<form class="form-grid"><label>Profile 名称<input name="name" value="${escapeAttr(row.name)}" required /></label><label>Base URL<input name="base_url" value="${escapeAttr(row.base_url || "https://gitlab.example.com")}" required /></label><label>Credential Ref<select name="credential_ref_id">${gitlabCredentialOptions}</select></label><label>状态<select name="status">${selectedOptions(["active", "inactive"], row.status || "active")}</select></label><label class="full">GitLab Token ${mode === "create" ? "（未选择凭据时必填）" : "（编辑时不轮换）"}<input name="gitlab_secret" type="password" ${mode === "create" ? "" : "disabled"} placeholder="只提交到凭据 API，不在前端回显" /></label><label class="full">Webhook Secret<input name="webhook_secret" type="password" placeholder="单独用于 GitLab Webhook X-Gitlab-Token 验证" /></label><button class="primary-button full" type="submit">${submit}</button></form>`;
   if (type === "vcsOperations") return `<form class="form-grid"><label>Profile<select name="profile_id" required>${gitlabProfileOptions}</select></label><label>Repository ID<input name="repository_id" value="${escapeAttr(row.repository_id || firstRepositoryId())}" required /></label><label>操作<select name="operation_type">${selectedOptions(["create_branch", "open_merge_request", "merge_merge_request"], row.operation_type || "create_branch")}</select></label><label>分支<input name="branch" value="${escapeAttr(row.branch || "feature/operator-check")}" /></label><label>Source<input name="source_branch" value="${escapeAttr(row.source_branch || "feature/operator-check")}" /></label><label>Target<input name="target_branch" value="${escapeAttr(row.target_branch || "main")}" /></label><label class="full">MR 标题<input name="title" value="${escapeAttr(row.title || "前端控制台集成验证")}" /></label><label class="full">External ID<input name="external_id" value="${escapeAttr(row.external_id)}" placeholder="合并操作时填写 MR IID" /></label><button class="primary-button full" type="submit">${submit}</button></form>`;
   if (type === "vcsWebhooks") return `<form class="form-grid"><label>Profile<select name="profile_id" required>${gitlabProfileOptions}</select></label><label>Repository ID<input name="repository_id" value="${escapeAttr(row.repository_id || firstRepositoryId())}" /></label><label>事件类型<input name="event_type" value="${escapeAttr(row.event_type || "Pipeline Hook")}" required /></label><label>Authenticity Token<input name="authenticity_token" type="password" ${mode === "create" ? "required" : "disabled"} placeholder="只提交验证，不保存" /></label><label class="full">Payload JSON<textarea name="payload">${escapeHtml(JSON.stringify(row.payload || { status: "success", ref: "main" }))}</textarea></label><button class="primary-button full" type="submit">${submit}</button></form>`;
   if (type === "files") return `<form class="form-grid"><label>文件名<input name="filename" value="${escapeAttr(row.filename)}" required /></label><label>Content-Type<input name="content_type" value="${escapeAttr(row.content_type || "application/pdf")}" required /></label><label>大小 Bytes<input name="size_bytes" type="number" min="0" value="${escapeAttr(row.size_bytes || 0)}" required /></label><label>Owner<select name="owner_id"><option value="">系统</option>${userOptions}</select></label><button class="primary-button full" type="submit">${submit}</button></form>`;
@@ -2134,9 +2134,10 @@ function payloadFromForm(form, type) {
   }
   if (type === "gitlabProfiles") {
     payload.base_url = sanitizePublicUrl(payload.base_url, { allowPath: false });
-    payload.repository_selection = repositorySelection(payload.repository_selection);
+    delete payload.repository_selection;
     if (!payload.credential_ref_id) delete payload.credential_ref_id;
     if (!payload.gitlab_secret) delete payload.gitlab_secret;
+    if (!payload.webhook_secret) delete payload.webhook_secret;
   }
   if (type === "vcsOperations") {
     payload.provider = "gitlab";
@@ -2194,7 +2195,13 @@ async function createGitLabProfile(payload) {
     }
   }
   if (state.apiOnline) await apiRequest("POST", endpoints.gitlabProfiles, profilePayload);
-  else applyLocal("gitlabProfiles", null, () => addLocal("gitlabProfiles", profilePayload));
+  else {
+    if (profilePayload.webhook_secret) {
+      profilePayload.webhook_secret_ref = `sec_local_webhook_${Date.now()}`;
+      delete profilePayload.webhook_secret;
+    }
+    applyLocal("gitlabProfiles", null, () => addLocal("gitlabProfiles", profilePayload));
+  }
 }
 
 async function handleStatus(type, id) {
@@ -3036,7 +3043,8 @@ function sanitizeGitLabProfile(profile = {}, options = {}) {
 function sanitizeGitLabRepositoryMap(repositoryMap = {}) {
   return Object.fromEntries(Object.entries(repositoryMap).map(([profileId, repositories]) => {
     const profile = state.gitlabProfiles.find((item) => item.id === profileId);
-    return [profileId, (repositories || []).map((repository) => sanitizeGitLabRepository(repository, profile?.base_url || "")).filter(Boolean)];
+    const items = Array.isArray(repositories) ? repositories : repositories?.items || [];
+    return [profileId, items.map((repository) => sanitizeGitLabRepository(repository, profile?.base_url || "")).filter(Boolean)];
   }));
 }
 
