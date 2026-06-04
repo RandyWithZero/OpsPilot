@@ -617,6 +617,331 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/GitLabRepository"
+  /v1/agents:
+    get:
+      summary: List agents
+      responses:
+        "200":
+          description: Agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Agent"
+    post:
+      summary: Create agent
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentCreate"
+      responses:
+        "201":
+          description: Created agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+  /v1/agents/{agentID}:
+    patch:
+      summary: Update agent
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: agentID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentCreate"
+      responses:
+        "200":
+          description: Updated agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+    delete:
+      summary: Delete agent
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: agentID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted agent
+  /v1/skills:
+    get:
+      summary: List skills
+      responses:
+        "200":
+          description: Skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Skill"
+    post:
+      summary: Create skill
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillCreate"
+      responses:
+        "201":
+          description: Created skill
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Skill"
+  /v1/skills/{skillID}:
+    patch:
+      summary: Update skill
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: skillID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillCreate"
+      responses:
+        "200":
+          description: Updated skill
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Skill"
+    delete:
+      summary: Delete skill
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: skillID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted skill
+  /v1/model-providers:
+    get:
+      summary: List model providers
+      responses:
+        "200":
+          description: Model providers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ModelProvider"
+    post:
+      summary: Create model provider
+      description: Uses a safe credential reference. Raw model API keys are created through /v1/credentials and are never returned here.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelProviderCreate"
+      responses:
+        "201":
+          description: Created model provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelProvider"
+  /v1/model-providers/{providerID}:
+    patch:
+      summary: Update model provider
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: providerID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelProviderCreate"
+      responses:
+        "200":
+          description: Updated model provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelProvider"
+    delete:
+      summary: Delete model provider
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: providerID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted model provider
+  /v1/workflows:
+    get:
+      summary: List workflow definitions
+      responses:
+        "200":
+          description: Workflows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkflowDefinition"
+    post:
+      summary: Create workflow definition
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowDefinitionCreate"
+      responses:
+        "201":
+          description: Created workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowDefinition"
+  /v1/workflows/{workflowID}:
+    patch:
+      summary: Update workflow definition
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowDefinitionCreate"
+      responses:
+        "200":
+          description: Updated workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowDefinition"
+    delete:
+      summary: Delete workflow definition
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted workflow
+  /v1/workflows/{workflowID}/versions:
+    get:
+      summary: List workflow versions
+      parameters:
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workflow versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkflowVersion"
+    post:
+      summary: Create workflow version
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowVersionCreate"
+      responses:
+        "201":
+          description: Created workflow version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowVersion"
+  /v1/workflows/{workflowID}/versions/{versionID}:
+    patch:
+      summary: Update workflow version
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: versionID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowVersionCreate"
+      responses:
+        "200":
+          description: Updated workflow version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowVersion"
   /v1/audit-events:
     get:
       summary: List audit events, newest first
@@ -980,6 +1305,198 @@ components:
           description: Optional request field. The service infers and returns the selected repository path.
         web_url:
           type: string
+    AgentCreate:
+      type: object
+      required: [name, kind]
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+        description:
+          type: string
+        status:
+          enum: [active, inactive]
+        capabilities:
+          type: array
+          items:
+            type: string
+        skill_ids:
+          type: array
+          items:
+            type: string
+        model_provider_id:
+          type: string
+    Agent:
+      allOf:
+        - $ref: "#/components/schemas/AgentCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    SkillCreate:
+      type: object
+      required: [name, version, runtime]
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        runtime:
+          type: string
+        description:
+          type: string
+        status:
+          enum: [active, deprecated]
+        capabilities:
+          type: array
+          items:
+            type: string
+        package_file_id:
+          type: string
+    Skill:
+      allOf:
+        - $ref: "#/components/schemas/SkillCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    ModelProviderCreate:
+      type: object
+      required: [provider, name, credential_ref_id]
+      properties:
+        provider:
+          type: string
+        name:
+          type: string
+        credential_ref_id:
+          type: string
+          description: Safe credential reference created with provider=model_provider.
+        base_url:
+          type: string
+        models:
+          type: array
+          items:
+            type: string
+        status:
+          enum: [active, inactive]
+    ModelProvider:
+      allOf:
+        - $ref: "#/components/schemas/ModelProviderCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    WorkflowDefinitionCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        project_id:
+          type: string
+        status:
+          enum: [draft, active, archived]
+        active_version_id:
+          type: string
+    WorkflowDefinition:
+      allOf:
+        - $ref: "#/components/schemas/WorkflowDefinitionCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    WorkflowNode:
+      type: object
+      required: [id, type]
+      properties:
+        id:
+          type: string
+        type:
+          enum: [trigger, agent_task, skill_task, approval, notification]
+        name:
+          type: string
+        agent_id:
+          type: string
+        skill_id:
+          type: string
+        model_provider_id:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+    WorkflowEdge:
+      type: object
+      required: [from_node_id, to_node_id]
+      properties:
+        from_node_id:
+          type: string
+        to_node_id:
+          type: string
+        condition:
+          type: string
+    WorkflowVersionCreate:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: string
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowEdge"
+        status:
+          enum: [draft, active, deprecated]
+    WorkflowVersion:
+      allOf:
+        - $ref: "#/components/schemas/WorkflowVersionCreate"
+        - type: object
+          required: [id, workflow_id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            workflow_id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
     AuditEvent:
       type: object
       required: [id, actor_id, action, resource_type, resource_id, occurred_at]

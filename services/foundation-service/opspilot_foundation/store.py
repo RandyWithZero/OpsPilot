@@ -9,6 +9,7 @@ from threading import RLock
 from typing import Any, TypeVar
 
 from .domain import (
+    Agent,
     Asset,
     AuditEvent,
     Conflict,
@@ -17,10 +18,14 @@ from .domain import (
     FileObject,
     GitLabProfile,
     InvalidInput,
+    ModelProvider,
     NotFound,
     Project,
     RepositoryBinding,
+    Skill,
     User,
+    WorkflowDefinition,
+    WorkflowVersion,
     now_utc,
     sanitize_public_url,
 )
@@ -39,6 +44,11 @@ class MemoryStore:
         self.files: dict[str, FileObject] = {}
         self.credentials: dict[str, CredentialReference] = {}
         self.gitlab_profiles: dict[str, GitLabProfile] = {}
+        self.agents: dict[str, Agent] = {}
+        self.skills: dict[str, Skill] = {}
+        self.model_providers: dict[str, ModelProvider] = {}
+        self.workflows: dict[str, WorkflowDefinition] = {}
+        self.workflow_versions: dict[str, WorkflowVersion] = {}
         self.secret_store = LocalSecretStore()
         self.audit_events: list[AuditEvent] = []
 
@@ -480,6 +490,226 @@ class MemoryStore:
             profile.base_url,
         )
 
+    def create_agent(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        agent = Agent(**pick(data, Agent))
+        agent.validate()
+        with self._lock:
+            self._validate_agent_refs(agent)
+            if any(existing.name.lower() == agent.name.lower() for existing in self.agents.values()):
+                raise Conflict("agent name already exists")
+            agent.id = self._id("agt")
+            agent.capabilities = unique(agent.capabilities)
+            agent.skill_ids = unique(agent.skill_ids)
+            stamp(agent)
+            self.agents[agent.id] = agent
+            self._audit(actor_id, "agent.created", "agent", agent.id, {"kind": agent.kind})
+            return asdict(agent)
+
+    def list_agents(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(agent) for agent in self.agents.values()]
+
+    def update_agent(self, actor_id: str, agent_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            agent = self._agent(agent_id)
+            if "name" in data and any(existing.id != agent_id and existing.name.lower() == str(data["name"]).lower() for existing in self.agents.values()):
+                raise Conflict("agent name already exists")
+            for key in ("name", "kind", "description", "status", "capabilities", "skill_ids", "model_provider_id"):
+                if key in data:
+                    setattr(agent, key, data[key])
+            agent.capabilities = unique(agent.capabilities)
+            agent.skill_ids = unique(agent.skill_ids)
+            self._validate_agent_refs(agent)
+            agent.validate()
+            agent.updated_at = now_utc()
+            self._audit(actor_id, "agent.updated", "agent", agent.id, {"status": agent.status})
+            return asdict(agent)
+
+    def delete_agent(self, actor_id: str, agent_id: str) -> dict[str, str]:
+        with self._lock:
+            agent = self.agents.pop(agent_id, None)
+            if agent is None:
+                raise NotFound("agent not found")
+            self._audit(actor_id, "agent.deleted", "agent", agent_id, {"name": agent.name})
+            return {"status": "deleted"}
+
+    def create_skill(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        skill = Skill(**pick(data, Skill))
+        skill.validate()
+        with self._lock:
+            if skill.package_file_id and skill.package_file_id not in self.files:
+                raise NotFound("package file not found")
+            if any(existing.name.lower() == skill.name.lower() and existing.version == skill.version for existing in self.skills.values()):
+                raise Conflict("skill version already exists")
+            skill.id = self._id("skl")
+            skill.capabilities = unique(skill.capabilities)
+            stamp(skill)
+            self.skills[skill.id] = skill
+            self._audit(actor_id, "skill.created", "skill", skill.id, {"name": skill.name, "version": skill.version})
+            return asdict(skill)
+
+    def list_skills(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(skill) for skill in self.skills.values()]
+
+    def update_skill(self, actor_id: str, skill_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            skill = self._skill(skill_id)
+            if "package_file_id" in data and data["package_file_id"] and data["package_file_id"] not in self.files:
+                raise NotFound("package file not found")
+            for key in ("name", "version", "runtime", "description", "status", "capabilities", "package_file_id"):
+                if key in data:
+                    setattr(skill, key, data[key])
+            if any(existing.id != skill_id and existing.name.lower() == skill.name.lower() and existing.version == skill.version for existing in self.skills.values()):
+                raise Conflict("skill version already exists")
+            skill.capabilities = unique(skill.capabilities)
+            skill.validate()
+            skill.updated_at = now_utc()
+            self._audit(actor_id, "skill.updated", "skill", skill.id, {"status": skill.status})
+            return asdict(skill)
+
+    def delete_skill(self, actor_id: str, skill_id: str) -> dict[str, str]:
+        with self._lock:
+            if any(skill_id in agent.skill_ids for agent in self.agents.values()):
+                raise Conflict("skill is used by an agent")
+            skill = self.skills.pop(skill_id, None)
+            if skill is None:
+                raise NotFound("skill not found")
+            self._audit(actor_id, "skill.deleted", "skill", skill_id, {"name": skill.name, "version": skill.version})
+            return {"status": "deleted"}
+
+    def create_model_provider(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        provider = ModelProvider(**pick(data, ModelProvider))
+        provider.validate()
+        with self._lock:
+            credential = self._credential(provider.credential_ref_id)
+            if credential.provider != "model_provider":
+                raise InvalidInput("model providers require a model_provider credential")
+            if any(existing.name.lower() == provider.name.lower() for existing in self.model_providers.values()):
+                raise Conflict("model provider name already exists")
+            provider.id = self._id("mdl")
+            provider.models = unique(provider.models)
+            stamp(provider)
+            self.model_providers[provider.id] = provider
+            self._audit(actor_id, "model_provider.created", "model_provider", provider.id, {"provider": provider.provider, "credential_ref_id": provider.credential_ref_id})
+            return asdict(provider)
+
+    def list_model_providers(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(provider) for provider in self.model_providers.values()]
+
+    def update_model_provider(self, actor_id: str, provider_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            provider = self._model_provider(provider_id)
+            if "credential_ref_id" in data:
+                credential = self._credential(str(data["credential_ref_id"]))
+                if credential.provider != "model_provider":
+                    raise InvalidInput("model providers require a model_provider credential")
+            if "name" in data and any(existing.id != provider_id and existing.name.lower() == str(data["name"]).lower() for existing in self.model_providers.values()):
+                raise Conflict("model provider name already exists")
+            for key in ("provider", "name", "credential_ref_id", "base_url", "models", "status"):
+                if key in data:
+                    setattr(provider, key, data[key])
+            provider.models = unique(provider.models)
+            provider.validate()
+            provider.updated_at = now_utc()
+            self._audit(actor_id, "model_provider.updated", "model_provider", provider.id, {"status": provider.status})
+            return asdict(provider)
+
+    def delete_model_provider(self, actor_id: str, provider_id: str) -> dict[str, str]:
+        with self._lock:
+            if any(agent.model_provider_id == provider_id for agent in self.agents.values()):
+                raise Conflict("model provider is used by an agent")
+            provider = self.model_providers.pop(provider_id, None)
+            if provider is None:
+                raise NotFound("model provider not found")
+            self._audit(actor_id, "model_provider.deleted", "model_provider", provider_id, {"name": provider.name})
+            return {"status": "deleted"}
+
+    def create_workflow(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        workflow = WorkflowDefinition(**pick(data, WorkflowDefinition))
+        workflow.validate()
+        with self._lock:
+            if workflow.project_id and workflow.project_id not in self.projects:
+                raise NotFound("project not found")
+            if any(existing.name.lower() == workflow.name.lower() for existing in self.workflows.values()):
+                raise Conflict("workflow name already exists")
+            workflow.id = self._id("wfl")
+            stamp(workflow)
+            self.workflows[workflow.id] = workflow
+            self._audit(actor_id, "workflow.created", "workflow", workflow.id, {"status": workflow.status})
+            return asdict(workflow)
+
+    def list_workflows(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(workflow) for workflow in self.workflows.values()]
+
+    def update_workflow(self, actor_id: str, workflow_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            workflow = self._workflow(workflow_id)
+            if "project_id" in data and data["project_id"] and data["project_id"] not in self.projects:
+                raise NotFound("project not found")
+            if "name" in data and any(existing.id != workflow_id and existing.name.lower() == str(data["name"]).lower() for existing in self.workflows.values()):
+                raise Conflict("workflow name already exists")
+            for key in ("name", "description", "project_id", "status", "active_version_id"):
+                if key in data:
+                    setattr(workflow, key, data[key])
+            if workflow.active_version_id and workflow.active_version_id not in self.workflow_versions:
+                raise NotFound("workflow version not found")
+            workflow.validate()
+            workflow.updated_at = now_utc()
+            self._audit(actor_id, "workflow.updated", "workflow", workflow.id, {"status": workflow.status})
+            return asdict(workflow)
+
+    def delete_workflow(self, actor_id: str, workflow_id: str) -> dict[str, str]:
+        with self._lock:
+            workflow = self.workflows.pop(workflow_id, None)
+            if workflow is None:
+                raise NotFound("workflow not found")
+            for version_id, version in list(self.workflow_versions.items()):
+                if version.workflow_id == workflow_id:
+                    self.workflow_versions.pop(version_id, None)
+            self._audit(actor_id, "workflow.deleted", "workflow", workflow_id, {"name": workflow.name})
+            return {"status": "deleted"}
+
+    def create_workflow_version(self, actor_id: str, workflow_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        payload = {**data, "workflow_id": workflow_id}
+        version = WorkflowVersion(**pick(payload, WorkflowVersion))
+        version.validate()
+        with self._lock:
+            workflow = self._workflow(workflow_id)
+            self._validate_workflow_version_refs(version)
+            if any(existing.workflow_id == workflow_id and existing.version == version.version for existing in self.workflow_versions.values()):
+                raise Conflict("workflow version already exists")
+            version.id = self._id("wfv")
+            stamp(version)
+            self.workflow_versions[version.id] = version
+            if not workflow.active_version_id:
+                workflow.active_version_id = version.id
+                workflow.updated_at = version.updated_at
+            self._audit(actor_id, "workflow.version.created", "workflow_version", version.id, {"workflow_id": workflow_id, "version": version.version})
+            return asdict(version)
+
+    def list_workflow_versions(self, workflow_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            self._workflow(workflow_id)
+            return [asdict(version) for version in self.workflow_versions.values() if version.workflow_id == workflow_id]
+
+    def update_workflow_version(self, actor_id: str, workflow_id: str, version_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            self._workflow(workflow_id)
+            version = self._workflow_version(version_id)
+            if version.workflow_id != workflow_id:
+                raise NotFound("workflow version not found")
+            for key in ("version", "nodes", "edges", "status"):
+                if key in data:
+                    setattr(version, key, data[key])
+            version.validate()
+            self._validate_workflow_version_refs(version)
+            version.updated_at = now_utc()
+            self._audit(actor_id, "workflow.version.updated", "workflow_version", version.id, {"status": version.status})
+            return asdict(version)
+
     def list_audit_events(self) -> list[dict[str, Any]]:
         with self._lock:
             return [asdict(event) for event in reversed(self.audit_events)]
@@ -508,6 +738,50 @@ class MemoryStore:
         if profile_id not in self.gitlab_profiles:
             raise NotFound("gitlab profile not found")
         return self.gitlab_profiles[profile_id]
+
+    def _agent(self, agent_id: str) -> Agent:
+        if agent_id not in self.agents:
+            raise NotFound("agent not found")
+        return self.agents[agent_id]
+
+    def _skill(self, skill_id: str) -> Skill:
+        if skill_id not in self.skills:
+            raise NotFound("skill not found")
+        return self.skills[skill_id]
+
+    def _model_provider(self, provider_id: str) -> ModelProvider:
+        if provider_id not in self.model_providers:
+            raise NotFound("model provider not found")
+        return self.model_providers[provider_id]
+
+    def _workflow(self, workflow_id: str) -> WorkflowDefinition:
+        if workflow_id not in self.workflows:
+            raise NotFound("workflow not found")
+        return self.workflows[workflow_id]
+
+    def _workflow_version(self, version_id: str) -> WorkflowVersion:
+        if version_id not in self.workflow_versions:
+            raise NotFound("workflow version not found")
+        return self.workflow_versions[version_id]
+
+    def _validate_agent_refs(self, agent: Agent) -> None:
+        for skill_id in agent.skill_ids:
+            if skill_id not in self.skills:
+                raise NotFound("skill not found")
+        if agent.model_provider_id and agent.model_provider_id not in self.model_providers:
+            raise NotFound("model provider not found")
+
+    def _validate_workflow_version_refs(self, version: WorkflowVersion) -> None:
+        for node in version.nodes:
+            agent_id = str(node.get("agent_id", "")).strip()
+            skill_id = str(node.get("skill_id", "")).strip()
+            model_provider_id = str(node.get("model_provider_id", "")).strip()
+            if agent_id and agent_id not in self.agents:
+                raise NotFound("agent not found")
+            if skill_id and skill_id not in self.skills:
+                raise NotFound("skill not found")
+            if model_provider_id and model_provider_id not in self.model_providers:
+                raise NotFound("model provider not found")
 
     def _id(self, prefix: str) -> str:
         self._ids += 1

@@ -240,6 +240,74 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertNotIn("glpat-token", serialized)
         self.assertNotIn("oauth2", serialized)
 
+    def test_agent_skill_model_provider_and_workflow_slice(self) -> None:
+        credential = self.store.create_credential(
+            "usr_test_actor",
+            {"provider": "model_provider", "name": "OpenAI Ops", "secret": "sk-secret-value"},
+        )
+        provider = self.store.create_model_provider(
+            "usr_test_actor",
+            {
+                "provider": "openai",
+                "name": "OpenAI Default",
+                "credential_ref_id": credential["id"],
+                "base_url": "https://api.openai.example.com/v1?utm_source=setup",
+                "models": ["gpt-4.1", "gpt-4.1", "gpt-4.1-mini"],
+            },
+        )
+        self.assertEqual(provider["base_url"], "https://api.openai.example.com/v1")
+        self.assertEqual(provider["models"], ["gpt-4.1", "gpt-4.1-mini"])
+        self.assertNotIn("sk-secret-value", json.dumps(provider))
+
+        skill = self.store.create_skill(
+            "usr_test_actor",
+            {"name": "Incident Triage", "version": "1.0.0", "runtime": "python", "capabilities": ["triage", "summarize"]},
+        )
+        agent = self.store.create_agent(
+            "usr_test_actor",
+            {
+                "name": "Ops Copilot",
+                "kind": "automation",
+                "capabilities": ["triage", "triage"],
+                "skill_ids": [skill["id"]],
+                "model_provider_id": provider["id"],
+            },
+        )
+        self.assertEqual(agent["capabilities"], ["triage"])
+
+        workflow = self.store.create_workflow("usr_test_actor", {"name": "Incident response", "description": "Triage and summarize"})
+        version = self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "start", "type": "trigger", "name": "Alert received"},
+                    {"id": "triage", "type": "agent_task", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"]},
+                ],
+                "edges": [{"from_node_id": "start", "to_node_id": "triage"}],
+            },
+        )
+        self.assertEqual(version["workflow_id"], workflow["id"])
+        self.assertEqual(self.store.list_workflows()[0]["active_version_id"], version["id"])
+
+        with self.assertRaises(Exception) as raised:
+            self.store.create_workflow_version(
+                "usr_test_actor",
+                workflow["id"],
+                {
+                    "version": "bad",
+                    "nodes": [{"id": "start", "type": "trigger"}],
+                    "edges": [{"from_node_id": "start", "to_node_id": "missing"}],
+                },
+            )
+        self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+
+        audit = json.dumps(self.store.list_audit_events())
+        self.assertIn("workflow.version.created", audit)
+        self.assertIn("agent.created", audit)
+        self.assertNotIn("sk-secret-value", audit)
+
 
 if __name__ == "__main__":
     unittest.main()
