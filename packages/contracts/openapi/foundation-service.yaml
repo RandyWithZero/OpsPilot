@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: OpsPilot Foundation Service API
-  version: 0.1.0
-  description: First backend slice for identity, projects, assets, environments, and audit events.
+  version: 0.2.0
+  description: Foundation APIs for identity, projects, inventory, files, credential references, GitLab profiles, repository bindings, and audit events.
 servers:
   - url: http://localhost:8080
 paths:
@@ -228,6 +228,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Project"
+  /v1/projects/{projectID}/repositories:
+    post:
+      summary: Link a GitLab repository to a project
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryBinding"
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+  /v1/projects/{projectID}/repositories/{profileID}/{repositoryID}:
+    delete:
+      summary: Unlink a GitLab repository from a project
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
   /v1/assets:
     get:
       summary: List assets
@@ -356,6 +406,217 @@ paths:
       responses:
         "200":
           description: Deleted environment
+  /v1/files:
+    get:
+      summary: List file metadata objects
+      responses:
+        "200":
+          description: File objects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FileObject"
+    post:
+      summary: Create file metadata
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileObjectCreate"
+      responses:
+        "201":
+          description: Created file object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileObject"
+  /v1/files/{fileID}/upload-grants:
+    post:
+      summary: Create a local upload grant for a file object
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: fileID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Upload grant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileGrant"
+  /v1/files/{fileID}/download-grants:
+    post:
+      summary: Create a local download grant for a file object
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: fileID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Download grant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileGrant"
+  /v1/credentials:
+    get:
+      summary: List credential references
+      description: Returns credential references only. Secret material is never returned.
+      responses:
+        "200":
+          description: Credential references
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CredentialReference"
+    post:
+      summary: Create a credential reference from a secret
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CredentialCreate"
+      responses:
+        "201":
+          description: Created credential reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CredentialReference"
+  /v1/credentials/{credentialID}:
+    patch:
+      summary: Update credential metadata or rotate secret
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: credentialID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CredentialCreate"
+      responses:
+        "200":
+          description: Updated credential reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CredentialReference"
+    delete:
+      summary: Delete credential reference
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: credentialID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted credential
+  /v1/gitlab/profiles:
+    get:
+      summary: List GitLab API profiles
+      responses:
+        "200":
+          description: GitLab profiles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GitLabProfile"
+    post:
+      summary: Create GitLab API profile
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitLabProfileCreate"
+      responses:
+        "201":
+          description: Created GitLab profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitLabProfile"
+  /v1/gitlab/profiles/{profileID}:
+    patch:
+      summary: Update GitLab API profile
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitLabProfileCreate"
+      responses:
+        "200":
+          description: Updated GitLab profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitLabProfile"
+    delete:
+      summary: Delete GitLab API profile
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted GitLab profile
+  /v1/gitlab/profiles/{profileID}/repositories:
+    get:
+      summary: List selectable repositories for a GitLab profile
+      description: Local MVP adapter returns configured repository selection or deterministic stub repositories.
+      parameters:
+        - name: profileID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Repositories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GitLabRepository"
   /v1/audit-events:
     get:
       summary: List audit events, newest first
@@ -450,6 +711,10 @@ components:
             type: string
         status:
           enum: [active, archived]
+        repository_bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepositoryBinding"
     Project:
       allOf:
         - $ref: "#/components/schemas/ProjectCreate"
@@ -468,6 +733,10 @@ components:
               type: array
               items:
                 type: string
+            repository_bindings:
+              type: array
+              items:
+                $ref: "#/components/schemas/RepositoryBinding"
             created_at:
               type: string
               format: date-time
@@ -560,6 +829,140 @@ components:
             updated_at:
               type: string
               format: date-time
+    FileObjectCreate:
+      type: object
+      required: [filename, content_type, size_bytes]
+      properties:
+        filename:
+          type: string
+        content_type:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 0
+        owner_id:
+          type: string
+    FileObject:
+      allOf:
+        - $ref: "#/components/schemas/FileObjectCreate"
+        - type: object
+          required: [id, storage_key, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            storage_key:
+              type: string
+            status:
+              enum: [pending_upload, available, deleted]
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    FileGrant:
+      type: object
+      required: [file_id, method, url, expires_in_seconds]
+      properties:
+        file_id:
+          type: string
+        method:
+          enum: [GET, PUT]
+        url:
+          type: string
+        expires_in_seconds:
+          type: integer
+    CredentialCreate:
+      type: object
+      required: [provider, name, secret]
+      properties:
+        provider:
+          enum: [gitlab, model_provider]
+        name:
+          type: string
+        secret:
+          type: string
+          writeOnly: true
+        status:
+          enum: [active, inactive]
+    CredentialReference:
+      type: object
+      required: [id, provider, name, secret_ref, secret_fingerprint, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        provider:
+          type: string
+        name:
+          type: string
+        secret_ref:
+          type: string
+        secret_fingerprint:
+          type: string
+        status:
+          enum: [active, inactive]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    GitLabRepository:
+      type: object
+      required: [id, path, name, web_url]
+      properties:
+        id:
+          type: string
+        path:
+          type: string
+        name:
+          type: string
+        web_url:
+          type: string
+    GitLabProfileCreate:
+      type: object
+      required: [name, base_url, credential_ref_id]
+      properties:
+        name:
+          type: string
+        base_url:
+          type: string
+        credential_ref_id:
+          type: string
+        repository_selection:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitLabRepository"
+        status:
+          enum: [active, inactive]
+    GitLabProfile:
+      allOf:
+        - $ref: "#/components/schemas/GitLabProfileCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    RepositoryBinding:
+      type: object
+      required: [provider, profile_id, repository_id, path]
+      properties:
+        provider:
+          enum: [gitlab]
+        profile_id:
+          type: string
+        repository_id:
+          type: string
+        path:
+          type: string
+        web_url:
+          type: string
     AuditEvent:
       type: object
       required: [id, actor_id, action, resource_type, resource_id, occurred_at]

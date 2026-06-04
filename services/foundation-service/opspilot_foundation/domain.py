@@ -59,6 +59,7 @@ class Project:
     member_ids: list[str] = field(default_factory=list)
     asset_ids: list[str] = field(default_factory=list)
     environment_ids: list[str] = field(default_factory=list)
+    repository_bindings: list[dict[str, str]] = field(default_factory=list)
     id: str = ""
     status: str = "active"
     created_at: str = ""
@@ -113,6 +114,70 @@ class Environment:
             raise InvalidInput("environments require project_id, name, and owner_id")
         if self.type not in {"DEV", "QA", "QE"}:
             raise InvalidInput("environment type must be DEV, QA, or QE")
+
+
+@dataclass
+class FileObject:
+    filename: str
+    content_type: str
+    size_bytes: int
+    owner_id: str = ""
+    storage_key: str = ""
+    status: str = "pending_upload"
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.filename or not self.content_type or int(self.size_bytes) < 0:
+            raise InvalidInput("files require filename, content_type, and non-negative size_bytes")
+
+
+@dataclass
+class CredentialReference:
+    provider: str
+    name: str
+    secret_ref: str = ""
+    secret_fingerprint: str = ""
+    status: str = "active"
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.provider or not self.name:
+            raise InvalidInput("credentials require provider and name")
+
+
+@dataclass
+class GitLabProfile:
+    name: str
+    base_url: str
+    credential_ref_id: str
+    repository_selection: list[dict[str, str]] = field(default_factory=list)
+    id: str = ""
+    status: str = "active"
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.name or not self.base_url or not self.credential_ref_id:
+            raise InvalidInput("gitlab profiles require name, base_url, and credential_ref_id")
+        if not self.base_url.startswith(("https://", "http://")):
+            raise InvalidInput("gitlab base_url must be an HTTP URL")
+
+
+@dataclass
+class RepositoryBinding:
+    provider: str
+    profile_id: str
+    repository_id: str
+    path: str
+    web_url: str = ""
+
+    def validate(self) -> None:
+        if not self.provider or not self.profile_id or not self.repository_id or not self.path:
+            raise InvalidInput("repository bindings require provider, profile_id, repository_id, and path")
 
 
 @dataclass

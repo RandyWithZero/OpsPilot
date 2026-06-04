@@ -1,10 +1,26 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 from dataclasses import asdict
 from threading import RLock
 from typing import Any, TypeVar
 
-from .domain import Asset, AuditEvent, Conflict, Environment, NotFound, Project, User, now_utc
+from .domain import (
+    Asset,
+    AuditEvent,
+    Conflict,
+    CredentialReference,
+    Environment,
+    FileObject,
+    GitLabProfile,
+    InvalidInput,
+    NotFound,
+    Project,
+    RepositoryBinding,
+    User,
+    now_utc,
+)
 
 T = TypeVar("T")
 
@@ -17,6 +33,10 @@ class MemoryStore:
         self.projects: dict[str, Project] = {}
         self.assets: dict[str, Asset] = {}
         self.environments: dict[str, Environment] = {}
+        self.files: dict[str, FileObject] = {}
+        self.credentials: dict[str, CredentialReference] = {}
+        self.gitlab_profiles: dict[str, GitLabProfile] = {}
+        self._encrypted_secrets: dict[str, str] = {}
         self.audit_events: list[AuditEvent] = []
 
     def health(self) -> dict[str, str]:
@@ -153,6 +173,43 @@ class MemoryStore:
             self._audit(actor_id, "project.environment.unlinked", "project", project.id, {"environment_id": environment_id})
             return asdict(project)
 
+    def link_project_repository(self, actor_id: str, project_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        binding = RepositoryBinding(**pick(data, RepositoryBinding))
+        binding.validate()
+        with self._lock:
+            project = self._project(project_id)
+            if binding.provider != "gitlab":
+                raise InvalidInput("only gitlab repository bindings are supported")
+            profile = self._gitlab_profile(binding.profile_id)
+            repositories = {repo["id"]: repo for repo in self.list_gitlab_repositories(binding.profile_id)}
+            if binding.repository_id not in repositories:
+                raise NotFound("repository not found for profile")
+            selected = repositories[binding.repository_id]
+            binding.path = binding.path or selected["path"]
+            binding.web_url = binding.web_url or selected["web_url"]
+            serialized = asdict(binding)
+            project.repository_bindings = [
+                existing
+                for existing in project.repository_bindings
+                if not (existing["provider"] == serialized["provider"] and existing["profile_id"] == serialized["profile_id"] and existing["repository_id"] == serialized["repository_id"])
+            ]
+            project.repository_bindings.append(serialized)
+            project.updated_at = now_utc()
+            self._audit(actor_id, "project.repository.linked", "project", project.id, {"provider": "gitlab", "profile_id": profile.id, "repository_id": binding.repository_id})
+            return asdict(project)
+
+    def unlink_project_repository(self, actor_id: str, project_id: str, profile_id: str, repository_id: str) -> dict[str, Any]:
+        with self._lock:
+            project = self._project(project_id)
+            project.repository_bindings = [
+                existing
+                for existing in project.repository_bindings
+                if not (existing["provider"] == "gitlab" and existing["profile_id"] == profile_id and existing["repository_id"] == repository_id)
+            ]
+            project.updated_at = now_utc()
+            self._audit(actor_id, "project.repository.unlinked", "project", project.id, {"provider": "gitlab", "profile_id": profile_id, "repository_id": repository_id})
+            return asdict(project)
+
     def create_asset(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
         asset = Asset(**pick(data, Asset))
         asset.validate()
@@ -270,6 +327,155 @@ class MemoryStore:
             self._audit(actor_id, "environment.deleted", "environment", environment_id, {"name": environment.name})
             return {"status": "deleted"}
 
+    def create_file_object(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        file_object = FileObject(**pick(data, FileObject))
+        file_object.validate()
+        with self._lock:
+            file_object.id = self._id("fil")
+            file_object.storage_key = file_object.storage_key or f"local/{file_object.id}/{file_object.filename}"
+            stamp(file_object)
+            self.files[file_object.id] = file_object
+            self._audit(actor_id, "file.created", "file", file_object.id, {"filename": file_object.filename, "size_bytes": file_object.size_bytes})
+            return asdict(file_object)
+
+    def list_file_objects(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(file_object) for file_object in self.files.values()]
+
+    def create_upload_grant(self, actor_id: str, file_id: str) -> dict[str, Any]:
+        with self._lock:
+            file_object = self._file(file_id)
+            grant = {
+                "file_id": file_object.id,
+                "method": "PUT",
+                "url": f"local://uploads/{file_object.storage_key}",
+                "expires_in_seconds": 900,
+            }
+            self._audit(actor_id, "file.upload_grant.created", "file", file_object.id, {})
+            return grant
+
+    def create_download_grant(self, actor_id: str, file_id: str) -> dict[str, Any]:
+        with self._lock:
+            file_object = self._file(file_id)
+            grant = {
+                "file_id": file_object.id,
+                "method": "GET",
+                "url": f"local://downloads/{file_object.storage_key}",
+                "expires_in_seconds": 900,
+            }
+            self._audit(actor_id, "file.download_grant.created", "file", file_object.id, {})
+            return grant
+
+    def create_credential(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        secret = str(data.get("secret", ""))
+        if not secret:
+            raise InvalidInput("credentials require secret")
+        credential = CredentialReference(**pick(data, CredentialReference))
+        credential.validate()
+        with self._lock:
+            credential.id = self._id("cred")
+            credential.secret_ref = self._id("sec")
+            credential.secret_fingerprint = fingerprint(secret)
+            stamp(credential)
+            self._encrypted_secrets[credential.secret_ref] = encrypt_secret(secret, credential.secret_ref)
+            self.credentials[credential.id] = credential
+            self._audit(actor_id, "credential.created", "credential", credential.id, {"provider": credential.provider, "secret_fingerprint": credential.secret_fingerprint})
+            return asdict(credential)
+
+    def list_credentials(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(credential) for credential in self.credentials.values()]
+
+    def update_credential(self, actor_id: str, credential_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            credential = self._credential(credential_id)
+            for key in ("provider", "name", "status"):
+                if key in data:
+                    setattr(credential, key, data[key])
+            if "secret" in data:
+                secret = str(data["secret"])
+                if not secret:
+                    raise InvalidInput("secret cannot be empty")
+                credential.secret_fingerprint = fingerprint(secret)
+                self._encrypted_secrets[credential.secret_ref] = encrypt_secret(secret, credential.secret_ref)
+            credential.validate()
+            credential.updated_at = now_utc()
+            self._audit(actor_id, "credential.updated", "credential", credential.id, {"provider": credential.provider, "secret_fingerprint": credential.secret_fingerprint})
+            return asdict(credential)
+
+    def delete_credential(self, actor_id: str, credential_id: str) -> dict[str, str]:
+        with self._lock:
+            credential = self.credentials.pop(credential_id, None)
+            if credential is None:
+                raise NotFound("credential not found")
+            if any(profile.credential_ref_id == credential_id for profile in self.gitlab_profiles.values()):
+                self.credentials[credential_id] = credential
+                raise Conflict("credential is used by a gitlab profile")
+            self._encrypted_secrets.pop(credential.secret_ref, None)
+            self._audit(actor_id, "credential.deleted", "credential", credential_id, {"provider": credential.provider})
+            return {"status": "deleted"}
+
+    def create_gitlab_profile(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        profile = GitLabProfile(**pick(data, GitLabProfile))
+        profile.validate()
+        with self._lock:
+            credential = self._credential(profile.credential_ref_id)
+            if credential.provider != "gitlab":
+                raise InvalidInput("gitlab profiles require a gitlab credential")
+            if any(existing.name.lower() == profile.name.lower() for existing in self.gitlab_profiles.values()):
+                raise Conflict("gitlab profile name already exists")
+            profile.id = self._id("glp")
+            profile.repository_selection = normalize_repositories(profile.repository_selection, profile.base_url)
+            stamp(profile)
+            self.gitlab_profiles[profile.id] = profile
+            self._audit(actor_id, "gitlab.profile.created", "gitlab_profile", profile.id, {"base_url": profile.base_url, "credential_ref_id": profile.credential_ref_id})
+            return asdict(profile)
+
+    def list_gitlab_profiles(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(profile) for profile in self.gitlab_profiles.values()]
+
+    def update_gitlab_profile(self, actor_id: str, profile_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            profile = self._gitlab_profile(profile_id)
+            if "credential_ref_id" in data:
+                credential = self._credential(str(data["credential_ref_id"]))
+                if credential.provider != "gitlab":
+                    raise InvalidInput("gitlab profiles require a gitlab credential")
+            if "name" in data and any(existing.id != profile_id and existing.name.lower() == str(data["name"]).lower() for existing in self.gitlab_profiles.values()):
+                raise Conflict("gitlab profile name already exists")
+            for key in ("name", "base_url", "credential_ref_id", "repository_selection", "status"):
+                if key in data:
+                    setattr(profile, key, data[key])
+            profile.validate()
+            profile.repository_selection = normalize_repositories(profile.repository_selection, profile.base_url)
+            profile.updated_at = now_utc()
+            self._audit(actor_id, "gitlab.profile.updated", "gitlab_profile", profile.id, {"status": profile.status})
+            return asdict(profile)
+
+    def delete_gitlab_profile(self, actor_id: str, profile_id: str) -> dict[str, str]:
+        with self._lock:
+            profile = self.gitlab_profiles.pop(profile_id, None)
+            if profile is None:
+                raise NotFound("gitlab profile not found")
+            for project in self.projects.values():
+                project.repository_bindings = [binding for binding in project.repository_bindings if binding["profile_id"] != profile_id]
+                project.updated_at = now_utc()
+            self._audit(actor_id, "gitlab.profile.deleted", "gitlab_profile", profile_id, {"name": profile.name})
+            return {"status": "deleted"}
+
+    def list_gitlab_repositories(self, profile_id: str) -> list[dict[str, str]]:
+        profile = self._gitlab_profile(profile_id)
+        if profile.repository_selection:
+            return [dict(repository) for repository in profile.repository_selection]
+        return normalize_repositories(
+            [
+                {"id": "stub-ops-platform", "path": "platform/opspilot", "name": "OpsPilot", "web_url": f"{profile.base_url.rstrip('/')}/platform/opspilot"},
+                {"id": "stub-infra", "path": "platform/infra", "name": "Infra", "web_url": f"{profile.base_url.rstrip('/')}/platform/infra"},
+            ],
+            profile.base_url,
+        )
+
     def list_audit_events(self) -> list[dict[str, Any]]:
         with self._lock:
             return [asdict(event) for event in reversed(self.audit_events)]
@@ -283,6 +489,21 @@ class MemoryStore:
         if environment_id not in self.environments:
             raise NotFound("environment not found")
         return self.environments[environment_id]
+
+    def _file(self, file_id: str) -> FileObject:
+        if file_id not in self.files:
+            raise NotFound("file not found")
+        return self.files[file_id]
+
+    def _credential(self, credential_id: str) -> CredentialReference:
+        if credential_id not in self.credentials:
+            raise NotFound("credential not found")
+        return self.credentials[credential_id]
+
+    def _gitlab_profile(self, profile_id: str) -> GitLabProfile:
+        if profile_id not in self.gitlab_profiles:
+            raise NotFound("gitlab profile not found")
+        return self.gitlab_profiles[profile_id]
 
     def _id(self, prefix: str) -> str:
         self._ids += 1
@@ -321,3 +542,27 @@ def stamp(entity: Any) -> None:
 def pick(data: dict[str, Any], model: type[T]) -> dict[str, Any]:
     fields = set(model.__dataclass_fields__.keys())  # type: ignore[attr-defined]
     return {key: value for key, value in data.items() if key in fields}
+
+
+def fingerprint(secret: str) -> str:
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
+
+
+def encrypt_secret(secret: str, secret_ref: str) -> str:
+    key = hashlib.sha256(f"opspilot-local-key:{secret_ref}".encode("utf-8")).digest()
+    raw = secret.encode("utf-8")
+    encrypted = bytes(byte ^ key[index % len(key)] for index, byte in enumerate(raw))
+    return base64.urlsafe_b64encode(encrypted).decode("ascii")
+
+
+def normalize_repositories(repositories: list[dict[str, str]], base_url: str) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for index, repository in enumerate(repositories, start=1):
+        path = str(repository.get("path", "")).strip()
+        if not path:
+            raise InvalidInput("repositories require path")
+        repo_id = str(repository.get("id", "") or path)
+        web_url = str(repository.get("web_url", "") or f"{base_url.rstrip('/')}/{path}")
+        name = str(repository.get("name", "") or path.rsplit("/", 1)[-1] or f"repository-{index}")
+        normalized.append({"id": repo_id, "path": path, "name": name, "web_url": web_url})
+    return normalized
