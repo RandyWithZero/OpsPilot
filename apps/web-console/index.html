@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OpsPilot Console</title>
+    <title>OpsPilot 运营控制台</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -11,16 +11,28 @@
     <div id="login" class="login-screen">
       <section class="login-panel" aria-labelledby="login-title">
         <div>
-          <p class="eyebrow">OpsPilot Foundation</p>
-          <h1 id="login-title">Operations console</h1>
-          <p class="login-copy">Sign in to manage the first identity, project, asset, and environment inventory slice.</p>
+          <p class="eyebrow">OpsPilot</p>
+          <h1 id="login-title">AI 自动化运营平台</h1>
+          <p class="login-copy">统一纳管项目、环境、资产与智能运维流程，让复杂运营在一个平台内可视、可控、可追溯。</p>
+          <div class="login-highlights" aria-label="平台能力">
+            <span><b>1</b>统一资产视图<small>服务器 / GPU / VM / 工作站</small></span>
+            <span><b>2</b>环境就绪检查<small>DEV / QA / QE 全链路绑定</small></span>
+            <span><b>3</b>智能运维编排<small>流程、智能体、技能协同执行</small></span>
+          </div>
         </div>
         <form id="login-form" class="form-stack">
+          <h2>欢迎登录</h2>
+          <p class="muted">使用企业账号进入运营控制台</p>
           <label>
-            Operator email
-            <input id="login-email" type="email" value="admin@opspilot.local" required />
+            账号 / 邮箱
+            <input id="login-email" type="email" value="admin@opspilot.cn" required />
           </label>
-          <button type="submit">Enter console</button>
+          <label>
+            密码
+            <input id="login-password" type="password" placeholder="请输入密码" />
+          </label>
+          <button type="submit">登录控制台</button>
+          <small class="login-helper">支持企业 SSO、MFA 与审计登录</small>
         </form>
       </section>
     </div>
@@ -28,28 +40,25 @@
     <div id="app" class="app-shell hidden">
       <aside class="sidebar" aria-label="Primary">
         <div class="brand-block">
-          <span class="mark">OP</span>
-          <div>
-            <strong>OpsPilot</strong>
-            <small>Foundation console</small>
-          </div>
+          <strong>OpsPilot</strong>
+          <small>AI 自动化运营平台</small>
         </div>
         <nav id="nav" class="nav-list"></nav>
         <div class="sidebar-footer">
           <span class="status-dot"></span>
-          <span id="api-state">Checking API</span>
+          <span id="api-state">正在检查服务</span>
         </div>
       </aside>
 
       <main class="main">
         <header class="topbar">
           <div class="search-wrap">
-            <span aria-hidden="true">⌕</span>
-            <input id="global-search" type="search" placeholder="Search projects, assets, environments, users" />
+            <span class="search-icon" aria-hidden="true"></span>
+            <input id="global-search" type="search" placeholder="搜索项目、资产、环境、流程单号" />
           </div>
-          <select id="project-switcher" aria-label="Project switcher"></select>
-          <button id="refresh" class="icon-button" title="Refresh data" aria-label="Refresh data">↻</button>
-          <button id="sign-out" class="ghost-button">Sign out</button>
+          <select id="project-switcher" aria-label="项目切换"></select>
+          <button id="refresh" class="icon-button" title="刷新数据" aria-label="刷新数据">↻</button>
+          <button id="sign-out" class="ghost-button">退出</button>
         </header>
 
         <section id="content" class="content" tabindex="-1"></section>

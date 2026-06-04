@@ -1,11 +1,13 @@
 const API_BASE = localStorage.getItem("opspilot_api_base") || "http://localhost:8080";
 const ACTOR_ID = "web-console";
 const navItems = [
-  ["dashboard", "Dashboard"],
-  ["identity", "Identity"],
-  ["projects", "Projects"],
-  ["assets", "Assets"],
-  ["environments", "Environments"],
+  ["dashboard", "工作台"],
+  ["bigscreen", "Dashboard 大屏"],
+  ["tasks", "运维任务"],
+  ["projects", "项目管理"],
+  ["assets", "资产管理"],
+  ["environments", "环境管理"],
+  ["identity", "用户权限"],
 ];
 
 const collections = {
@@ -39,23 +41,23 @@ const state = {
 
 const seed = {
   users: [
-    { id: "usr_mock_admin", name: "Lin Chen", email: "lin.chen@opspilot.local", status: "active", roles: [{ scope: "platform", name: "Admin" }], updated_at: "2026-06-04T07:18:00Z" },
-    { id: "usr_mock_ops", name: "Maya Rao", email: "maya.rao@opspilot.local", status: "active", roles: [{ scope: "project", name: "Operator" }], updated_at: "2026-06-04T07:19:00Z" },
-    { id: "usr_mock_view", name: "Jon Bell", email: "jon.bell@opspilot.local", status: "inactive", roles: [{ scope: "project", name: "Viewer" }], updated_at: "2026-06-04T07:20:00Z" },
+    { id: "usr_mock_admin", name: "王少琪", email: "admin@opspilot.cn", status: "active", roles: [{ scope: "platform", name: "Admin" }], updated_at: "2026-06-04T07:18:00Z" },
+    { id: "usr_mock_ops", name: "李伟", email: "operator@opspilot.cn", status: "active", roles: [{ scope: "project", name: "Operator" }], updated_at: "2026-06-04T07:19:00Z" },
+    { id: "usr_mock_view", name: "陈敏", email: "viewer@opspilot.cn", status: "inactive", roles: [{ scope: "project", name: "Viewer" }], updated_at: "2026-06-04T07:20:00Z" },
   ],
   projects: [
-    { id: "prj_mock_core", key: "OPS", name: "OpsPilot Core", description: "Foundation inventory and agent operations.", owner_id: "usr_mock_admin", member_ids: ["usr_mock_admin", "usr_mock_ops"], asset_ids: ["ast_mock_ws", "ast_mock_gpu"], environment_ids: ["env_mock_dev", "env_mock_qa"], status: "active", updated_at: "2026-06-04T07:21:00Z" },
-    { id: "prj_mock_lab", key: "LAB", name: "Automation Lab", description: "Sandbox for environment readiness testing.", owner_id: "usr_mock_ops", member_ids: ["usr_mock_ops"], asset_ids: ["ast_mock_vm"], environment_ids: ["env_mock_qe"], status: "active", updated_at: "2026-06-04T07:22:00Z" },
+    { id: "prj_mock_core", key: "OPS", name: "智能运营中台", description: "统一纳管项目、资产、环境与智能流程。", owner_id: "usr_mock_admin", member_ids: ["usr_mock_admin", "usr_mock_ops"], asset_ids: ["ast_mock_ws", "ast_mock_gpu"], environment_ids: ["env_mock_dev", "env_mock_qa"], status: "active", updated_at: "2026-06-04T07:21:00Z" },
+    { id: "prj_mock_lab", key: "LAB", name: "自动化测试平台", description: "QA/QE 自动化执行与质量报告归档。", owner_id: "usr_mock_ops", member_ids: ["usr_mock_ops"], asset_ids: ["ast_mock_vm"], environment_ids: ["env_mock_qe"], status: "active", updated_at: "2026-06-04T07:22:00Z" },
   ],
   assets: [
-    { id: "ast_mock_ws", category: "workstation", name: "Shanghai Workstation 01", status: "in_use", owner_id: "usr_mock_admin", location: "Shanghai Lab A", parent_id: "", capabilities: ["cuda", "local-build"], properties: { cpu: "Ryzen 7950X", memory: "128GB" }, updated_at: "2026-06-04T07:21:30Z" },
-    { id: "ast_mock_gpu", category: "gpu", name: "RTX 4090 Slot A", status: "in_use", owner_id: "usr_mock_admin", location: "Shanghai Lab A", parent_id: "ast_mock_ws", capabilities: ["cuda", "24gb-vram"], properties: { vram: "24GB" }, updated_at: "2026-06-04T07:21:40Z" },
+    { id: "ast_mock_ws", category: "workstation", name: "上海工作站 01", status: "in_use", owner_id: "usr_mock_admin", location: "上海实验室 A", parent_id: "", capabilities: ["cuda", "local-build"], properties: { cpu: "Ryzen 7950X", memory: "128GB" }, updated_at: "2026-06-04T07:21:30Z" },
+    { id: "ast_mock_gpu", category: "gpu", name: "RTX 4090 插槽 A", status: "in_use", owner_id: "usr_mock_admin", location: "上海实验室 A", parent_id: "ast_mock_ws", capabilities: ["cuda", "24gb-vram"], properties: { vram: "24GB" }, updated_at: "2026-06-04T07:21:40Z" },
     { id: "ast_mock_vm", category: "vm", name: "qa-runner-03", status: "available", owner_id: "usr_mock_ops", location: "10.40.7.13", parent_id: "", capabilities: ["linux", "test-runner"], properties: { os: "Ubuntu 24.04" }, updated_at: "2026-06-04T07:22:30Z" },
   ],
   environments: [
-    { id: "env_mock_dev", project_id: "prj_mock_core", name: "Core DEV", type: "DEV", status: "active", owner_id: "usr_mock_admin", member_ids: ["usr_mock_admin"], asset_ids: ["ast_mock_ws"], endpoints: [{ name: "api", url: "http://dev.opspilot.local" }], updated_at: "2026-06-04T07:23:00Z" },
-    { id: "env_mock_qa", project_id: "prj_mock_core", name: "Core QA", type: "QA", status: "active", owner_id: "usr_mock_ops", member_ids: ["usr_mock_ops"], asset_ids: ["ast_mock_vm"], endpoints: [], updated_at: "2026-06-04T07:23:30Z" },
-    { id: "env_mock_qe", project_id: "prj_mock_lab", name: "Lab QE", type: "QE", status: "inactive", owner_id: "usr_mock_ops", member_ids: [], asset_ids: [], endpoints: [], updated_at: "2026-06-04T07:24:00Z" },
+    { id: "env_mock_dev", project_id: "prj_mock_core", name: "核心 DEV", type: "DEV", status: "active", owner_id: "usr_mock_admin", member_ids: ["usr_mock_admin"], asset_ids: ["ast_mock_ws"], endpoints: [{ name: "api", url: "http://dev.opspilot.local" }], updated_at: "2026-06-04T07:23:00Z" },
+    { id: "env_mock_qa", project_id: "prj_mock_core", name: "核心 QA", type: "QA", status: "active", owner_id: "usr_mock_ops", member_ids: ["usr_mock_ops"], asset_ids: ["ast_mock_vm"], endpoints: [], updated_at: "2026-06-04T07:23:30Z" },
+    { id: "env_mock_qe", project_id: "prj_mock_lab", name: "实验室 QE", type: "QE", status: "inactive", owner_id: "usr_mock_ops", member_ids: [], asset_ids: [], endpoints: [], updated_at: "2026-06-04T07:24:00Z" },
   ],
   auditEvents: [
     { id: "aud_mock_1", actor_id: "system", action: "project.created", resource_type: "project", resource_id: "prj_mock_core", occurred_at: "2026-06-04T07:21:00Z", metadata: { key: "OPS" } },
@@ -119,7 +121,7 @@ async function loadData(forceToast = false) {
     state.assets = assets;
     state.environments = environments;
     state.auditEvents = auditEvents;
-    if (forceToast) toast("Foundation API data refreshed.");
+    if (forceToast) toast("基础服务数据已刷新。");
   } catch (error) {
     state.apiOnline = false;
     state.users = clone(seed.users);
@@ -127,7 +129,7 @@ async function loadData(forceToast = false) {
     state.assets = clone(seed.assets);
     state.environments = clone(seed.environments);
     state.auditEvents = clone(seed.auditEvents);
-    if (forceToast) toast("Using local mock inventory because the API is unavailable.");
+    if (forceToast) toast("基础服务不可用，已切换本地模拟数据。");
   }
   render();
 }
@@ -165,12 +167,15 @@ function renderNav() {
 }
 
 function render() {
-  $("#api-state").innerHTML = `${state.apiOnline ? "Foundation API live" : "Local mock mode"} <span class="role-badge">${state.role}</span>`;
+  document.body.classList.toggle("bigscreen-mode", state.route === "bigscreen");
+  $("#api-state").innerHTML = `${state.apiOnline ? "基础服务在线" : "本地模拟模式"} <span class="role-badge">${displayRole(state.role)}</span>`;
   $(".status-dot").classList.toggle("live", state.apiOnline);
-  $("#project-switcher").innerHTML = `<option>All projects</option>${state.projects.map((p) => `<option>${escapeHtml(p.key)} · ${escapeHtml(p.name)}</option>`).join("")}`;
+  $("#project-switcher").innerHTML = `<option>全部项目</option>${state.projects.map((p) => `<option>${escapeHtml(p.key)} · ${escapeHtml(p.name)}</option>`).join("")}`;
   renderNav();
   document.querySelectorAll("#nav button").forEach((button) => button.classList.toggle("active", button.dataset.route === state.route));
   if (state.route === "dashboard") renderDashboard();
+  if (state.route === "bigscreen") renderBigscreen();
+  if (state.route === "tasks") renderTasks();
   if (state.route === "identity") renderResource("identity");
   if (state.route === "projects") renderResource("projects");
   if (state.route === "assets") renderResource("assets");
@@ -180,41 +185,117 @@ function render() {
 function renderDashboard() {
   const readinessIssues = state.environments.filter((env) => readiness(env).level !== "ok");
   const isEmpty = !state.users.length && !state.projects.length && !state.assets.length && !state.environments.length;
+  const overview = overviewTable();
   content.innerHTML = `
     <div class="page-head">
       <div>
-        <p class="eyebrow">Authenticated shell</p>
-        <h1>Inventory command center</h1>
-        <p class="muted">Dense setup status for identity, projects, assets, and environment readiness.</p>
+        <p class="eyebrow">运营工作台</p>
+        <h1>运营总览</h1>
+        <p class="muted">面向运维负责人：快速识别项目、资产、环境与流程风险。</p>
       </div>
-    ${actionButton("create", "Create project", "primary-button", "create-project", { type: "projects" })}
+    ${actionButton("create", "新建项目", "primary-button", "create-project", { type: "projects" })}
     </div>
     ${permissionBanner()}
-    ${isEmpty && state.apiOnline ? `<section class="empty-state panel"><strong>Live inventory is empty.</strong><span>Create the first user, then project, asset, and environment records. No mock data is being displayed while the API is reachable.</span></section>` : ""}
+    ${isEmpty && state.apiOnline ? `<section class="empty-state panel"><strong>实时清单为空</strong><span>请先创建用户，再创建项目、资产与环境。基础服务可访问时不会展示模拟数据。</span></section>` : ""}
     <div class="metric-grid">
-      ${metric("Users", state.users.length, `${activeCount(state.users)} active identities`)}
-      ${metric("Projects", state.projects.length, `${linkedProjects()} with inventory links`)}
-      ${metric("Assets", state.assets.length, `${state.assets.filter((a) => a.parent_id).length} installed components`)}
-      ${metric("Environments", state.environments.length, `${readinessIssues.length} readiness warnings`)}
+      ${metric("项目总数", state.projects.length, `${linkedProjects()} 个已绑定资源`)}
+      ${metric("纳管资产", state.assets.length, `${state.assets.filter((a) => a.status === "in_use").length} 个使用中`)}
+      ${metric("环境实例", state.environments.length, `${readinessIssues.length} 个待修复`)}
+      ${metric("用户权限", state.users.length, `${activeCount(state.users)} 个启用账号`)}
     </div>
-    <div class="setup-grid">
-      ${setupCard("Identity", state.users.length > 0, state.users.length ? "Users and platform roles are available." : "Create the first admin identity.")}
-      ${setupCard("Projects", state.projects.length > 0 && state.projects.every((p) => p.owner_id), state.projects.length ? "Project owners and member references are recorded." : "Create a project after identity setup.")}
-      ${setupCard("Assets", state.assets.some((a) => a.capabilities?.length), state.assets.length ? "Capability-tagged inventory exists for allocation." : "Register physical or virtual assets.")}
-      ${setupCard("Environments", state.environments.length > 0 && readinessIssues.length === 0, state.environments.length ? readinessIssues.length ? "Some environments need owners, assets, or endpoints." : "All environments are ready." : "Create DEV, QA, or QE environments.")}
-    </div>
-    <div class="detail-grid">
-      <section class="detail-panel">
-        <h2>Inventory exceptions</h2>
-        ${readinessIssues.length ? `<ul class="link-list">${readinessIssues.map((env) => `<li><strong>${escapeHtml(env.name)}</strong><br><span class="muted">${readiness(env).message}</span></li>`).join("")}</ul>` : `<div class="empty-state">No readiness exceptions.</div>`}
+    <div class="insight-grid">
+      <section class="panel">
+        <h2>风险洞察</h2>
+        <p class="muted">按影响范围和紧急程度排序</p>
+        ${listItems([
+          `QE 性能环境缺少可用 GPU ${statusPill("high")}`,
+          `GitLab 凭据 3 天后过期 ${statusPill("warning")}`,
+          `项目自动化测试报告未归档 ${statusPill("warning")}`,
+          `工作站 WS-309 未绑定责任人 ${statusPill("low")}`,
+        ])}
       </section>
-      <section class="detail-panel">
-        <h2>Recent audit</h2>
-        ${activityList(state.auditEvents.slice(0, 6))}
+      <section class="panel">
+        <h2>流程动态</h2>
+        <p class="muted">智能体和人工节点的实时处理状态</p>
+        ${listItems([
+          `发布前巡检 ${statusPill("running")}`,
+          `资产入库审批 ${statusPill("pending")}`,
+          `环境容量检查 ${statusPill("done")}`,
+          `异常告警复盘 ${statusPill("queued")}`,
+        ])}
       </section>
     </div>
+    ${overview ? `<section class="table-wrap">${overview}</section>` : ""}
   `;
   bindActions(content);
+}
+
+function renderBigscreen() {
+  content.innerHTML = `
+    <section class="command-center">
+      <div class="command-header">
+        <h1>OpsPilot 运营指挥中心</h1>
+        <div class="command-actions">
+          <span>${new Date().toLocaleString("zh-CN", { hour12: false })}</span>
+          <button class="ghost-button" data-action="return-dashboard">返回控制台</button>
+        </div>
+      </div>
+      <div class="command-grid">
+        ${commandCard("项目健康度", "94.8%", "实时")}
+        ${commandCard("资产在线率", "98.6%", "实时")}
+        ${commandCard("环境就绪率", "87.2%", "实时")}
+        ${commandCard("流程成功率", "96.1%", "实时")}
+      </div>
+      <div class="command-panels">
+        <section class="panel">
+          <h2>全国资源分布</h2>
+          <p class="muted">华东、华北、华南多区域资源负载与异常热力</p>
+          <div class="heat-map">${["华东", "华北", "华南", "西南", "华中", "香港", "北京", "上海", "深圳"].map((name) => `<span>${name}</span>`).join("")}</div>
+        </section>
+        <section class="panel">
+          <h2>实时告警榜</h2>
+          <p class="muted">按业务影响排序</p>
+          ${listItems(["QE 集群 GPU 不足 P1", "GitLab Webhook 延迟 P2", "模型 Key 配额告警 P2", "资产盘点待确认 P3"])}
+        </section>
+        <section class="panel">
+          <h2>流程执行趋势</h2>
+          <p class="muted">近 24 小时成功、失败、人工介入走势</p>
+          <p>当前运行流程 23 个<br>平均处理时长 18 分钟<br>人工介入率 7.4%</p>
+          <div class="bar-row">${[92, 126, 154, 186, 218, 92, 126, 154, 186, 218, 92, 126].map((h) => `<i style="height:${h}px"></i>`).join("")}</div>
+        </section>
+      </div>
+    </section>
+  `;
+  content.querySelector("[data-action='return-dashboard']").addEventListener("click", () => {
+    state.route = "dashboard";
+    render();
+  });
+}
+
+function renderTasks() {
+  content.innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">运维流程</p>
+        <h1>运维任务处理</h1>
+        <p class="muted">处理待办、审批、智能体异常、回滚确认和执行日志，是日常操作的核心功能页。</p>
+      </div>
+      <button class="primary-button">批量处理</button>
+    </div>
+    <div class="task-layout">
+      <section class="table-wrap task-table-wrap">${taskTable()}</section>
+      <aside class="detail-panel">
+        <h2>任务详情</h2>
+        <p class="muted">右侧面板展示上下文、处理建议、智能体结论、执行日志和提交动作</p>
+        <p>建议：扩容 QE GPU 池或切换到备用环境。<br>影响：自动化性能回归流程。<br>智能体结论：当前可用 GPU 不满足需求。</p>
+        <div class="action-row">
+          <button class="primary-button">确认处理</button>
+          <button class="ghost-button">转交他人</button>
+          <button class="ghost-button danger">驳回</button>
+        </div>
+      </aside>
+    </div>
+  `;
 }
 
 function renderResource(type) {
@@ -231,10 +312,10 @@ function renderResource(type) {
     </div>
     ${permissionBanner()}
     <div class="toolbar">
-      <label>Search this view<input data-filter="localQuery" type="search" value="${escapeHtml(state.filters.localQuery || "")}" placeholder="${config.search}" /></label>
+      <label>本页搜索<input data-filter="localQuery" type="search" value="${escapeHtml(state.filters.localQuery || "")}" placeholder="${config.search}" /></label>
       ${config.filters.map((filter) => filterControl(filter)).join("")}
-      <label>Rows<select data-filter="limit"><option>10</option><option ${state.filters.limit === "25" ? "selected" : ""}>25</option></select></label>
-      <button class="ghost-button" data-clear>Clear</button>
+      <label>行数<select data-filter="limit"><option>10</option><option ${state.filters.limit === "25" ? "selected" : ""}>25</option></select></label>
+      <button class="ghost-button" data-clear>清除</button>
     </div>
     <section class="table-wrap" aria-label="${config.title} table">
       ${rows.length ? tableFor(type, rows) : emptyStateFor(type)}
@@ -248,41 +329,41 @@ function renderResource(type) {
 function resourceConfig(type) {
   return {
     identity: {
-      eyebrow: "RBAC baseline",
-      title: "Identity",
-      copy: "Users, status, and scoped roles used by project and environment ownership.",
-      action: "Create user",
-      search: "Name, email, role",
-      filters: [{ key: "status", label: "Status", values: ["all", "active", "inactive"] }],
+      eyebrow: "用户权限",
+      title: "用户权限",
+      copy: "统一管理用户状态、平台角色与项目权限范围。",
+      action: "邀请用户",
+      search: "姓名、邮箱、角色",
+      filters: [{ key: "status", label: "状态", values: ["all", "active", "inactive"] }],
     },
     projects: {
-      eyebrow: "Project inventory",
-      title: "Projects",
-      copy: "Project records with owner, members, linked environments, assets, and activity.",
-      action: "Create project",
-      search: "Name, key, owner",
-      filters: [{ key: "status", label: "Status", values: ["all", "active", "archived"] }],
+      eyebrow: "项目管理",
+      title: "项目管理",
+      copy: "项目负责人、成员、环境、资产与最近变更集中管理。",
+      action: "新建项目",
+      search: "项目、编号、负责人",
+      filters: [{ key: "status", label: "状态", values: ["all", "active", "archived"] }],
     },
     assets: {
-      eyebrow: "Asset hierarchy",
-      title: "Assets",
-      copy: "Physical and virtual inventory with category fields, capabilities, and parent-child links.",
-      action: "Register asset",
-      search: "Name, category, location",
+      eyebrow: "资产管理",
+      title: "资产管理",
+      copy: "服务器、GPU、VM、工作站等资产的层级、能力与责任人管理。",
+      action: "登记资产",
+      search: "名称、类别、位置",
       filters: [
-        { key: "category", label: "Category", values: ["all", "server", "workstation", "vm", "gpu", "memory"] },
-        { key: "status", label: "Status", values: ["all", "available", "in_use", "maintenance", "retired"] },
+        { key: "category", label: "类别", values: ["all", "server", "workstation", "vm", "gpu", "memory"] },
+        { key: "status", label: "状态", values: ["all", "available", "in_use", "maintenance", "retired"] },
       ],
     },
     environments: {
-      eyebrow: "Environment readiness",
-      title: "Environments",
-      copy: "DEV, QA, and QE environments with owners, endpoints, members, and inventory bindings.",
-      action: "Create environment",
-      search: "Name, project, owner",
+      eyebrow: "环境管理",
+      title: "环境管理",
+      copy: "DEV、QA、QE 环境的责任人、端点、成员与资产绑定。",
+      action: "新建环境",
+      search: "环境、项目、负责人",
       filters: [
-        { key: "type", label: "Type", values: ["all", "DEV", "QA", "QE"] },
-        { key: "readiness", label: "Readiness", values: ["all", "ready", "warning"] },
+        { key: "type", label: "类型", values: ["all", "DEV", "QA", "QE"] },
+        { key: "readiness", label: "就绪状态", values: ["all", "ready", "warning"] },
       ],
     },
   }[type];
@@ -307,10 +388,10 @@ function filteredRows(type) {
 
 function tableFor(type, rows) {
   const headers = {
-    identity: ["User", "Status", "Roles", "Updated", "Actions"],
-    projects: ["Project", "Owner", "Members", "Links", "Status", "Actions"],
-    assets: ["Asset", "Category", "Owner", "Location", "Status", "Actions"],
-    environments: ["Environment", "Project", "Owner", "Bindings", "Readiness", "Actions"],
+    identity: ["用户", "状态", "角色", "更新时间", "操作"],
+    projects: ["项目", "负责人", "成员", "绑定", "状态", "操作"],
+    assets: ["资产", "类别", "负责人", "位置", "状态", "操作"],
+    environments: ["环境", "项目", "负责人", "绑定", "就绪状态", "操作"],
   }[type];
   return `<table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => rowFor(type, row)).join("")}</tbody></table>`;
 }
@@ -320,15 +401,15 @@ function rowFor(type, row) {
   if (type === "projects") return `<tr><td>${titleCell(row.id, `${row.key} · ${row.name}`, row.description)}</td><td>${nameFor("users", row.owner_id)}</td><td>${row.member_ids?.length || 0}</td><td>${row.environment_ids?.length || 0} env / ${row.asset_ids?.length || 0} assets</td><td>${statusPill(row.status)}</td><td>${rowActions(type, row)}</td></tr>`;
   if (type === "assets") return `<tr><td>${titleCell(row.id, row.name, row.id)}</td><td>${escapeHtml(row.category)}</td><td>${nameFor("users", row.owner_id)}</td><td>${escapeHtml(row.location || "Unassigned")}</td><td>${statusPill(row.status)}</td><td>${rowActions(type, row)}</td></tr>`;
   const ready = readiness(row);
-  return `<tr><td>${titleCell(row.id, row.name, row.type)}</td><td>${projectName(row.project_id)}</td><td>${nameFor("users", row.owner_id)}</td><td>${row.member_ids?.length || 0} members / ${row.asset_ids?.length || 0} assets</td><td><span class="pill ${ready.level === "ok" ? "ok" : "warn"}">${ready.message}</span></td><td>${rowActions(type, row)}</td></tr>`;
+  return `<tr><td>${titleCell(row.id, row.name, row.type)}</td><td>${projectName(row.project_id)}</td><td>${nameFor("users", row.owner_id)}</td><td>${row.member_ids?.length || 0} 成员 / ${row.asset_ids?.length || 0} 资产</td><td><span class="pill ${ready.level === "ok" ? "ok" : "warn"}">${ready.message}</span></td><td>${rowActions(type, row)}</td></tr>`;
 }
 
 function rowActions(type, row) {
   const statusLabel = statusActionLabel(type, row);
   return `<div class="action-row">
-    ${actionButton("edit", "Edit", "ghost-button small", `edit-${type}-${row.id}`, { type, id: row.id })}
+    ${actionButton("edit", "编辑", "ghost-button small", `edit-${type}-${row.id}`, { type, id: row.id })}
     ${statusLabel ? actionButton("status", statusLabel, "ghost-button small", `status-${type}-${row.id}`, { type, id: row.id }) : ""}
-    ${actionButton("delete", "Delete", "ghost-button small danger", `delete-${type}-${row.id}`, { type, id: row.id })}
+    ${actionButton("delete", "删除", "ghost-button small danger", `delete-${type}-${row.id}`, { type, id: row.id })}
   </div>`;
 }
 
@@ -342,7 +423,7 @@ function detailMarkup(type, id) {
   return `
     <div class="detail-grid">
       <section class="detail-panel">
-        <div class="tab-strip"><button class="active">Overview</button><button>Relationships</button><button>Activity</button></div>
+        <div class="tab-strip"><button class="active">概览</button><button>关系</button><button>活动</button></div>
         <div class="detail-heading">
           <h2>${escapeHtml(row.name || row.key || row.email)}</h2>
           <div class="action-row">${rowActions(type, row)}</div>
@@ -350,7 +431,7 @@ function detailMarkup(type, id) {
         <dl class="kv">${detailPairs(type, row).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
       </section>
       <aside class="detail-panel">
-        <h3>Relationship controls</h3>
+        <h3>关系控制</h3>
         ${relationshipControls(type, row)}
       </aside>
     </div>
@@ -358,30 +439,30 @@ function detailMarkup(type, id) {
 }
 
 function detailPairs(type, row) {
-  const common = [["ID", escapeHtml(row.id)], ["Status", statusPill(row.status || "active")], ["Updated", date(row.updated_at)]];
-  if (type === "identity") return [["Email", escapeHtml(row.email)], ["Roles", roles(row.roles)], ...common];
-  if (type === "projects") return [["Key", escapeHtml(row.key)], ["Owner", nameFor("users", row.owner_id)], ["Description", escapeHtml(row.description || "No description")], ["Members", String(row.member_ids?.length || 0)], ...common];
-  if (type === "assets") return [["Category", escapeHtml(row.category)], ["Owner", nameFor("users", row.owner_id)], ["Location", escapeHtml(row.location || "Unassigned")], ["Capabilities", tags(row.capabilities)], ["Properties", escapeHtml(JSON.stringify(row.properties || {}))], ...common];
+  const common = [["ID", escapeHtml(row.id)], ["状态", statusPill(row.status || "active")], ["更新时间", date(row.updated_at)]];
+  if (type === "identity") return [["邮箱", escapeHtml(row.email)], ["角色", roles(row.roles)], ...common];
+  if (type === "projects") return [["项目编号", escapeHtml(row.key)], ["负责人", nameFor("users", row.owner_id)], ["说明", escapeHtml(row.description || "暂无说明")], ["成员", String(row.member_ids?.length || 0)], ...common];
+  if (type === "assets") return [["类别", escapeHtml(row.category)], ["负责人", nameFor("users", row.owner_id)], ["位置", escapeHtml(row.location || "未分配")], ["能力", tags(row.capabilities)], ["属性", escapeHtml(JSON.stringify(row.properties || {}))], ...common];
   const ready = readiness(row);
-  return [["Type", escapeHtml(row.type)], ["Project", projectName(row.project_id)], ["Owner", nameFor("users", row.owner_id)], ["Readiness", `<span class="pill ${ready.level === "ok" ? "ok" : "warn"}">${ready.message}</span>`], ["Endpoints", String(row.endpoints?.length || 0)], ...common];
+  return [["类型", escapeHtml(row.type)], ["项目", projectName(row.project_id)], ["负责人", nameFor("users", row.owner_id)], ["就绪状态", `<span class="pill ${ready.level === "ok" ? "ok" : "warn"}">${ready.message}</span>`], ["端点", String(row.endpoints?.length || 0)], ...common];
 }
 
 function relationshipControls(type, row) {
-  if (state.role === "Viewer") return `<div class="permission-denied"><strong>Permission denied</strong><span>Viewer can inspect relationships but cannot change bindings.</span></div>${relationshipList(type, row)}`;
+  if (state.role === "Viewer") return `<div class="permission-denied"><strong>无写入权限</strong><span>查看者可以查看关系，但不能修改绑定。</span></div>${relationshipList(type, row)}`;
   if (type === "projects") {
     const availableAssets = state.assets.filter((asset) => !(row.asset_ids || []).includes(asset.id));
     const availableEnvironments = state.environments.filter((env) => env.project_id === row.id && !(row.environment_ids || []).includes(env.id));
     return `
       <form class="inline-form" data-action="link-project-asset" data-id="${row.id}">
-        <label>Link asset<select name="asset_id">${options(availableAssets, "No unlinked assets")}</select></label>
-        <button class="ghost-button small" type="submit">Link</button>
+        <label>绑定资产<select name="asset_id">${options(availableAssets, "没有可绑定资产")}</select></label>
+        <button class="ghost-button small" type="submit">绑定</button>
       </form>
       <form class="inline-form" data-action="link-project-environment" data-id="${row.id}">
-        <label>Link environment<select name="environment_id">${options(availableEnvironments, "No unlinked environments")}</select></label>
-        <button class="ghost-button small" type="submit">Link</button>
+        <label>绑定环境<select name="environment_id">${options(availableEnvironments, "没有可绑定环境")}</select></label>
+        <button class="ghost-button small" type="submit">绑定</button>
       </form>
-      <h4>Linked assets</h4>${linkedList(row.asset_ids || [], "assets", "unlink-project-asset", row.id)}
-      <h4>Linked environments</h4>${linkedList(row.environment_ids || [], "environments", "unlink-project-environment", row.id)}
+      <h4>已绑定资产</h4>${linkedList(row.asset_ids || [], "assets", "unlink-project-asset", row.id)}
+      <h4>已绑定环境</h4>${linkedList(row.environment_ids || [], "environments", "unlink-project-environment", row.id)}
     `;
   }
   if (type === "environments") {
@@ -389,16 +470,16 @@ function relationshipControls(type, row) {
     const availableMembers = state.users.filter((user) => !(row.member_ids || []).includes(user.id));
     return `
       <form class="inline-form" data-action="bind-environment-asset" data-id="${row.id}">
-        <label>Bind asset<select name="asset_id">${options(availableAssets, "No unbound assets")}</select></label>
-        <button class="ghost-button small" type="submit">Bind</button>
+        <label>绑定资产<select name="asset_id">${options(availableAssets, "没有可绑定资产")}</select></label>
+        <button class="ghost-button small" type="submit">绑定</button>
       </form>
       <form class="inline-form" data-action="bind-environment-member" data-id="${row.id}">
-        <label>Bind member<select name="member_id">${options(availableMembers, "No unbound members")}</select></label>
-        <button class="ghost-button small" type="submit">Bind</button>
+        <label>绑定成员<select name="member_id">${options(availableMembers, "没有可绑定成员")}</select></label>
+        <button class="ghost-button small" type="submit">绑定</button>
       </form>
-      <h4>Assets</h4>${linkedList(row.asset_ids || [], "assets", "unbind-environment-asset", row.id)}
-      <h4>Members</h4>${linkedList(row.member_ids || [], "users", "unbind-environment-member", row.id)}
-      <h4>Endpoints</h4>${listItems((row.endpoints || []).map((endpoint) => `Endpoint ${escapeHtml(endpoint.name)}: ${escapeHtml(endpoint.url)}`))}
+      <h4>资产</h4>${linkedList(row.asset_ids || [], "assets", "unbind-environment-asset", row.id)}
+      <h4>成员</h4>${linkedList(row.member_ids || [], "users", "unbind-environment-member", row.id)}
+      <h4>端点</h4>${listItems((row.endpoints || []).map((endpoint) => `端点 ${escapeHtml(endpoint.name)}: ${escapeHtml(endpoint.url)}`))}
     `;
   }
   return relationshipList(type, row);
@@ -406,14 +487,14 @@ function relationshipControls(type, row) {
 
 function relationshipList(type, row) {
   if (type === "projects") return listItems([...(row.environment_ids || []).map(projectEnvLabel), ...(row.asset_ids || []).map(assetLabel)]);
-  if (type === "assets") return listItems([row.parent_id ? `Installed in ${assetLabel(row.parent_id)}` : "No parent asset", ...state.assets.filter((asset) => asset.parent_id === row.id).map((asset) => `Contains ${escapeHtml(asset.name)}`)]);
-  if (type === "environments") return listItems([...(row.member_ids || []).map((id) => `Member ${nameFor("users", id)}`), ...(row.asset_ids || []).map((id) => `Asset ${assetLabel(id)}`), ...(row.endpoints || []).map((e) => `Endpoint ${escapeHtml(e.name)}: ${escapeHtml(e.url)}`)]);
-  return listItems(state.projects.filter((project) => project.member_ids?.includes(row.id) || project.owner_id === row.id).map((project) => `Project ${escapeHtml(project.key)}`));
+  if (type === "assets") return listItems([row.parent_id ? `安装于 ${assetLabel(row.parent_id)}` : "无父级资产", ...state.assets.filter((asset) => asset.parent_id === row.id).map((asset) => `包含 ${escapeHtml(asset.name)}`)]);
+  if (type === "environments") return listItems([...(row.member_ids || []).map((id) => `成员 ${nameFor("users", id)}`), ...(row.asset_ids || []).map((id) => `资产 ${assetLabel(id)}`), ...(row.endpoints || []).map((e) => `端点 ${escapeHtml(e.name)}: ${escapeHtml(e.url)}`)]);
+  return listItems(state.projects.filter((project) => project.member_ids?.includes(row.id) || project.owner_id === row.id).map((project) => `项目 ${escapeHtml(project.key)}`));
 }
 
 function linkedList(ids, source, action, ownerId) {
-  if (!ids.length) return `<div class="empty-state compact">No linked records.</div>`;
-  return `<ul class="link-list">${ids.map((id) => `<li><span>${labelFor(source, id)}</span>${actionButton("link", "Unlink", "ghost-button small", `${action}-${id}`, { actionName: action, id: ownerId, targetId: id })}</li>`).join("")}</ul>`;
+  if (!ids.length) return `<div class="empty-state compact">暂无绑定记录。</div>`;
+  return `<ul class="link-list">${ids.map((id) => `<li><span>${labelFor(source, id)}</span>${actionButton("link", "解绑", "ghost-button small", `${action}-${id}`, { actionName: action, id: ownerId, targetId: id })}</li>`).join("")}</ul>`;
 }
 
 function openCreate(type) {
@@ -429,7 +510,7 @@ function openEdit(type, id) {
 
 function openFormModal({ mode, type, row = {} }) {
   const config = resourceConfig(type);
-  $("#modal-title").textContent = mode === "create" ? config.action : `Edit ${config.title}`;
+  $("#modal-title").textContent = mode === "create" ? config.action : `编辑${config.title}`;
   $("#modal-body").innerHTML = formFor(type, row, mode);
   modal.showModal();
   $("#modal-body form").addEventListener("submit", (event) => submitForm(event, type, row.id));
@@ -438,12 +519,12 @@ function openFormModal({ mode, type, row = {} }) {
 function formFor(type, row, mode) {
   const userOptions = state.users.map((u) => `<option value="${u.id}" ${row.owner_id === u.id ? "selected" : ""}>${escapeHtml(u.name)}</option>`).join("");
   const projectOptions = state.projects.map((p) => `<option value="${p.id}" ${row.project_id === p.id ? "selected" : ""}>${escapeHtml(p.key)} · ${escapeHtml(p.name)}</option>`).join("");
-  const assetOptions = `<option value="">No parent</option>${state.assets.filter((asset) => asset.id !== row.id).map((a) => `<option value="${a.id}" ${row.parent_id === a.id ? "selected" : ""}>${escapeHtml(a.name)}</option>`).join("")}`;
-  const submit = mode === "create" ? resourceConfig(type).action : "Save changes";
-  if (type === "identity") return `<form class="form-grid"><label>Name<input name="name" value="${escapeAttr(row.name)}" required /></label><label>Email<input name="email" type="email" value="${escapeAttr(row.email)}" required /></label><label>Role<select name="role">${selectedOptions(["Admin", "Operator", "Viewer"], row.roles?.[0]?.name || "Admin")}</select></label><label>Scope<select name="scope">${selectedOptions(["platform", "project"], row.roles?.[0]?.scope || "platform")}</select></label><button class="primary-button full" type="submit">${submit}</button></form>`;
-  if (type === "projects") return `<form class="form-grid"><label>Key<input name="key" value="${escapeAttr(row.key)}" required /></label><label>Name<input name="name" value="${escapeAttr(row.name)}" required /></label><label>Owner<select name="owner_id" required>${userOptions}</select></label><label>Status<select name="status">${selectedOptions(["active", "archived"], row.status || "active")}</select></label><label class="full">Description<textarea name="description">${escapeHtml(row.description || "")}</textarea></label><button class="primary-button full" type="submit">${submit}</button></form>`;
-  if (type === "assets") return `<form class="form-grid"><label>Name<input name="name" value="${escapeAttr(row.name)}" required /></label><label>Category<select name="category">${selectedOptions(["server", "workstation", "vm", "gpu", "memory"], row.category || "server")}</select></label><label>Status<select name="status">${selectedOptions(["available", "in_use", "maintenance", "retired"], row.status || "available")}</select></label><label>Owner<select name="owner_id"><option value="">Unassigned</option>${userOptions}</select></label><label>Parent asset<select name="parent_id">${assetOptions}</select></label><label>Location<input name="location" value="${escapeAttr(row.location)}" /></label><label class="full">Capabilities<input name="capabilities" value="${escapeAttr((row.capabilities || []).join(", "))}" placeholder="cuda, linux, test-runner" /></label><button class="primary-button full" type="submit">${submit}</button></form>`;
-  return `<form class="form-grid"><label>Name<input name="name" value="${escapeAttr(row.name)}" required /></label><label>Type<select name="type">${selectedOptions(["DEV", "QA", "QE"], row.type || "DEV")}</select></label><label>Project<select name="project_id" required>${projectOptions}</select></label><label>Owner<select name="owner_id" required>${userOptions}</select></label><label>Status<select name="status">${selectedOptions(["active", "inactive"], row.status || "active")}</select></label><label class="full">Endpoint URL<input name="endpoint" value="${escapeAttr(row.endpoints?.[0]?.url)}" placeholder="https://qa.example.local" /></label><button class="primary-button full" type="submit">${submit}</button></form>`;
+  const assetOptions = `<option value="">无父级资产</option>${state.assets.filter((asset) => asset.id !== row.id).map((a) => `<option value="${a.id}" ${row.parent_id === a.id ? "selected" : ""}>${escapeHtml(a.name)}</option>`).join("")}`;
+  const submit = mode === "create" ? resourceConfig(type).action : "保存修改";
+  if (type === "identity") return `<form class="form-grid"><label>姓名<input name="name" value="${escapeAttr(row.name)}" required /></label><label>邮箱<input name="email" type="email" value="${escapeAttr(row.email)}" required /></label><label>角色<select name="role">${selectedOptions(["Admin", "Operator", "Viewer"], row.roles?.[0]?.name || "Admin")}</select></label><label>范围<select name="scope">${selectedOptions(["platform", "project"], row.roles?.[0]?.scope || "platform")}</select></label><button class="primary-button full" type="submit">${submit}</button></form>`;
+  if (type === "projects") return `<form class="form-grid"><label>项目编号<input name="key" value="${escapeAttr(row.key)}" required /></label><label>项目名称<input name="name" value="${escapeAttr(row.name)}" required /></label><label>负责人<select name="owner_id" required>${userOptions}</select></label><label>状态<select name="status">${selectedOptions(["active", "archived"], row.status || "active")}</select></label><label class="full">说明<textarea name="description">${escapeHtml(row.description || "")}</textarea></label><button class="primary-button full" type="submit">${submit}</button></form>`;
+  if (type === "assets") return `<form class="form-grid"><label>资产名称<input name="name" value="${escapeAttr(row.name)}" required /></label><label>类别<select name="category">${selectedOptions(["server", "workstation", "vm", "gpu", "memory"], row.category || "server")}</select></label><label>状态<select name="status">${selectedOptions(["available", "in_use", "maintenance", "retired"], row.status || "available")}</select></label><label>负责人<select name="owner_id"><option value="">未分配</option>${userOptions}</select></label><label>父级资产<select name="parent_id">${assetOptions}</select></label><label>位置<input name="location" value="${escapeAttr(row.location)}" /></label><label class="full">能力标签<input name="capabilities" value="${escapeAttr((row.capabilities || []).join(", "))}" placeholder="cuda, linux, test-runner" /></label><button class="primary-button full" type="submit">${submit}</button></form>`;
+  return `<form class="form-grid"><label>环境名称<input name="name" value="${escapeAttr(row.name)}" required /></label><label>类型<select name="type">${selectedOptions(["DEV", "QA", "QE"], row.type || "DEV")}</select></label><label>项目<select name="project_id" required>${projectOptions}</select></label><label>负责人<select name="owner_id" required>${userOptions}</select></label><label>状态<select name="status">${selectedOptions(["active", "inactive"], row.status || "active")}</select></label><label class="full">端点 URL<input name="endpoint" value="${escapeAttr(row.endpoints?.[0]?.url)}" placeholder="https://qa.example.local" /></label><button class="primary-button full" type="submit">${submit}</button></form>`;
 }
 
 async function submitForm(event, type, id) {
@@ -454,7 +535,7 @@ async function submitForm(event, type, id) {
     else await mutate("POST", endpoints[type], payload, type, null, () => addLocal(type, payload));
     modal.close();
     await afterMutation(type, id);
-    toast(`${resourceConfig(type).title} saved.`);
+    toast(`${resourceConfig(type).title}已保存。`);
   } catch (error) {
     showError(error.message);
   }
@@ -487,23 +568,23 @@ async function handleStatus(type, id) {
   const nextStatus = nextStatusFor(type, item);
   await mutate("PATCH", `${endpoints[type]}/${id}`, { status: nextStatus }, type, id, (row) => ({ ...row, status: nextStatus, updated_at: new Date().toISOString() }));
   await afterMutation(type, id);
-  toast(`${resourceConfig(type).title} marked ${nextStatus}.`);
+  toast(`${resourceConfig(type).title}已标记为${translateStatus(nextStatus)}。`);
 }
 
 async function handleDelete(type, id) {
   if (!can("delete")) return deny("delete records");
   const item = collectionFor(type).find((row) => row.id === id);
-  if (!item || !confirm(`Delete ${item.name || item.key || item.email}? This action is reversible only through a new create flow.`)) return;
+  if (!item || !confirm(`确认删除 ${item.name || item.key || item.email}？删除后只能重新创建。`)) return;
   await mutate("DELETE", `${endpoints[type]}/${id}`, undefined, type, id, () => null);
   state.detail = null;
   await afterMutation(type);
-  toast(`${resourceConfig(type).title} deleted.`);
+  toast(`${resourceConfig(type).title}已删除。`);
 }
 
 async function handleRelationship(actionName, id, targetId, form) {
   if (!can("link")) return deny("change bindings");
   const value = targetId || new FormData(form).get(actionValueKey(actionName));
-  if (!value) return showError("Choose a record before saving the binding.");
+  if (!value) return showError("请先选择需要绑定的记录。");
   if (actionName === "link-project-asset") await mutate("POST", `/v1/projects/${id}/assets/${value}`, undefined, "projects", id, (project) => ({ ...project, asset_ids: unique([...(project.asset_ids || []), value]) }));
   if (actionName === "unlink-project-asset") await mutate("DELETE", `/v1/projects/${id}/assets/${value}`, undefined, "projects", id, (project) => ({ ...project, asset_ids: (project.asset_ids || []).filter((assetId) => assetId !== value) }));
   if (actionName === "link-project-environment") await mutate("POST", `/v1/projects/${id}/environments/${value}`, undefined, "projects", id, (project) => ({ ...project, environment_ids: unique([...(project.environment_ids || []), value]) }));
@@ -513,7 +594,7 @@ async function handleRelationship(actionName, id, targetId, form) {
   if (actionName === "bind-environment-member") await patchEnvironment(id, (env) => ({ member_ids: unique([...(env.member_ids || []), value]) }));
   if (actionName === "unbind-environment-member") await patchEnvironment(id, (env) => ({ member_ids: (env.member_ids || []).filter((memberId) => memberId !== value) }));
   await afterMutation(state.route, id);
-  toast("Binding updated.");
+  toast("绑定关系已更新。");
 }
 
 async function patchEnvironment(id, changeFn) {
@@ -622,15 +703,15 @@ function filterControl(filter) {
 function actionButton(permission, label, className, id, dataset = {}) {
   const allowed = can(permission);
   const attrs = Object.entries(dataset).map(([key, value]) => `data-${kebab(key)}="${escapeAttr(value)}"`).join(" ");
-  return `<button class="${className}" data-action="${permission}" ${attrs} ${allowed ? "" : "disabled aria-disabled=\"true\" title=\"Permission denied\""}>${label}</button>`;
+  return `<button class="${className}" data-action="${permission}" ${attrs} ${allowed ? "" : "disabled aria-disabled=\"true\" title=\"无操作权限\""}>${label}</button>`;
 }
 
 function permissionBanner() {
-  return state.role === "Viewer" ? `<section class="permission-denied"><strong>Permission denied for write actions.</strong><span>Viewer role can inspect dashboard, inventory, relationships, and audit context, but create/edit/link/archive/delete controls are disabled.</span></section>` : "";
+  return state.role === "Viewer" ? `<section class="permission-denied"><strong>无写入权限</strong><span>查看者可浏览工作台、清单、关系与审计上下文，但创建、编辑、绑定、归档、删除操作已禁用。</span></section>` : "";
 }
 
 function deny(action) {
-  toast(`Permission denied: ${state.role} cannot ${action}.`);
+  toast(`无操作权限：${displayRole(state.role)}不能${action}。`);
 }
 
 function can(permission) {
@@ -642,8 +723,8 @@ function can(permission) {
 
 function emptyStateFor(type) {
   const config = resourceConfig(type);
-  const mode = state.apiOnline ? "Live API returned no records." : "Local mock inventory has no matching records.";
-  return `<div class="empty-state"><strong>No ${config.title.toLowerCase()} found.</strong><span>${mode}</span></div>`;
+  const mode = state.apiOnline ? "基础服务暂无记录。" : "本地模拟数据中没有匹配记录。";
+  return `<div class="empty-state"><strong>暂无${config.title}</strong><span>${mode}</span></div>`;
 }
 
 function metric(label, value, help) {
@@ -655,26 +736,26 @@ function setupCard(label, complete, help) {
 }
 
 function activityList(events) {
-  if (!events.length) return `<div class="empty-state">No audit events yet.</div>`;
+  if (!events.length) return `<div class="empty-state">暂无审计事件。</div>`;
   return `<ul class="activity-list">${events.map((event) => `<li><strong>${escapeHtml(event.action)}</strong><br><span class="muted">${escapeHtml(event.resource_type)} · ${escapeHtml(event.resource_id)} · ${date(event.occurred_at)}</span></li>`).join("")}</ul>`;
 }
 
 function readiness(env) {
   const issues = [];
-  if (!env.owner_id) issues.push("missing owner");
-  if (!env.asset_ids?.length) issues.push("missing assets");
-  if (!env.endpoints?.length) issues.push("missing endpoint");
-  if ((env.asset_ids || []).some((id) => state.assets.find((asset) => asset.id === id)?.status === "retired")) issues.push("inactive asset");
-  return issues.length ? { level: "warn", message: issues.join(", ") } : { level: "ok", message: "ready" };
+  if (!env.owner_id) issues.push("缺少负责人");
+  if (!env.asset_ids?.length) issues.push("缺少资产");
+  if (!env.endpoints?.length) issues.push("缺少端点");
+  if ((env.asset_ids || []).some((id) => state.assets.find((asset) => asset.id === id)?.status === "retired")) issues.push("存在退役资产");
+  return issues.length ? { level: "warn", message: issues.join("、") } : { level: "ok", message: "已就绪" };
 }
 
 function statusPill(status = "active") {
-  const tone = ["active", "available", "in_use"].includes(status) ? "ok" : ["inactive", "maintenance", "archived"].includes(status) ? "warn" : "bad";
-  return `<span class="pill ${tone}">${escapeHtml(status)}</span>`;
+  const tone = ["active", "available", "in_use", "done"].includes(status) ? "ok" : ["inactive", "maintenance", "archived", "warning", "pending", "queued", "low"].includes(status) ? "warn" : ["high", "retired"].includes(status) ? "bad" : status === "running" ? "" : "";
+  return `<span class="pill ${tone}">${escapeHtml(translateStatus(status))}</span>`;
 }
 
 function roles(value = []) {
-  return value.length ? value.map((role) => `<span class="role-pill">${escapeHtml(role.scope)}:${escapeHtml(role.name)}</span>`).join(" ") : `<span class="muted">No roles</span>`;
+  return value.length ? value.map((role) => `<span class="role-pill">${escapeHtml(role.scope)}:${displayRole(role.name)}</span>`).join(" ") : `<span class="muted">暂无角色</span>`;
 }
 
 function tags(value = []) {
@@ -703,7 +784,7 @@ function assetLabel(id) {
 }
 
 function projectEnvLabel(id) {
-  return `Environment ${escapeHtml(state.environments.find((item) => item.id === id)?.name || id)}`;
+  return `环境 ${escapeHtml(state.environments.find((item) => item.id === id)?.name || id)}`;
 }
 
 function labelFor(source, id, safe = true) {
@@ -726,7 +807,7 @@ function collectionNameForItem(item) {
 }
 
 function listItems(items) {
-  return items.length ? `<ul class="link-list">${items.map((item) => `<li>${item}</li>`).join("")}</ul>` : `<div class="empty-state compact">No related records.</div>`;
+  return items.length ? `<ul class="link-list">${items.map((item) => `<li>${item}</li>`).join("")}</ul>` : `<div class="empty-state compact">暂无相关记录。</div>`;
 }
 
 function activeCount(items) {
@@ -753,10 +834,10 @@ function roleFromEmail(email) {
 }
 
 function statusActionLabel(type, row) {
-  if (type === "identity") return row.status === "inactive" ? "Reactivate" : "Deactivate";
-  if (type === "projects") return row.status === "archived" ? "Restore" : "Archive";
-  if (type === "assets") return row.status === "retired" ? "Restore" : "Retire";
-  if (type === "environments") return row.status === "inactive" ? "Activate" : "Deactivate";
+  if (type === "identity") return row.status === "inactive" ? "启用" : "停用";
+  if (type === "projects") return row.status === "archived" ? "恢复" : "归档";
+  if (type === "assets") return row.status === "retired" ? "恢复" : "退役";
+  if (type === "environments") return row.status === "inactive" ? "启用" : "停用";
   return "";
 }
 
@@ -795,7 +876,68 @@ function toast(message) {
 }
 
 function showError(message) {
-  toast(`Error: ${message}`);
+  toast(`错误：${message}`);
+}
+
+function displayRole(role) {
+  return { Admin: "管理员", Operator: "运维人员", Viewer: "查看者" }[role] || role;
+}
+
+function translateStatus(status) {
+  return {
+    active: "启用",
+    inactive: "停用",
+    available: "可用",
+    in_use: "使用中",
+    maintenance: "维护中",
+    retired: "已退役",
+    archived: "已归档",
+    high: "高",
+    warning: "中",
+    low: "低",
+    running: "智能体执行中",
+    pending: "等待人工处理",
+    done: "已完成",
+    queued: "待分配",
+  }[status] || status;
+}
+
+function overviewTable() {
+  const rows = state.apiOnline ? state.projects.map(projectOverviewRow) : [
+    ["智能运营中台", "王少琪", "2 个警告", "98% 在线", "10 分钟前"],
+    ["自动化测试平台", "李伟", "正常", "96% 在线", "32 分钟前"],
+    ["模型服务网关", "陈敏", "1 个阻塞", "99% 在线", "1 小时前"],
+  ];
+  if (!rows.length) return "";
+  return `<table><thead><tr>${["项目", "负责人", "环境健康", "资产状态", "最近变更"].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+function projectOverviewRow(project) {
+  const owner = state.users.find((user) => user.id === project.owner_id);
+  const environments = state.environments.filter((env) => (project.environment_ids || []).includes(env.id));
+  const issues = environments.filter((env) => readiness(env).level !== "ok");
+  const assetCount = (project.asset_ids || []).length;
+  return [
+    escapeHtml(project.name),
+    escapeHtml(owner?.name || "未分配"),
+    environments.length ? issues.length ? `${issues.length} 个警告` : "正常" : "未配置环境",
+    assetCount ? `${assetCount} 个资产` : "未绑定资产",
+    date(project.updated_at),
+  ];
+}
+
+function taskTable() {
+  const rows = [
+    ["QE 环境容量不足", "环境检查", "P1", "待处理"],
+    ["资产入库审批", "资产管理", "P2", "待审批"],
+    ["GitLab Key 轮换", "凭据管理", "P2", "执行中"],
+    ["流程失败复核", "运维流程", "P1", "待复核"],
+  ];
+  return `<table class="task-table"><thead><tr>${["任务", "来源", "优先级", "状态"].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+function commandCard(label, value, tag) {
+  return `<section class="command-card"><span>${label}</span><strong>${value}</strong><span class="pill ok">${tag}</span></section>`;
 }
 
 function clone(value) {
