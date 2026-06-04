@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -25,6 +26,12 @@ class ObjectStorage(ABC):
     @abstractmethod
     def delete(self, key: str) -> None:
         raise NotImplementedError
+
+    def capability_url(self, purpose: str, capability_id: str) -> str:
+        if purpose not in {"upload", "download"}:
+            raise InvalidInput("unsupported file capability")
+        token = secrets.token_urlsafe(18)
+        return f"opspilot://file-capabilities/{purpose}/{capability_id}/{token}"
 
 
 class LocalFileStorage(ObjectStorage):

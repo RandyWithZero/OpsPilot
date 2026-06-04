@@ -18,6 +18,7 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 - agent registry and skill catalog metadata
 - model provider configuration through safe credential references
 - workflow definitions with versioned node/edge models
+- workflow run execution records with ordered step runs and manual status transitions
 - test cases, suites, runs, reports, and quality gates
 - audit events for create/link actions
 
@@ -65,4 +66,6 @@ The storage adapter is selected with `OPSPILOT_OBJECT_STORAGE_ADAPTER`:
 - `local` (default): creates the local object root automatically.
 - `s3` or `minio`: validates `OPSPILOT_S3_BUCKET` and captures endpoint/region/auto-bucket settings (`OPSPILOT_S3_ENDPOINT_URL`, `OPSPILOT_S3_REGION`, `OPSPILOT_S3_AUTO_CREATE_BUCKET`) as the extension boundary for a future concrete S3 client.
 
-The API never returns internal storage keys. Business modules should keep only the returned file `id` or reference fields (`owner_id`, `resource_type`, `resource_id`, `module`).
+The API never returns internal storage keys. Upload/download grants and upload sessions expose opaque `opspilot://file-capabilities/...` URLs generated at the storage boundary. Business modules should keep only the returned file `id` or reference fields (`owner_id`, `resource_type`, `resource_id`, `module`).
+
+Local MVP uploads accept base64 JSON content up to `OPSPILOT_MAX_FILE_UPLOAD_BYTES` bytes after decode (default 5 MiB). HTTP request bodies are capped by `OPSPILOT_MAX_REQUEST_BODY_BYTES` (default 8 MiB). Non-admin HTTP callers are scoped to their `X-Actor-ID` as `owner_id`; admin callers may filter across owners.

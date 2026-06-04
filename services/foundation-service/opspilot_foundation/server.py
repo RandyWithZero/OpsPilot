@@ -8,8 +8,11 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 from urllib.parse import parse_qs
 
+from .auth import ROLE_ADMIN, ActorContext, PermissionDenied, actor_from_headers, permission_for_request, require_permission
 from .domain import DomainError
 from .store import MemoryStore
+
+MAX_REQUEST_BODY_BYTES = int(os.environ.get("OPSPILOT_MAX_REQUEST_BODY_BYTES", str(8 * 1024 * 1024)))
 
 
 class FoundationHandler(BaseHTTPRequestHandler):
@@ -35,6 +38,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/skills": self.store.list_skills,
             "/v1/model-providers": self.store.list_model_providers,
             "/v1/workflows": self.store.list_workflows,
+            "/v1/workflow-runs": self.store.list_workflow_runs,
             "/v1/test-cases": self.store.list_test_cases,
             "/v1/test-suites": self.store.list_test_suites,
             "/v1/test-runs": self.store.list_test_runs,
@@ -44,19 +48,25 @@ class FoundationHandler(BaseHTTPRequestHandler):
         }
         parsed = urlparse(self.path)
         path = parsed.path
+        actor = actor_from_headers(self.headers)
+        if not self._authorize(actor, "GET", path):
+            return
         query = self._query_filters(parsed.query)
         parts = [part for part in path.split("/") if part]
         if path == "/v1/files":
-            self._call(lambda: self.store.list_file_objects(query))
+            self._call(lambda: self.store.list_file_objects(self._file_access_filters(actor, query)))
             return
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "download":
-            self._call(lambda: self.store.download_file_object(self.headers.get("X-Actor-ID", ""), parts[2], query))
+            self._call(lambda: self.store.download_file_object(actor.actor_id, parts[2], self._file_access_filters(actor, query)))
             return
         if len(parts) == 5 and parts[:3] == ["v1", "gitlab", "profiles"] and parts[4] == "repositories":
             self._call(lambda: self.store.list_gitlab_repositories(parts[3]))
             return
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
             self._call(lambda: self.store.list_workflow_versions(parts[2]))
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "runs":
+            self._call(lambda: self.store.list_workflow_runs(parts[2]))
             return
         if path in routes:
             self._call(routes[path])
@@ -70,7 +80,10 @@ class FoundationHandler(BaseHTTPRequestHandler):
         except BadJSON:
             self._json({"error": "invalid_json"}, HTTPStatus.BAD_REQUEST)
             return
-        actor_id = self.headers.get("X-Actor-ID", "")
+        actor = actor_from_headers(self.headers)
+        if not self._authorize(actor, "POST", path, body):
+            return
+        actor_id = actor.actor_id
 
         if path == "/v1/users":
             self._call(lambda: self.store.create_user(actor_id, body), HTTPStatus.CREATED)
@@ -85,10 +98,10 @@ class FoundationHandler(BaseHTTPRequestHandler):
             self._call(lambda: self.store.create_environment(actor_id, body), HTTPStatus.CREATED)
             return
         if path == "/v1/files":
-            self._call(lambda: self.store.create_file_object(actor_id, body), HTTPStatus.CREATED)
+            self._call(lambda: self.store.create_file_object(actor_id, self._file_write_body(actor, body)), HTTPStatus.CREATED)
             return
         if path == "/v1/files/upload":
-            self._call(lambda: self.store.upload_file_object(actor_id, body), HTTPStatus.CREATED)
+            self._call(lambda: self.store.upload_file_object(actor_id, self._file_write_body(actor, body)), HTTPStatus.CREATED)
             return
         if path == "/v1/credentials":
             self._call(lambda: self.store.create_credential(actor_id, body), HTTPStatus.CREATED)
@@ -132,16 +145,16 @@ class FoundationHandler(BaseHTTPRequestHandler):
 
         parts = [part for part in path.split("/") if part]
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "upload-grants":
-            self._call(lambda: self.store.create_upload_grant(actor_id, parts[2]), HTTPStatus.CREATED)
+            self._call(lambda: self.store.create_upload_grant(actor_id, parts[2], self._file_access_filters(actor, {})), HTTPStatus.CREATED)
             return
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "upload-sessions":
-            self._call(lambda: self.store.create_upload_session(actor_id, parts[2]), HTTPStatus.CREATED)
+            self._call(lambda: self.store.create_upload_session(actor_id, parts[2], self._file_access_filters(actor, {})), HTTPStatus.CREATED)
             return
         if len(parts) == 5 and parts[:3] == ["v1", "files", "upload-sessions"] and parts[4] == "complete":
-            self._call(lambda: self.store.complete_upload_session(actor_id, parts[3], body))
+            self._call(lambda: self.store.complete_upload_session(actor_id, parts[3], body, self._file_access_filters(actor, {})))
             return
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "download-grants":
-            self._call(lambda: self.store.create_download_grant(actor_id, parts[2]), HTTPStatus.CREATED)
+            self._call(lambda: self.store.create_download_grant(actor_id, parts[2], self._file_access_filters(actor, {})), HTTPStatus.CREATED)
             return
         if len(parts) == 5 and parts[:2] == ["v1", "projects"] and parts[3] == "assets":
             self._call(lambda: self.store.link_project_asset(actor_id, parts[2], parts[4]))
@@ -155,6 +168,12 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
             self._call(lambda: self.store.create_workflow_version(actor_id, parts[2], body), HTTPStatus.CREATED)
             return
+        if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "runs":
+            self._call(lambda: self.store.create_workflow_run(actor_id, parts[2], body), HTTPStatus.CREATED)
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "workflow-runs"] and parts[3] == "start":
+            self._call(lambda: self.store.start_workflow_run(actor_id, parts[2]))
+            return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
 
@@ -165,8 +184,11 @@ class FoundationHandler(BaseHTTPRequestHandler):
         except BadJSON:
             self._json({"error": "invalid_json"}, HTTPStatus.BAD_REQUEST)
             return
-        actor_id = self.headers.get("X-Actor-ID", "")
         parts = [part for part in path.split("/") if part]
+        actor = actor_from_headers(self.headers)
+        if not self._authorize(actor, "PATCH", path, body):
+            return
+        actor_id = actor.actor_id
 
         if len(parts) == 3 and parts[:2] == ["v1", "users"]:
             self._call(lambda: self.store.update_user(actor_id, parts[2], body))
@@ -204,12 +226,18 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if len(parts) == 3 and parts[:2] == ["v1", "test-runs"]:
             self._call(lambda: self.store.update_test_run(actor_id, parts[2], body))
             return
+        if len(parts) == 5 and parts[:2] == ["v1", "workflow-runs"] and parts[3] == "steps":
+            self._call(lambda: self.store.update_workflow_step_run(actor_id, parts[2], parts[4], body))
+            return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
 
     def do_DELETE(self) -> None:
         path = urlparse(self.path).path
-        actor_id = self.headers.get("X-Actor-ID", "")
+        actor = actor_from_headers(self.headers)
+        if not self._authorize(actor, "DELETE", path):
+            return
+        actor_id = actor.actor_id
         parts = [part for part in path.split("/") if part]
 
         if len(parts) == 3 and parts[:2] == ["v1", "users"]:
@@ -229,7 +257,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 3 and parts[:2] == ["v1", "files"]:
             query = self._query_filters(urlparse(self.path).query)
-            self._call(lambda: self.store.delete_file_object(actor_id, parts[2], query))
+            self._call(lambda: self.store.delete_file_object(actor_id, parts[2], self._file_access_filters(actor, query)))
             return
         if len(parts) == 4 and parts[:3] == ["v1", "gitlab", "profiles"]:
             self._call(lambda: self.store.delete_gitlab_profile(actor_id, parts[3]))
@@ -263,6 +291,8 @@ class FoundationHandler(BaseHTTPRequestHandler):
 
     def _body(self) -> dict[str, Any]:
         size = int(self.headers.get("Content-Length", "0"))
+        if size > MAX_REQUEST_BODY_BYTES:
+            raise BadJSON("request body is too large")
         if size == 0:
             return {}
         try:
@@ -283,6 +313,14 @@ class FoundationHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             self._json({"error": "invalid_input"}, HTTPStatus.BAD_REQUEST)
 
+    def _authorize(self, actor: Any, method: str, path: str, body: dict[str, Any] | None = None) -> bool:
+        try:
+            require_permission(actor, permission_for_request(method, path, body))
+            return True
+        except DomainError as exc:
+            self._json({"error": exc.code}, exc.status)
+            return False
+
     def _json(self, payload: Any, status: int | HTTPStatus) -> None:
         data = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         self.send_response(int(status))
@@ -295,7 +333,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
     def _cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID,X-Actor-Role")
 
     def _query_filters(self, query: str) -> dict[str, str]:
         filters: dict[str, str] = {}
@@ -303,6 +341,24 @@ class FoundationHandler(BaseHTTPRequestHandler):
             if values:
                 filters[key] = values[-1]
         return filters
+
+    def _file_access_filters(self, actor: ActorContext, filters: dict[str, str]) -> dict[str, str]:
+        scoped = dict(filters)
+        if actor.role == ROLE_ADMIN:
+            return scoped
+        requested_owner = scoped.get("owner_id")
+        if requested_owner and requested_owner != actor.actor_id:
+            raise PermissionDenied("actor cannot access files for another owner")
+        scoped["owner_id"] = actor.actor_id
+        return scoped
+
+    def _file_write_body(self, actor: ActorContext, body: dict[str, Any]) -> dict[str, Any]:
+        scoped = dict(body)
+        requested_owner = str(scoped.get("owner_id", "") or "")
+        if actor.role != ROLE_ADMIN and requested_owner and requested_owner != actor.actor_id:
+            raise PermissionDenied("actor cannot create files for another owner")
+        scoped["owner_id"] = requested_owner or actor.actor_id
+        return scoped
 
 
 class BadJSON(Exception):
