@@ -184,6 +184,7 @@ function render() {
 function renderDashboard() {
   const readinessIssues = state.environments.filter((env) => readiness(env).level !== "ok");
   const isEmpty = !state.users.length && !state.projects.length && !state.assets.length && !state.environments.length;
+  const overview = overviewTable();
   content.innerHTML = `
     <div class="page-head">
       <div>
@@ -223,9 +224,7 @@ function renderDashboard() {
         ])}
       </section>
     </div>
-    <section class="table-wrap">
-      ${overviewTable()}
-    </section>
+    ${overview ? `<section class="table-wrap">${overview}</section>` : ""}
   `;
   bindActions(content);
 }
@@ -896,12 +895,27 @@ function translateStatus(status) {
 }
 
 function overviewTable() {
-  const rows = [
+  const rows = state.apiOnline ? state.projects.map(projectOverviewRow) : [
     ["智能运营中台", "王少琪", "2 个警告", "98% 在线", "10 分钟前"],
     ["自动化测试平台", "李伟", "正常", "96% 在线", "32 分钟前"],
     ["模型服务网关", "陈敏", "1 个阻塞", "99% 在线", "1 小时前"],
   ];
+  if (!rows.length) return "";
   return `<table><thead><tr>${["项目", "负责人", "环境健康", "资产状态", "最近变更"].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+function projectOverviewRow(project) {
+  const owner = state.users.find((user) => user.id === project.owner_id);
+  const environments = state.environments.filter((env) => (project.environment_ids || []).includes(env.id));
+  const issues = environments.filter((env) => readiness(env).level !== "ok");
+  const assetCount = (project.asset_ids || []).length;
+  return [
+    escapeHtml(project.name),
+    escapeHtml(owner?.name || "未分配"),
+    environments.length ? issues.length ? `${issues.length} 个警告` : "正常" : "未配置环境",
+    assetCount ? `${assetCount} 个资产` : "未绑定资产",
+    date(project.updated_at),
+  ];
 }
 
 function taskTable() {
