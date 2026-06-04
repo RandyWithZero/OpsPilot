@@ -120,6 +120,31 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertIn(file_object["storage_key"], upload["url"])
         self.assertIn(file_object["storage_key"], download["url"])
 
+    def test_file_upload_session_completion_marks_file_available(self) -> None:
+        file_object = self.store.create_file_object(
+            "usr_test_actor",
+            {"filename": "run.log", "content_type": "text/plain", "size_bytes": 0, "owner_id": "usr_external"},
+        )
+
+        session = self.store.create_upload_session("usr_test_actor", file_object["id"])
+        completed = self.store.complete_upload_session(
+            "usr_test_actor",
+            session["id"],
+            {"checksum": "sha256:abc123", "size_bytes": 64},
+        )
+        download = self.store.create_download_grant("usr_test_actor", file_object["id"])
+
+        self.assertEqual(session["status"], "open")
+        self.assertEqual(completed["upload_session"]["status"], "completed")
+        self.assertEqual(completed["file"]["status"], "available")
+        self.assertEqual(completed["file"]["checksum"], "sha256:abc123")
+        self.assertEqual(completed["file"]["size_bytes"], 64)
+        self.assertEqual(download["method"], "GET")
+
+        with self.assertRaises(Exception) as raised:
+            self.store.complete_upload_session("usr_test_actor", session["id"], {})
+        self.assertEqual(getattr(raised.exception, "code", ""), "conflict")
+
     def test_credentials_store_secret_references_without_response_secret_leakage(self) -> None:
         credential = self.store.create_credential(
             "usr_test_actor",
@@ -240,6 +265,44 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertNotIn("glpat-token", serialized)
         self.assertNotIn("oauth2", serialized)
 
+    def test_gitlab_vcs_operations_and_webhook_events_use_selected_repository(self) -> None:
+        credential = self.store.create_credential(
+            "usr_test_actor",
+            {"provider": "gitlab", "name": "GitLab Ops", "secret": "glpat-secret-value"},
+        )
+        profile = self.store.create_gitlab_profile(
+            "usr_test_actor",
+            {
+                "name": "Primary GitLab",
+                "base_url": "https://gitlab.example.com",
+                "credential_ref_id": credential["id"],
+                "repository_selection": [{"id": "100", "path": "platform/opspilot", "name": "OpsPilot"}],
+            },
+        )
+
+        operation = self.store.create_vcs_operation(
+            "usr_test_actor",
+            {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100", "operation_type": "create_branch", "branch": "feature/report-api"},
+        )
+        webhook = self.store.ingest_vcs_webhook_event(
+            "usr_test_actor",
+            {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100", "event_type": "merge_request", "payload": {"iid": 12}},
+        )
+
+        self.assertEqual(operation["status"], "completed")
+        self.assertEqual(operation["result"]["repository_path"], "platform/opspilot")
+        self.assertEqual(webhook["status"], "received")
+        serialized = json.dumps({"operations": self.store.list_vcs_operations(), "webhooks": self.store.list_vcs_webhook_events(), "audit": self.store.list_audit_events()})
+        self.assertIn("vcs.operation.created", serialized)
+        self.assertNotIn("glpat-secret-value", serialized)
+
+        with self.assertRaises(Exception) as raised:
+            self.store.create_vcs_operation(
+                "usr_test_actor",
+                {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "missing", "operation_type": "create_branch", "branch": "bad"},
+            )
+        self.assertEqual(getattr(raised.exception, "code", ""), "not_found")
+
     def test_agent_skill_model_provider_and_workflow_slice(self) -> None:
         credential = self.store.create_credential(
             "usr_test_actor",
@@ -359,6 +422,46 @@ class FoundationSliceTest(unittest.TestCase):
                 },
             )
         self.assertEqual(getattr(provider_policy_error.exception, "code", ""), "conflict")
+
+    def test_test_report_quality_gate_slice_validates_project_boundaries(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        other_project = self.store.create_project("usr_test_actor", {"key": "OTHER", "name": "Other Platform", "owner_id": user["id"]})
+        environment = self.store.create_environment(
+            "usr_test_actor",
+            {"project_id": project["id"], "name": "QA Lab", "type": "QA", "owner_id": user["id"]},
+        )
+        artifact = self.store.create_file_object("usr_test_actor", {"filename": "qa-report.md", "content_type": "text/markdown", "size_bytes": 128})
+
+        test_case = self.store.create_test_case(
+            "usr_test_actor",
+            {"project_id": project["id"], "name": "Login smoke", "case_type": "automated", "steps": [{"action": "open", "expected": "login form"}]},
+        )
+        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Smoke", "case_ids": [test_case["id"], test_case["id"]]})
+        run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"], "environment_id": environment["id"]})
+        updated_run = self.store.update_test_run("usr_test_actor", run["id"], {"status": "passed", "results": [{"case_id": test_case["id"], "status": "passed"}]})
+        report = self.store.create_report(
+            "usr_test_actor",
+            {"project_id": project["id"], "title": "QA Smoke Report", "test_run_id": run["id"], "file_ids": [artifact["id"]], "summary": {"passed": 1}},
+        )
+        gate = self.store.create_quality_gate(
+            "usr_test_actor",
+            {"project_id": project["id"], "name": "Smoke Gate", "last_report_id": report["id"], "status": "passed", "conditions": [{"metric": "failed", "equals": 0}]},
+        )
+
+        self.assertEqual(suite["case_ids"], [test_case["id"]])
+        self.assertEqual(updated_run["status"], "passed")
+        self.assertEqual(report["file_ids"], [artifact["id"]])
+        self.assertEqual(gate["status"], "passed")
+
+        with self.assertRaises(Exception) as raised:
+            self.store.create_test_suite("usr_test_actor", {"project_id": other_project["id"], "name": "Bad Suite", "case_ids": [test_case["id"]]})
+        self.assertEqual(getattr(raised.exception, "code", ""), "conflict")
+
+        audit = json.dumps(self.store.list_audit_events())
+        self.assertIn("test_run.updated", audit)
+        self.assertIn("report.created", audit)
+        self.assertIn("quality_gate.created", audit)
 
 
 if __name__ == "__main__":

@@ -21,9 +21,17 @@ from .domain import (
     ModelProvider,
     NotFound,
     Project,
+    QualityGate,
+    Report,
     RepositoryBinding,
     Skill,
+    TestCase,
+    TestRun,
+    TestSuite,
+    UploadSession,
     User,
+    VCSOperation,
+    VCSWebhookEvent,
     WorkflowDefinition,
     WorkflowVersion,
     now_utc,
@@ -42,13 +50,21 @@ class MemoryStore:
         self.assets: dict[str, Asset] = {}
         self.environments: dict[str, Environment] = {}
         self.files: dict[str, FileObject] = {}
+        self.upload_sessions: dict[str, UploadSession] = {}
         self.credentials: dict[str, CredentialReference] = {}
         self.gitlab_profiles: dict[str, GitLabProfile] = {}
+        self.vcs_operations: dict[str, VCSOperation] = {}
+        self.vcs_webhook_events: dict[str, VCSWebhookEvent] = {}
         self.agents: dict[str, Agent] = {}
         self.skills: dict[str, Skill] = {}
         self.model_providers: dict[str, ModelProvider] = {}
         self.workflows: dict[str, WorkflowDefinition] = {}
         self.workflow_versions: dict[str, WorkflowVersion] = {}
+        self.test_cases: dict[str, TestCase] = {}
+        self.test_suites: dict[str, TestSuite] = {}
+        self.test_runs: dict[str, TestRun] = {}
+        self.reports: dict[str, Report] = {}
+        self.quality_gates: dict[str, QualityGate] = {}
         self.secret_store = LocalSecretStore()
         self.audit_events: list[AuditEvent] = []
 
@@ -367,6 +383,35 @@ class MemoryStore:
             self._audit(actor_id, "file.upload_grant.created", "file", file_object.id, {})
             return grant
 
+    def create_upload_session(self, actor_id: str, file_id: str) -> dict[str, Any]:
+        with self._lock:
+            file_object = self._file(file_id)
+            session = UploadSession(file_id=file_object.id, url=f"local://uploads/{file_object.storage_key}")
+            session.validate()
+            session.id = self._id("upl")
+            stamp(session)
+            self.upload_sessions[session.id] = session
+            self._audit(actor_id, "file.upload_session.created", "file", file_object.id, {"upload_session_id": session.id})
+            return asdict(session)
+
+    def complete_upload_session(self, actor_id: str, session_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            session = self._upload_session(session_id)
+            if session.status != "open":
+                raise Conflict("upload session is not open")
+            file_object = self._file(session.file_id)
+            if "checksum" in data:
+                file_object.checksum = str(data["checksum"])
+            if "size_bytes" in data:
+                file_object.size_bytes = int(data["size_bytes"])
+            file_object.status = "available"
+            file_object.validate()
+            file_object.updated_at = now_utc()
+            session.status = "completed"
+            session.updated_at = file_object.updated_at
+            self._audit(actor_id, "file.upload_session.completed", "file", file_object.id, {"upload_session_id": session.id})
+            return {"upload_session": asdict(session), "file": asdict(file_object)}
+
     def create_download_grant(self, actor_id: str, file_id: str) -> dict[str, Any]:
         with self._lock:
             file_object = self._file(file_id)
@@ -489,6 +534,58 @@ class MemoryStore:
             ],
             profile.base_url,
         )
+
+    def create_vcs_operation(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        operation = VCSOperation(**pick(data, VCSOperation))
+        operation.validate()
+        with self._lock:
+            repository = self._gitlab_repository(operation.profile_id, operation.repository_id)
+            operation.status = "completed"
+            operation.external_id = operation.external_id or self._vcs_external_id(operation)
+            operation.result = {
+                "adapter": "local_stub",
+                "repository_id": repository["id"],
+                "repository_path": repository["path"],
+                "web_url": repository["web_url"],
+            }
+            operation.id = self._id("vcs")
+            stamp(operation)
+            self.vcs_operations[operation.id] = operation
+            self._audit(
+                actor_id,
+                "vcs.operation.created",
+                "vcs_operation",
+                operation.id,
+                {"provider": operation.provider, "profile_id": operation.profile_id, "repository_id": operation.repository_id, "operation_type": operation.operation_type},
+            )
+            return asdict(operation)
+
+    def list_vcs_operations(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(operation) for operation in self.vcs_operations.values()]
+
+    def ingest_vcs_webhook_event(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        event = VCSWebhookEvent(**pick(data, VCSWebhookEvent))
+        event.validate()
+        with self._lock:
+            self._gitlab_profile(event.profile_id)
+            if event.repository_id:
+                self._gitlab_repository(event.profile_id, event.repository_id)
+            event.id = self._id("whk")
+            stamp(event)
+            self.vcs_webhook_events[event.id] = event
+            self._audit(
+                actor_id,
+                "vcs.webhook.received",
+                "vcs_webhook_event",
+                event.id,
+                {"provider": event.provider, "profile_id": event.profile_id, "repository_id": event.repository_id, "event_type": event.event_type},
+            )
+            return asdict(event)
+
+    def list_vcs_webhook_events(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(event) for event in self.vcs_webhook_events.values()]
 
     def create_agent(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
         agent = Agent(**pick(data, Agent))
@@ -715,6 +812,115 @@ class MemoryStore:
             self._audit(actor_id, "workflow.version.updated", "workflow_version", version.id, {"status": version.status})
             return asdict(version)
 
+    def create_test_case(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        test_case = TestCase(**pick(data, TestCase))
+        test_case.validate()
+        with self._lock:
+            self._project(test_case.project_id)
+            test_case.id = self._id("tca")
+            stamp(test_case)
+            self.test_cases[test_case.id] = test_case
+            self._audit(actor_id, "test_case.created", "test_case", test_case.id, {"project_id": test_case.project_id, "case_type": test_case.case_type})
+            return asdict(test_case)
+
+    def list_test_cases(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(test_case) for test_case in self.test_cases.values()]
+
+    def create_test_suite(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        suite = TestSuite(**pick(data, TestSuite))
+        suite.validate()
+        with self._lock:
+            self._project(suite.project_id)
+            suite.case_ids = unique(suite.case_ids)
+            for case_id in suite.case_ids:
+                test_case = self._test_case(case_id)
+                if test_case.project_id != suite.project_id:
+                    raise Conflict("test case belongs to another project")
+            suite.id = self._id("tsu")
+            stamp(suite)
+            self.test_suites[suite.id] = suite
+            self._audit(actor_id, "test_suite.created", "test_suite", suite.id, {"project_id": suite.project_id, "case_count": len(suite.case_ids)})
+            return asdict(suite)
+
+    def list_test_suites(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(suite) for suite in self.test_suites.values()]
+
+    def create_test_run(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        run = TestRun(**pick(data, TestRun))
+        run.validate()
+        with self._lock:
+            self._project(run.project_id)
+            suite = self._test_suite(run.suite_id)
+            if suite.project_id != run.project_id:
+                raise Conflict("test suite belongs to another project")
+            if run.environment_id:
+                environment = self._environment(run.environment_id)
+                if environment.project_id != run.project_id:
+                    raise Conflict("environment belongs to another project")
+            run.id = self._id("trn")
+            stamp(run)
+            self.test_runs[run.id] = run
+            self._audit(actor_id, "test_run.created", "test_run", run.id, {"project_id": run.project_id, "suite_id": run.suite_id, "status": run.status})
+            return asdict(run)
+
+    def list_test_runs(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(run) for run in self.test_runs.values()]
+
+    def update_test_run(self, actor_id: str, run_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            run = self._test_run(run_id)
+            for key in ("status", "results"):
+                if key in data:
+                    setattr(run, key, data[key])
+            run.validate()
+            run.updated_at = now_utc()
+            self._audit(actor_id, "test_run.updated", "test_run", run.id, {"status": run.status})
+            return asdict(run)
+
+    def create_report(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        report = Report(**pick(data, Report))
+        report.validate()
+        with self._lock:
+            self._project(report.project_id)
+            if report.test_run_id:
+                run = self._test_run(report.test_run_id)
+                if run.project_id != report.project_id:
+                    raise Conflict("test run belongs to another project")
+            report.file_ids = unique(report.file_ids)
+            for file_id in report.file_ids:
+                self._file(file_id)
+            report.id = self._id("rpt")
+            stamp(report)
+            self.reports[report.id] = report
+            self._audit(actor_id, "report.created", "report", report.id, {"project_id": report.project_id, "report_type": report.report_type})
+            return asdict(report)
+
+    def list_reports(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(report) for report in self.reports.values()]
+
+    def create_quality_gate(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        gate = QualityGate(**pick(data, QualityGate))
+        gate.validate()
+        with self._lock:
+            self._project(gate.project_id)
+            if gate.last_report_id:
+                report = self._report(gate.last_report_id)
+                if report.project_id != gate.project_id:
+                    raise Conflict("report belongs to another project")
+            gate.id = self._id("qgt")
+            stamp(gate)
+            self.quality_gates[gate.id] = gate
+            self._audit(actor_id, "quality_gate.created", "quality_gate", gate.id, {"project_id": gate.project_id, "status": gate.status})
+            return asdict(gate)
+
+    def list_quality_gates(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(gate) for gate in self.quality_gates.values()]
+
     def list_audit_events(self) -> list[dict[str, Any]]:
         with self._lock:
             return [asdict(event) for event in reversed(self.audit_events)]
@@ -734,6 +940,11 @@ class MemoryStore:
             raise NotFound("file not found")
         return self.files[file_id]
 
+    def _upload_session(self, session_id: str) -> UploadSession:
+        if session_id not in self.upload_sessions:
+            raise NotFound("upload session not found")
+        return self.upload_sessions[session_id]
+
     def _credential(self, credential_id: str) -> CredentialReference:
         if credential_id not in self.credentials:
             raise NotFound("credential not found")
@@ -743,6 +954,12 @@ class MemoryStore:
         if profile_id not in self.gitlab_profiles:
             raise NotFound("gitlab profile not found")
         return self.gitlab_profiles[profile_id]
+
+    def _gitlab_repository(self, profile_id: str, repository_id: str) -> dict[str, str]:
+        repositories = {repository["id"]: repository for repository in self.list_gitlab_repositories(profile_id)}
+        if repository_id not in repositories:
+            raise NotFound("repository not found for profile")
+        return repositories[repository_id]
 
     def _agent(self, agent_id: str) -> Agent:
         if agent_id not in self.agents:
@@ -768,6 +985,26 @@ class MemoryStore:
         if version_id not in self.workflow_versions:
             raise NotFound("workflow version not found")
         return self.workflow_versions[version_id]
+
+    def _test_case(self, case_id: str) -> TestCase:
+        if case_id not in self.test_cases:
+            raise NotFound("test case not found")
+        return self.test_cases[case_id]
+
+    def _test_suite(self, suite_id: str) -> TestSuite:
+        if suite_id not in self.test_suites:
+            raise NotFound("test suite not found")
+        return self.test_suites[suite_id]
+
+    def _test_run(self, run_id: str) -> TestRun:
+        if run_id not in self.test_runs:
+            raise NotFound("test run not found")
+        return self.test_runs[run_id]
+
+    def _report(self, report_id: str) -> Report:
+        if report_id not in self.reports:
+            raise NotFound("report not found")
+        return self.reports[report_id]
 
     def _validate_agent_refs(self, agent: Agent) -> None:
         for skill_id in agent.skill_ids:
@@ -800,6 +1037,13 @@ class MemoryStore:
     def _id(self, prefix: str) -> str:
         self._ids += 1
         return f"{prefix}_{self._ids:06d}"
+
+    def _vcs_external_id(self, operation: VCSOperation) -> str:
+        if operation.operation_type == "create_branch":
+            return f"branch:{operation.branch}"
+        if operation.operation_type == "open_merge_request":
+            return f"mr:{operation.source_branch}:{operation.target_branch}"
+        return f"merge:{operation.external_id}"
 
     def _audit(self, actor_id: str, action: str, resource_type: str, resource_id: str, metadata: dict[str, Any]) -> None:
         event = AuditEvent(

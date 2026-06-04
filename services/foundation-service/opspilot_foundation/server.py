@@ -29,10 +29,17 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/files": self.store.list_file_objects,
             "/v1/credentials": self.store.list_credentials,
             "/v1/gitlab/profiles": self.store.list_gitlab_profiles,
+            "/v1/vcs/operations": self.store.list_vcs_operations,
+            "/v1/vcs/webhook-events": self.store.list_vcs_webhook_events,
             "/v1/agents": self.store.list_agents,
             "/v1/skills": self.store.list_skills,
             "/v1/model-providers": self.store.list_model_providers,
             "/v1/workflows": self.store.list_workflows,
+            "/v1/test-cases": self.store.list_test_cases,
+            "/v1/test-suites": self.store.list_test_suites,
+            "/v1/test-runs": self.store.list_test_runs,
+            "/v1/reports": self.store.list_reports,
+            "/v1/quality-gates": self.store.list_quality_gates,
             "/v1/audit-events": self.store.list_audit_events,
         }
         path = urlparse(self.path).path
@@ -78,6 +85,12 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if path == "/v1/gitlab/profiles":
             self._call(lambda: self.store.create_gitlab_profile(actor_id, body), HTTPStatus.CREATED)
             return
+        if path == "/v1/vcs/operations":
+            self._call(lambda: self.store.create_vcs_operation(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/vcs/webhook-events":
+            self._call(lambda: self.store.ingest_vcs_webhook_event(actor_id, body), HTTPStatus.CREATED)
+            return
         if path == "/v1/agents":
             self._call(lambda: self.store.create_agent(actor_id, body), HTTPStatus.CREATED)
             return
@@ -90,10 +103,31 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if path == "/v1/workflows":
             self._call(lambda: self.store.create_workflow(actor_id, body), HTTPStatus.CREATED)
             return
+        if path == "/v1/test-cases":
+            self._call(lambda: self.store.create_test_case(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/test-suites":
+            self._call(lambda: self.store.create_test_suite(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/test-runs":
+            self._call(lambda: self.store.create_test_run(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/reports":
+            self._call(lambda: self.store.create_report(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/quality-gates":
+            self._call(lambda: self.store.create_quality_gate(actor_id, body), HTTPStatus.CREATED)
+            return
 
         parts = [part for part in path.split("/") if part]
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "upload-grants":
             self._call(lambda: self.store.create_upload_grant(actor_id, parts[2]), HTTPStatus.CREATED)
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "upload-sessions":
+            self._call(lambda: self.store.create_upload_session(actor_id, parts[2]), HTTPStatus.CREATED)
+            return
+        if len(parts) == 5 and parts[:3] == ["v1", "files", "upload-sessions"] and parts[4] == "complete":
+            self._call(lambda: self.store.complete_upload_session(actor_id, parts[3], body))
             return
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "download-grants":
             self._call(lambda: self.store.create_download_grant(actor_id, parts[2]), HTTPStatus.CREATED)
@@ -155,6 +189,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 5 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
             self._call(lambda: self.store.update_workflow_version(actor_id, parts[2], parts[4], body))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "test-runs"]:
+            self._call(lambda: self.store.update_test_run(actor_id, parts[2], body))
             return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
@@ -228,7 +265,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
             self._json({"error": "invalid_json"}, HTTPStatus.BAD_REQUEST)
         except DomainError as exc:
             self._json({"error": exc.code}, exc.status)
-        except TypeError:
+        except (TypeError, ValueError):
             self._json({"error": "invalid_input"}, HTTPStatus.BAD_REQUEST)
 
     def _json(self, payload: Any, status: int | HTTPStatus) -> None:

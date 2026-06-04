@@ -125,6 +125,7 @@ class FileObject:
     owner_id: str = ""
     storage_key: str = ""
     status: str = "pending_upload"
+    checksum: str = ""
     id: str = ""
     created_at: str = ""
     updated_at: str = ""
@@ -132,6 +133,28 @@ class FileObject:
     def validate(self) -> None:
         if not self.filename or not self.content_type or int(self.size_bytes) < 0:
             raise InvalidInput("files require filename, content_type, and non-negative size_bytes")
+
+
+@dataclass
+class UploadSession:
+    file_id: str
+    method: str = "PUT"
+    status: str = "open"
+    url: str = ""
+    expires_in_seconds: int = 900
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.file_id:
+            raise InvalidInput("upload sessions require file_id")
+        if self.method != "PUT":
+            raise InvalidInput("upload session method must be PUT")
+        if self.status not in {"open", "completed", "cancelled"}:
+            raise InvalidInput("upload session status must be open, completed, or cancelled")
+        if int(self.expires_in_seconds) <= 0:
+            raise InvalidInput("upload sessions require a positive expires_in_seconds")
 
 
 @dataclass
@@ -178,6 +201,61 @@ class RepositoryBinding:
     def validate(self) -> None:
         if not self.provider or not self.profile_id or not self.repository_id:
             raise InvalidInput("repository bindings require provider, profile_id, and repository_id")
+
+
+@dataclass
+class VCSOperation:
+    provider: str
+    profile_id: str
+    repository_id: str
+    operation_type: str
+    branch: str = ""
+    source_branch: str = ""
+    target_branch: str = ""
+    title: str = ""
+    status: str = "queued"
+    external_id: str = ""
+    result: dict[str, Any] = field(default_factory=dict)
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if self.provider != "gitlab":
+            raise InvalidInput("only gitlab VCS operations are supported")
+        if not self.profile_id or not self.repository_id or not self.operation_type:
+            raise InvalidInput("VCS operations require profile_id, repository_id, and operation_type")
+        if self.operation_type not in {"create_branch", "open_merge_request", "merge_merge_request"}:
+            raise InvalidInput("unsupported VCS operation_type")
+        if self.status not in {"queued", "completed", "failed"}:
+            raise InvalidInput("VCS operation status must be queued, completed, or failed")
+        if self.operation_type == "create_branch" and not self.branch:
+            raise InvalidInput("create_branch operations require branch")
+        if self.operation_type == "open_merge_request" and (not self.source_branch or not self.target_branch or not self.title):
+            raise InvalidInput("open_merge_request operations require source_branch, target_branch, and title")
+        if self.operation_type == "merge_merge_request" and not self.external_id:
+            raise InvalidInput("merge_merge_request operations require external_id")
+
+
+@dataclass
+class VCSWebhookEvent:
+    provider: str
+    profile_id: str
+    event_type: str
+    repository_id: str = ""
+    payload: dict[str, Any] = field(default_factory=dict)
+    status: str = "received"
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if self.provider != "gitlab":
+            raise InvalidInput("only gitlab webhook events are supported")
+        if not self.profile_id or not self.event_type:
+            raise InvalidInput("webhook events require profile_id and event_type")
+        if self.status not in {"received", "processed", "rejected"}:
+            raise InvalidInput("webhook event status must be received, processed, or rejected")
 
 
 @dataclass
@@ -277,6 +355,96 @@ class WorkflowVersion:
         for edge in self.edges:
             if edge.get("from_node_id") not in node_ids or edge.get("to_node_id") not in node_ids:
                 raise InvalidInput("workflow edges must reference existing nodes")
+
+
+@dataclass
+class TestCase:
+    project_id: str
+    name: str
+    case_type: str = "manual"
+    priority: str = "medium"
+    status: str = "active"
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.project_id or not self.name:
+            raise InvalidInput("test cases require project_id and name")
+        if self.case_type not in {"manual", "automated"}:
+            raise InvalidInput("test case case_type must be manual or automated")
+
+
+@dataclass
+class TestSuite:
+    project_id: str
+    name: str
+    case_ids: list[str] = field(default_factory=list)
+    status: str = "active"
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.project_id or not self.name:
+            raise InvalidInput("test suites require project_id and name")
+
+
+@dataclass
+class TestRun:
+    project_id: str
+    suite_id: str
+    environment_id: str = ""
+    status: str = "queued"
+    results: list[dict[str, Any]] = field(default_factory=list)
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.project_id or not self.suite_id:
+            raise InvalidInput("test runs require project_id and suite_id")
+        if self.status not in {"queued", "running", "passed", "failed", "cancelled"}:
+            raise InvalidInput("test run status must be queued, running, passed, failed, or cancelled")
+
+
+@dataclass
+class Report:
+    project_id: str
+    title: str
+    report_type: str = "test"
+    test_run_id: str = ""
+    file_ids: list[str] = field(default_factory=list)
+    summary: dict[str, Any] = field(default_factory=dict)
+    status: str = "draft"
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.project_id or not self.title:
+            raise InvalidInput("reports require project_id and title")
+        if self.report_type not in {"test", "qa", "qe", "operations"}:
+            raise InvalidInput("unsupported report_type")
+
+
+@dataclass
+class QualityGate:
+    project_id: str
+    name: str
+    conditions: list[dict[str, Any]] = field(default_factory=list)
+    last_report_id: str = ""
+    status: str = "pending"
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.project_id or not self.name:
+            raise InvalidInput("quality gates require project_id and name")
+        if self.status not in {"pending", "passed", "failed", "waived"}:
+            raise InvalidInput("quality gate status must be pending, passed, failed, or waived")
 
 
 @dataclass
