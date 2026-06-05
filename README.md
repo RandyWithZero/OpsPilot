@@ -55,7 +55,35 @@ Optional local infrastructure placeholders are in `infra/docker-compose/docker-c
 docker compose -f infra/docker-compose/docker-compose.yml up -d
 ```
 
-The current service uses in-memory persistence so the backend slice is immediately testable without third-party dependencies. By default, GitLab calls use the local adapter for deterministic development and tests. Set `OPSPILOT_GITLAB_LIVE=1` before `make run-foundation` to use the standard-library GitLab HTTP adapter; token material still stays behind credential references and is not returned in responses or audit events.
+The current service uses in-memory persistence by default so the backend slice is immediately testable without third-party dependencies. By default, GitLab calls use the local adapter for deterministic development and tests. Set `OPSPILOT_GITLAB_LIVE=1` before `make run-foundation` to use the standard-library GitLab HTTP adapter; token material still stays behind credential references and is not returned in responses or audit events.
+
+### MySQL Persistence
+
+Set `OPSPILOT_FOUNDATION_MYSQL_DSN` to enable the MySQL-backed foundation store. When the variable is absent or empty, the service falls back to the in-memory store.
+
+Local verification path:
+
+```sh
+docker compose -f infra/docker-compose/docker-compose.yml up -d mysql
+python3 -m pip install pymysql
+OPSPILOT_FOUNDATION_MYSQL_DSN='mysql://opspilot:opspilot@127.0.0.1:3306/opspilot_foundation' make run-foundation
+```
+
+The adapter applies SQL migrations from `services/foundation-service/migrations/mysql` at startup, then persists foundation aggregates to normalized InnoDB tables. The docker-compose MySQL service uses a named `mysql_data` volume, so records remain readable after restarting the foundation service or the MySQL container:
+
+```sh
+docker compose -f infra/docker-compose/docker-compose.yml restart mysql
+OPSPILOT_FOUNDATION_MYSQL_DSN='mysql://opspilot:opspilot@127.0.0.1:3306/opspilot_foundation' make run-foundation
+```
+
+Rollback to memory mode by unsetting the DSN:
+
+```sh
+unset OPSPILOT_FOUNDATION_MYSQL_DSN
+make run-foundation
+```
+
+Secrets remain behind the credential boundary. Credential responses include only `secret_ref` and `secret_fingerprint`; audit events store redacted metadata and never include raw secret material. The MySQL schema stores raw secret values only in the `secret_refs` boundary table used by credential and adapter flows.
 
 GitLab MVP flow:
 
@@ -102,4 +130,4 @@ The API never returns internal storage keys. Upload/download grants and upload s
 
 Local MVP uploads accept base64 JSON content up to `OPSPILOT_MAX_FILE_UPLOAD_BYTES` bytes after decode (default 5 MiB). HTTP request bodies are capped by `OPSPILOT_MAX_REQUEST_BODY_BYTES` (default 8 MiB). Non-admin HTTP callers are scoped to their `X-Actor-ID` as `owner_id`; admin callers may filter across owners.
 
-MySQL migrations and concrete persistence adapters should be added behind the existing repository boundary.
+MySQL migrations and the concrete persistence adapter live behind the existing repository boundary; HTTP handlers continue to call the store-facing API and do not depend on MySQL driver details.

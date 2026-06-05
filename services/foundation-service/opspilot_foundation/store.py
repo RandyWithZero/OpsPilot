@@ -1636,3 +1636,12 @@ def public_gitlab_branch(branch: dict[str, Any]) -> dict[str, Any]:
         "default": bool(branch.get("default", False)),
         "protected": bool(branch.get("protected", False)),
     }
+
+
+def foundation_store_from_env() -> MemoryStore:
+    dsn = os.environ.get("OPSPILOT_FOUNDATION_MYSQL_DSN", "").strip()
+    if not dsn:
+        return MemoryStore()
+    from .mysql_store import MySQLStore
+
+    return MySQLStore(dsn)

@@ -9,13 +9,13 @@ from urllib.parse import parse_qs, urlparse
 
 from .auth import ROLE_ADMIN, ActorContext, PermissionDenied, actor_from_headers, permission_for_request, require_permission
 from .domain import DomainError
-from .store import MemoryStore
+from .store import foundation_store_from_env
 
 MAX_REQUEST_BODY_BYTES = int(os.environ.get("OPSPILOT_MAX_REQUEST_BODY_BYTES", str(8 * 1024 * 1024)))
 
 
 class FoundationHandler(BaseHTTPRequestHandler):
-    store = MemoryStore()
+    store = foundation_store_from_env()
 
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)

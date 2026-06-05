@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from opspilot_foundation.store import MemoryStore  # noqa: E402
+from opspilot_foundation.mysql_store import MySQLStore  # noqa: E402
 from opspilot_foundation.server import FoundationHandler  # noqa: E402
 from opspilot_foundation.storage import LocalFileStorage, S3CompatibleStorage  # noqa: E402
 from opspilot_foundation.domain import InvalidInput  # noqa: E402
@@ -65,6 +66,77 @@ class FakeGitLabClient:
 
     def get_merge_request(self, base_url, token, repository_id, merge_request_iid):
         return dict(self.merge_requests[(repository_id, str(merge_request_iid))])
+
+
+class FakeMySQLDatabase:
+    def __init__(self) -> None:
+        self.tables: dict[str, list[dict[str, object]]] = {}
+        self.commits = 0
+
+    def connect(self):
+        return FakeMySQLConnection(self)
+
+
+class FakeMySQLConnection:
+    def __init__(self, database: FakeMySQLDatabase) -> None:
+        self.database = database
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self):
+        return FakeMySQLCursor(self.database)
+
+    def commit(self) -> None:
+        self.database.commits += 1
+
+
+class FakeMySQLCursor:
+    def __init__(self, database: FakeMySQLDatabase) -> None:
+        self.database = database
+        self.rows: list[dict[str, object]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, sql: str, params: tuple[object, ...] = ()) -> None:
+        normalized = " ".join(sql.strip().split())
+        upper = normalized.upper()
+        if upper.startswith("CREATE TABLE"):
+            return
+        if upper.startswith("SELECT VERSION FROM FOUNDATION_SCHEMA_MIGRATIONS"):
+            self.rows = [{"version": row["version"]} for row in self.database.tables.get("foundation_schema_migrations", [])]
+            return
+        if upper.startswith("SELECT 1"):
+            self.rows = [{"1": 1}]
+            return
+        if upper.startswith("SELECT SECRET_REF, SECRET_VALUE FROM SECRET_REFS"):
+            self.rows = list(self.database.tables.get("secret_refs", []))
+            return
+        if upper.startswith("SELECT PAYLOAD FROM "):
+            table = normalized.split(" FROM ", 1)[1].split(" ", 1)[0]
+            self.rows = list(self.database.tables.get(table, []))
+            return
+        if upper.startswith("DELETE FROM "):
+            table = normalized.split(" ", 2)[2]
+            self.database.tables[table] = []
+            return
+        if upper.startswith("INSERT INTO "):
+            table = normalized.split(" ", 3)[2]
+            columns_text = normalized.split("(", 1)[1].split(")", 1)[0]
+            columns = [column.strip() for column in columns_text.split(",")]
+            self.database.tables.setdefault(table, []).append(dict(zip(columns, params)))
+            return
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    def fetchall(self):
+        return list(self.rows)
 
 
 class FoundationSliceTest(unittest.TestCase):
@@ -238,6 +310,93 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertTrue(upload["url"].startswith("opspilot://file-capabilities/upload/"))
         self.assertTrue(download["url"].startswith("opspilot://file-capabilities/download/"))
         self.assertNotIn("objects/", upload["url"])
+
+
+class MySQLStorePersistenceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.storage_dir = tempfile.TemporaryDirectory()
+        self.database = FakeMySQLDatabase()
+        self.store = MySQLStore(
+            "mysql://opspilot:opspilot@127.0.0.1:3306/opspilot_foundation",
+            storage=LocalFileStorage(self.storage_dir.name),
+            connection_factory=self.database.connect,
+        )
+
+    def tearDown(self) -> None:
+        self.storage_dir.cleanup()
+
+    def reload_store(self) -> MySQLStore:
+        return MySQLStore(
+            "mysql://opspilot:opspilot@127.0.0.1:3306/opspilot_foundation",
+            storage=LocalFileStorage(self.storage_dir.name),
+            connection_factory=self.database.connect,
+        )
+
+    def test_create_update_delete_round_trips_through_mysql_snapshot(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "owner@example.com", "name": "Owner"})
+        updated = self.store.update_user("usr_test_actor", user["id"], {"name": "Updated Owner"})
+
+        reloaded = self.reload_store()
+        self.assertEqual(reloaded.list_users()[0]["name"], updated["name"])
+
+        reloaded.delete_user("usr_test_actor", user["id"])
+        self.assertEqual(self.reload_store().list_users(), [])
+
+    def test_cross_table_references_still_validate_before_persist(self) -> None:
+        with self.assertRaises(Exception) as raised:
+            self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops", "owner_id": "usr_missing"})
+
+        self.assertEqual(getattr(raised.exception, "code", ""), "not_found")
+        self.assertEqual(self.database.tables.get("projects", []), [])
+
+    def test_workflow_run_predecessor_snapshot_survives_reload(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "owner@example.com", "name": "Owner"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops", "owner_id": user["id"]})
+        workflow = self.store.create_workflow("usr_test_actor", {"name": "Deploy", "project_id": project["id"]})
+        self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "trigger", "type": "trigger", "name": "Start"},
+                    {"id": "manual", "type": "manual", "name": "Approve"},
+                    {"id": "result", "type": "result", "name": "Finish"},
+                ],
+                "edges": [
+                    {"from_node_id": "trigger", "to_node_id": "manual"},
+                    {"from_node_id": "manual", "to_node_id": "result"},
+                ],
+            },
+        )
+
+        run = self.store.create_workflow_run("usr_test_actor", workflow["id"], {})
+        reloaded_run = self.reload_store().list_workflow_runs(workflow["id"])[0]
+        steps_by_node = {step["node_id"]: step for step in reloaded_run["steps"]}
+
+        self.assertEqual(run["id"], reloaded_run["id"])
+        self.assertEqual(steps_by_node["manual"]["predecessor_node_ids"], ["trigger"])
+        self.assertEqual(steps_by_node["result"]["predecessor_node_ids"], ["manual"])
+
+    def test_file_grants_credentials_and_audit_events_are_persisted_safely(self) -> None:
+        file_object = self.store.create_file_object(
+            "usr_test_actor",
+            {"filename": "report.txt", "content_type": "text/plain", "size_bytes": 10, "owner_id": "usr_test_actor"},
+        )
+        upload = self.store.create_upload_grant("usr_test_actor", file_object["id"])
+        download = self.store.create_download_grant("usr_test_actor", file_object["id"])
+        credential = self.store.create_credential("usr_test_actor", {"provider": "gitlab", "name": "GitLab", "secret": "super-secret"})
+
+        self.assertNotIn("secret", credential)
+        self.assertEqual(upload["method"], "PUT")
+        self.assertEqual(download["method"], "GET")
+        self.assertIn("storage_key", json.loads(self.database.tables["files"][0]["payload"]))
+        self.assertNotIn("storage_key", file_object)
+        self.assertEqual(self.database.tables["secret_refs"][0]["secret_value"], "super-secret")
+
+        audit_payloads = [json.loads(row["payload"]) for row in self.database.tables["audit_events"]]
+        self.assertTrue(any(event["action"] == "credential.created" for event in audit_payloads))
+        self.assertFalse(any("super-secret" in json.dumps(event) for event in audit_payloads))
         self.assertNotIn("objects/", download["url"])
         self.assertNotIn("report.txt", upload["url"])
         self.assertNotIn("report.txt", download["url"])
