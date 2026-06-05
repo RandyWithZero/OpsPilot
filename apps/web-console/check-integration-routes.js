@@ -184,6 +184,28 @@ const result = vm.runInContext(`
   render();
   if (!content.innerHTML.includes("测试运行、报告与质量门禁") || !content.innerHTML.includes("项目质量摘要") || !content.innerHTML.includes("QA 夜间回归报告")) throw new Error("test report workbench missing");
 
+  state.fileContexts = {};
+  state.files = [
+    { id: "fil_live_asset", filename: "asset-live-evidence.log", content_type: "text/plain", size_bytes: 64, owner_id: "usr_mock_admin", status: "available" },
+    { id: "fil_live_env", filename: "env-live-report.pdf", content_type: "application/pdf", size_bytes: 128, owner_id: "usr_mock_ops", status: "available" },
+  ];
+  state.assets = [
+    { id: "ast_live_file_ids", category: "server", name: "live-api-asset", status: "available", owner_id: "usr_mock_admin", location: "live", capabilities: ["linux"], file_ids: ["fil_live_asset"] },
+  ];
+  state.environments = [
+    { id: "env_live_file_ids", project_id: "prj_mock_core", name: "Live QA", type: "QA", status: "active", owner_id: "usr_mock_ops", member_ids: ["usr_mock_ops"], asset_ids: ["ast_live_file_ids"], file_ids: ["fil_live_env"], endpoints: [{ name: "api", url: "https://qa.live.local" }] },
+  ];
+  state.filters = {};
+  renderAssetWorkbench();
+  if (!content.innerHTML.includes("asset-live-evidence.log") || content.innerHTML.includes("env-live-report.pdf")) throw new Error("asset attachment projection did not prefer asset.file_ids");
+  renderEnvironmentWorkbench();
+  if (!content.innerHTML.includes("env-live-report.pdf") || content.innerHTML.includes("asset-live-evidence.log")) throw new Error("environment attachment projection did not prefer environment.file_ids");
+
+  state.files = clone(seed.files);
+  state.fileContexts = clone(seed.fileContexts);
+  state.assets = clone(seed.assets);
+  state.environments = clone(seed.environments);
+
   state.route = "workflowRuns";
   state.filters = {};
   state.detail = null;

@@ -722,7 +722,7 @@ function renderAssetWorkbench() {
       ${metric("资产总数", state.assets.length, `${state.assets.filter((asset) => !asset.parent_id).length} 个根节点`)}
       ${metric("能力标签", assetCapabilityTags().length, assetCapabilityTags().slice(0, 3).join(" / ") || "暂无标签")}
       ${metric("环境绑定", state.environments.reduce((total, env) => total + (env.asset_ids || []).length, 0), "来自 /v1/environments asset_ids")}
-      ${metric("附件关联", Object.values(state.fileContexts).filter((ctx) => ctx.asset_id).length, "文件中心上下文")}
+      ${metric("附件关联", assetAttachmentCount(), "优先使用 asset.file_ids")}
     </div>
     <div class="toolbar topology-toolbar">
       <label>本页搜索<input data-filter="localQuery" type="search" value="${escapeHtml(state.filters.localQuery || "")}" placeholder="资产名、类别、位置、能力" /></label>
@@ -1140,6 +1140,7 @@ function assetEnvironmentMatrix(rows = state.assets) {
     return `<li>
       <div><strong>${escapeHtml(asset.name)}</strong><small>${envs.length ? envs.map((env) => `${env.type} ${env.name}`).join(" / ") : "暂无环境绑定"}</small></div>
       <span>${files.length} 文件</span>
+      <small>${files.map((file) => escapeHtml(file.filename)).join(" / ") || "暂无附件"}</small>
     </li>`;
   });
   return items.length ? `<ul class="link-list">${items.join("")}</ul>` : `<div class="empty-state compact">暂无资产环境映射。</div>`;
@@ -1164,7 +1165,7 @@ function environmentCard(env) {
       <dt>成员</dt><dd>${env.member_ids?.length || 0}</dd>
       <dt>资产</dt><dd>${(env.asset_ids || []).map(assetLabel).join(" / ") || "未绑定"}</dd>
       <dt>端点</dt><dd>${(env.endpoints || []).map((endpoint) => endpoint.name || endpoint.url).join(" / ") || "未配置"}</dd>
-      <dt>附件</dt><dd>${files.length}</dd>
+      <dt>附件</dt><dd>${files.length ? files.map((file) => escapeHtml(file.filename)).join(" / ") : "暂无附件"}</dd>
     </dl>
     <div class="action-row">${actionButton("open", "详情", "ghost-button small", `env-open-${env.id}`, { type: "environments", id: env.id })}</div>
   </article>`;
@@ -1175,7 +1176,7 @@ function environmentEndpointMatrix(rows = state.environments) {
     const endpoints = env.endpoints?.length ? env.endpoints : [{ name: "endpoint", url: "未配置" }];
     const files = filesForEnvironment(env.id);
     return endpoints.map((endpoint) => `<li>
-      <div><strong>${escapeHtml(env.type)} · ${escapeHtml(env.name)}</strong><small>${escapeHtml(endpoint.name || "endpoint")} · ${escapeHtml(endpoint.url || "未配置")}</small></div>
+      <div><strong>${escapeHtml(env.type)} · ${escapeHtml(env.name)}</strong><small>${escapeHtml(endpoint.name || "endpoint")} · ${escapeHtml(endpoint.url || "未配置")} · ${files.map((file) => escapeHtml(file.filename)).join(" / ") || "暂无附件"}</small></div>
       <span>${files.length} 附件</span>
     </li>`);
   });
@@ -1252,16 +1253,39 @@ function scopedByProject(rows, projectId = "all") {
   return projectId && projectId !== "all" ? rows.filter((row) => row.project_id === projectId) : rows;
 }
 
+function assetAttachmentCount() {
+  return state.assets.reduce((total, asset) => total + fileIdsForAsset(asset).length, 0);
+}
+
 function environmentsForAsset(assetId) {
   return state.environments.filter((env) => (env.asset_ids || []).includes(assetId));
 }
 
-function filesForAsset(assetId) {
-  return state.files.filter((file) => (state.fileContexts[file.id] || {}).asset_id === assetId);
+function filesForAsset(assetOrId) {
+  return resolveFiles(fileIdsForAsset(assetOrId));
 }
 
-function filesForEnvironment(environmentId) {
-  return state.files.filter((file) => (state.fileContexts[file.id] || {}).environment_id === environmentId);
+function filesForEnvironment(environmentOrId) {
+  return resolveFiles(fileIdsForEnvironment(environmentOrId));
+}
+
+function fileIdsForAsset(assetOrId) {
+  const asset = typeof assetOrId === "object" ? assetOrId : state.assets.find((item) => item.id === assetOrId);
+  if (!asset) return [];
+  if (Object.prototype.hasOwnProperty.call(asset, "file_ids")) return unique(asset.file_ids || []);
+  return state.files.filter((file) => (state.fileContexts[file.id] || {}).asset_id === asset.id).map((file) => file.id);
+}
+
+function fileIdsForEnvironment(environmentOrId) {
+  const environment = typeof environmentOrId === "object" ? environmentOrId : state.environments.find((item) => item.id === environmentOrId);
+  if (!environment) return [];
+  if (Object.prototype.hasOwnProperty.call(environment, "file_ids")) return unique(environment.file_ids || []);
+  return state.files.filter((file) => (state.fileContexts[file.id] || {}).environment_id === environment.id).map((file) => file.id);
+}
+
+function resolveFiles(fileIds = []) {
+  const ids = new Set(fileIds);
+  return state.files.filter((file) => ids.has(file.id));
 }
 
 function scopedOptions(source, selected = "all", emptyLabel = "全部") {

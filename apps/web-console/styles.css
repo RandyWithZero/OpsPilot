@@ -722,6 +722,7 @@ tr:hover td {
 }
 
 .link-list li > span,
+.link-list li > small,
 .link-list li > a,
 .link-list li > button,
 .link-list li > div {
