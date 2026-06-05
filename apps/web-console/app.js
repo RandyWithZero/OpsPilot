@@ -1,30 +1,15 @@
-const API_BASE = localStorage.getItem("opspilot_api_base") || "";
+const API_BASE = normalizeApiBase(localStorage.getItem("opspilot_api_base") || "");
 const DEFAULT_ACTOR_ID = "web-console";
 const DEV_HEADERS_STORAGE_KEY = "opspilot_auth_dev_headers";
-const navItems = [
-  ["dashboard", "工作台"],
-  ["bigscreen", "Dashboard 大屏"],
-  ["tasks", "运维任务"],
-  ["projects", "项目管理"],
-  ["assets", "资产管理"],
-  ["environments", "环境管理"],
-  ["gitlabProfiles", "GitLab 集成"],
-  ["vcsOperations", "VCS 操作"],
-  ["vcsWebhooks", "Webhook 事件"],
-  ["files", "文件中心"],
-  ["testCases", "测试用例"],
-  ["testSuites", "测试套件"],
-  ["testRuns", "测试运行"],
-  ["reports", "测试报告"],
-  ["qualityGates", "质量门禁"],
-  ["agents", "智能体"],
-  ["skills", "Skill"],
-  ["credentials", "模型 Key"],
-  ["modelProviders", "模型供应商"],
-  ["workflows", "运维流程"],
-  ["workflowRuns", "流程运行"],
-  ["identity", "用户权限"],
+const navGroups = [
+  { label: "工作台", items: [["dashboard", "运营总览"], ["bigscreen", "态势大屏"], ["tasks", "任务队列"]] },
+  { label: "项目资产", items: [["projects", "项目管理"], ["assets", "资产管理"], ["environments", "环境管理"], ["files", "文件中心"]] },
+  { label: "运维流程", items: [["workflows", "流程编排"], ["workflowRuns", "流程运行"]] },
+  { label: "测试质量", items: [["testCases", "测试用例"], ["testSuites", "测试套件"], ["testRuns", "测试运行"], ["reports", "测试报告"], ["qualityGates", "质量门禁"]] },
+  { label: "集成配置", items: [["gitlabProfiles", "GitLab 集成"], ["vcsOperations", "VCS 操作"], ["vcsWebhooks", "Webhook 事件"], ["modelProviders", "模型供应商"]] },
+  { label: "系统管理", items: [["identity", "用户权限"], ["agents", "智能体"], ["skills", "Skill"], ["credentials", "模型 Key"]] },
 ];
+const navItems = navGroups.flatMap((group) => group.items);
 
 const collections = {
   identity: "users",
@@ -267,6 +252,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#login-form").addEventListener("submit", signIn);
   $("#sign-out").addEventListener("click", signOut);
   $("#modal-close").addEventListener("click", () => modal.close());
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) modal.close();
+  });
   $("#refresh").addEventListener("click", () => loadData(true));
   $("#actor-role").addEventListener("change", () => updateActorContext({ role: $("#actor-role").value }));
   $("#actor-id").addEventListener("change", () => updateActorContext({ actorId: $("#actor-id").value.trim() || DEFAULT_ACTOR_ID }));
@@ -286,6 +274,16 @@ async function signIn(event) {
   const email = $("#login-email").value.trim();
   const password = $("#login-password").value;
   const role = normalizeConsoleRole($("#login-role").value || roleFromEmail(email));
+  if (!email) {
+    showLoginError("请输入账号 / 邮箱。");
+    $("#login-email").focus();
+    return;
+  }
+  if (!password.trim()) {
+    showLoginError("请输入密码。");
+    $("#login-password").focus();
+    return;
+  }
   setDevHeadersMode($("#login-dev-mode").checked);
   if (isDevHeadersMode()) {
     setSession({ user: email, role, actorId: email || DEFAULT_ACTOR_ID });
@@ -552,9 +550,9 @@ async function loadData(forceToast = false) {
 
 async function apiGet(path, options = {}) {
   await ensureAccessToken();
-  let response = await fetch(`${API_BASE}${path}`, { headers: actorHeaders() });
+  let response = await fetch(apiUrl(path), { headers: actorHeaders() });
   if (response.status === 401 && await refreshAccessToken()) {
-    response = await fetch(`${API_BASE}${path}`, { headers: actorHeaders() });
+    response = await fetch(apiUrl(path), { headers: actorHeaders() });
   }
   if (!response.ok) {
     const data = await response.json().catch(() => ({ error: "request_failed" }));
@@ -571,10 +569,10 @@ async function apiRequest(method, path, payload) {
     headers: { "Content-Type": "application/json", ...actorHeaders() },
   };
   if (payload !== undefined) options.body = JSON.stringify(payload);
-  let response = await fetch(`${API_BASE}${path}`, options);
+  let response = await fetch(apiUrl(path), options);
   if (response.status === 401 && await refreshAccessToken()) {
     options.headers = { "Content-Type": "application/json", ...actorHeaders() };
-    response = await fetch(`${API_BASE}${path}`, options);
+    response = await fetch(apiUrl(path), options);
   }
   if (!response.ok) {
     const data = await response.json().catch(() => ({ error: "request_failed" }));
@@ -611,7 +609,7 @@ async function refreshAccessToken() {
 async function authRequest(path, payload, options = {}) {
   const headers = { "Content-Type": "application/json" };
   if (options.auth && state.accessToken && !isDevHeadersMode()) headers.Authorization = `Bearer ${state.accessToken}`;
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: "POST",
     headers,
     body: JSON.stringify(payload || {}),
@@ -637,6 +635,14 @@ function apiError(response, data = {}, fallback = "request_failed") {
   return error;
 }
 
+function normalizeApiBase(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function apiUrl(path) {
+  return `${API_BASE}${path}`;
+}
+
 function authMessage(error, fallback) {
   if (error.status === 401 || error.code === "authentication_required") return "认证失败或会话过期，请重新登录。";
   if (error.status === 403 || error.code === "permission_denied") return "权限不足：当前账号不能执行该操作。";
@@ -644,9 +650,13 @@ function authMessage(error, fallback) {
 }
 
 function renderNav() {
-  $("#nav").innerHTML = navItems.map(([key, label]) => {
-    const allowed = canRoute(key);
-    return `<button data-route="${key}" ${allowed ? "" : "disabled aria-disabled=\"true\" title=\"当前角色无权访问\""}><span>${label}</span><small>${allowed ? countFor(key) : "受限"}</small></button>`;
+  $("#nav").innerHTML = navGroups.map((group) => {
+    const active = group.items.some(([key]) => key === state.route);
+    const buttons = group.items.map(([key, label]) => {
+      const allowed = canRoute(key);
+      return `<button data-route="${key}" ${allowed ? "" : "disabled aria-disabled=\"true\" title=\"当前角色无权访问\""}><span>${label}</span><small>${allowed ? countFor(key) : "受限"}</small></button>`;
+    }).join("");
+    return `<section class="nav-group ${active ? "open" : ""}" aria-label="${escapeAttr(group.label)}"><h2>${escapeHtml(group.label)}</h2>${buttons}</section>`;
   }).join("");
   $("#nav").onclick = (event) => {
     const button = event.target.closest("button[data-route]");
@@ -1723,7 +1733,7 @@ function tableFor(type, rows) {
     modelProviders: ["供应商", "凭据", "模型", "Base URL", "状态", "操作"],
     workflows: ["流程", "项目", "版本", "节点", "运行", "状态", "操作"],
   }[type];
-  return `<table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => rowFor(type, row)).join("")}</tbody></table>`;
+  return `<table class="data-table ${type}-table"><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => rowFor(type, row)).join("")}</tbody></table>`;
 }
 
 function rowFor(type, row) {

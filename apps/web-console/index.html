@@ -20,17 +20,17 @@
             <span><b>3</b>智能运维编排<small>流程、智能体、技能协同执行</small></span>
           </div>
         </div>
-        <form id="login-form" class="form-stack">
+        <form id="login-form" class="form-stack" novalidate>
           <h2>欢迎登录</h2>
           <p class="muted">使用企业账号进入运营控制台</p>
           <div id="login-error" class="auth-error hidden" role="alert"></div>
           <label>
             账号 / 邮箱
-            <input id="login-email" type="email" value="admin@opspilot.cn" required />
+            <input id="login-email" type="email" value="admin@opspilot.cn" autocomplete="username" required />
           </label>
           <label>
             密码
-            <input id="login-password" type="password" placeholder="请输入密码" />
+            <input id="login-password" type="password" placeholder="请输入密码" autocomplete="current-password" required />
           </label>
           <label>
             登录角色

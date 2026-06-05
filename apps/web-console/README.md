@@ -20,6 +20,7 @@ Auth notes:
 
 - The default console path uses `/v1/auth/login` with email, role, and password, stores access and refresh tokens in `sessionStorage`, attaches `Authorization: Bearer ...`, refreshes via `/v1/auth/refresh`, and revokes via `/v1/auth/logout`.
 - The API base defaults to same-origin. Set `localStorage.opspilot_api_base` only for direct local development against another origin such as `http://localhost:8080`.
+- The login form requires a non-empty password and submits the backend contract `password` field. Empty credentials are blocked before the console shell can load.
 - The "本地模拟 / 开发头模式" checkbox persists `opspilot_auth_dev_headers=1` in `localStorage` and is the only path that sends deprecated `X-Actor-ID` / `X-Actor-Role` headers.
 - GOO-56 contract gap: the current OpenAPI does not expose a profile/me endpoint, so the console derives actor ID and role from the issued access-token payload after login or refresh.
 
