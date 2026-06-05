@@ -12,7 +12,9 @@ from pathlib import Path
 from contextlib import contextmanager
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKER_ROOT = ROOT.parent / "agent-worker"
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(WORKER_ROOT))
 
 from opspilot_foundation.store import MemoryStore  # noqa: E402
 from opspilot_foundation.mysql_store import MySQLStore  # noqa: E402
@@ -27,6 +29,8 @@ from opspilot_foundation.auth import (  # noqa: E402
     permission_for_request,
     require_permission,
 )
+from opspilot_agent_worker.api import FoundationAPIClient  # noqa: E402
+from opspilot_agent_worker.worker import AgentWorker, WorkerConfig  # noqa: E402
 
 
 class FakeGitLabClient:
@@ -127,6 +131,8 @@ class FakeMySQLCursor:
         normalized = " ".join(sql.strip().split())
         upper = normalized.upper()
         if upper.startswith("CREATE TABLE"):
+            return
+        if upper.startswith("ALTER TABLE"):
             return
         if upper.startswith("SELECT VERSION FROM FOUNDATION_SCHEMA_MIGRATIONS"):
             self.rows = [{"version": row["version"]} for row in self.database.tables.get("foundation_schema_migrations", [])]
@@ -1741,6 +1747,96 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         cancellable = self.store.create_workflow_run("usr_test_actor", workflow["id"], {"start": True})
         cancelled = self.store.cancel_workflow_run("usr_test_actor", cancellable["id"])
         self.assertEqual(cancelled["status"], "cancelled")
+
+    def test_runtime_task_lease_expiry_requeues_and_rejects_stale_attempt_token(self) -> None:
+        skill = self.store.create_skill("usr_test_actor", {"name": "Deploy", "version": "1.0.0", "runtime": "python"})
+        agent = self.store.create_agent("usr_test_actor", {"name": "Deploy Agent", "kind": "automation", "skill_ids": [skill["id"]]})
+        workflow = self.store.create_workflow("usr_test_actor", {"name": "Lease workflow"})
+        self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "start", "type": "trigger"},
+                    {"id": "deploy", "type": "agent_task", "agent_id": agent["id"], "skill_id": skill["id"]},
+                ],
+                "edges": [{"from_node_id": "start", "to_node_id": "deploy"}],
+            },
+        )
+        self.store.create_workflow_run("usr_test_actor", workflow["id"], {"start": True})
+        claimed = self.store.claim_runtime_task("usr_worker_one", {"worker_id": "worker-one", "lease_seconds": 30})
+        old_token = claimed["attempt_token"]
+
+        self.store.workflow_runtime_tasks[claimed["id"]].lease_expires_at = "1970-01-01T00:00:00+00:00"
+        public_after_expiry = self.store.list_runtime_tasks()[0]
+        reclaimed = self.store.claim_runtime_task("usr_worker_two", {"worker_id": "worker-two", "lease_seconds": 30})
+
+        self.assertEqual(public_after_expiry["status"], "queued")
+        self.assertEqual(reclaimed["id"], claimed["id"])
+        self.assertEqual(reclaimed["worker_id"], "worker-two")
+        self.assertNotEqual(reclaimed["attempt_token"], old_token)
+        with self.assertRaises(Exception) as stale_callback:
+            self.store.callback_runtime_task("usr_worker_one", claimed["id"], {"attempt_token": old_token, "status": "completed", "output": {"late": True}})
+        self.assertEqual(getattr(stale_callback.exception, "code", ""), "conflict")
+
+    def test_http_agent_worker_completes_runtime_task_with_service_identity(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        original_store = FoundationHandler.store
+        FoundationHandler.store = MemoryStore(storage=LocalFileStorage(temp_dir.name))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+                identity = FoundationHandler.store.create_service_identity("usr_admin", {"name": "agent-worker", "role": "Operator"})
+                credential = FoundationHandler.store.create_credential("usr_admin", {"provider": "model_provider", "name": "Model Key", "secret": "sk-worker-secret"})
+                provider = FoundationHandler.store.create_model_provider("usr_admin", {"provider": "local", "name": "Local Provider", "credential_ref_id": credential["id"]})
+                skill = FoundationHandler.store.create_skill("usr_admin", {"name": "Deploy", "version": "1.0.0", "runtime": "mock"})
+                agent = FoundationHandler.store.create_agent("usr_admin", {"name": "Worker Agent", "kind": "automation", "skill_ids": [skill["id"]], "model_provider_id": provider["id"]})
+                workflow = FoundationHandler.store.create_workflow("usr_admin", {"name": "Worker workflow"})
+                FoundationHandler.store.create_workflow_version(
+                    "usr_admin",
+                    workflow["id"],
+                    {
+                        "version": "1",
+                        "nodes": [
+                            {"id": "start", "type": "trigger"},
+                            {"id": "deploy", "type": "agent_task", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"], "config": {"api_key": "must-not-leak"}},
+                            {"id": "done", "type": "result"},
+                        ],
+                        "edges": [
+                            {"from_node_id": "start", "to_node_id": "deploy"},
+                            {"from_node_id": "deploy", "to_node_id": "done"},
+                        ],
+                    },
+                )
+                run = FoundationHandler.store.create_workflow_run("usr_admin", workflow["id"], {"start": True})
+                api = FoundationAPIClient(base_url, identity["access_token"])
+                worker = AgentWorker(api, WorkerConfig(worker_id="test-worker", lease_seconds=30, once=True))
+
+                self.assertTrue(worker.poll_once())
+
+            completed_run = FoundationHandler.store.list_workflow_runs(workflow["id"])[0]
+            deploy_step = next(step for step in completed_run["steps"] if step["node_id"] == "deploy")
+            done_step = next(step for step in completed_run["steps"] if step["node_id"] == "done")
+            completed_task = FoundationHandler.store.list_runtime_tasks("completed")[0]
+            serialized = json.dumps({"tasks": FoundationHandler.store.list_runtime_tasks(), "audit": FoundationHandler.store.list_audit_events(), "output": deploy_step["output"]})
+
+            self.assertEqual(completed_run["status"], "completed")
+            self.assertEqual(deploy_step["status"], "completed")
+            self.assertEqual(done_step["status"], "completed")
+            self.assertEqual(completed_task["worker_id"], "test-worker")
+            self.assertNotIn("attempt_token", completed_task)
+            self.assertNotIn("sk-worker-secret", serialized)
+            self.assertNotIn("must-not-leak", serialized)
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+            server.server_close()
+            FoundationHandler.store = original_store
+            temp_dir.cleanup()
 
     def test_test_report_quality_gate_slice_validates_project_boundaries(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})

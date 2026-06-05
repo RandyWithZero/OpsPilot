@@ -1,4 +1,4 @@
-.PHONY: test run-foundation run-web-console
+.PHONY: test run-foundation run-agent-worker run-web-console
 
 test:
 	python3 -m unittest discover -s services/foundation-service/tests
@@ -8,6 +8,9 @@ test:
 
 run-foundation:
 	cd services/foundation-service && python3 -m opspilot_foundation.server
+
+run-agent-worker:
+	cd services/agent-worker && python3 -m opspilot_agent_worker
 
 run-web-console:
 	cd apps/web-console && python3 -m http.server 5173
