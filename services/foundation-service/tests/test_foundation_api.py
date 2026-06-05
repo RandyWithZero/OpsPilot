@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import os
 import sys
@@ -73,6 +74,30 @@ class FakeGitLabClient:
 
     def get_merge_request(self, base_url, token, repository_id, merge_request_iid):
         return dict(self.merge_requests[(repository_id, str(merge_request_iid))])
+
+
+class FakeS3Client:
+    def __init__(self) -> None:
+        self.buckets: set[str] = set()
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def head_bucket(self, Bucket):
+        if Bucket not in self.buckets:
+            raise RuntimeError("missing bucket")
+
+    def create_bucket(self, **kwargs):
+        self.buckets.add(kwargs["Bucket"])
+
+    def put_object(self, Bucket, Key, Body):
+        self.objects[(Bucket, Key)] = bytes(Body)
+
+    def get_object(self, Bucket, Key):
+        if (Bucket, Key) not in self.objects:
+            raise RuntimeError("missing object")
+        return {"Body": io.BytesIO(self.objects[(Bucket, Key)])}
+
+    def delete_object(self, Bucket, Key):
+        self.objects.pop((Bucket, Key), None)
 
 
 @contextmanager
@@ -708,9 +733,9 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.store.link_project_asset("usr_test_actor", project["id"], asset["id"])
         self.store.create_environment("usr_test_actor", {"project_id": project["id"], "name": "QA", "type": "QA", "owner_id": user["id"], "asset_ids": [asset["id"]]})
         self.create_workflow_with_run(project["id"])
-        case = self.store.create_test_case("usr_test_actor", {"project_id": project["id"], "name": "Smoke"})
-        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Release", "case_ids": [case["id"]]})
-        test_run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"]})
+        case = self.store.create_test_case(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Release", "case_ids": [case["id"]]})
+        test_run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
         file_object = self.store.upload_file_object(
             user["id"],
             {
@@ -724,7 +749,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
             },
         )
         report = self.store.create_report(user["id"], {"project_id": project["id"], "title": "Report", "test_run_id": test_run["id"], "file_ids": [file_object["id"]]})
-        self.store.create_quality_gate("usr_test_actor", {"project_id": project["id"], "name": "Gate", "last_report_id": report["id"]})
+        self.store.create_quality_gate(user["id"], {"project_id": project["id"], "name": "Gate", "last_report_id": report["id"]})
 
         self.store.delete_project("usr_test_actor", project["id"])
         reloaded = self.reload_store()
@@ -891,6 +916,19 @@ class MySQLStorePersistenceTest(unittest.TestCase):
             )
         self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
 
+    def test_s3_compatible_storage_upload_download_delete(self) -> None:
+        client = FakeS3Client()
+        with temporary_env(OPSPILOT_S3_BUCKET="opspilot-artifacts", OPSPILOT_S3_REGION="us-east-1"):
+            storage = S3CompatibleStorage(client=client)
+            storage.ensure_bucket()
+            storage.put("objects/report.xml", b"<testsuite tests='1'/>")
+            self.assertEqual(storage.get("objects/report.xml"), b"<testsuite tests='1'/>")
+            storage.delete("objects/report.xml")
+            self.assertNotIn(("opspilot-artifacts", "objects/report.xml"), client.objects)
+            with self.assertRaises(Exception) as raised:
+                storage.put("../secret", b"bad")
+            self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+
     def test_file_http_routes_enforce_server_owner_scope(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
         original_store = FoundationHandler.store
@@ -1050,13 +1088,14 @@ class MySQLStorePersistenceTest(unittest.TestCase):
             self.assertEqual(error.code, expected_status)
             return payload
 
-    def test_s3_compatible_storage_requires_bucket_and_defers_client_calls(self) -> None:
-        storage = S3CompatibleStorage()
+    def test_s3_compatible_storage_requires_bucket_and_uses_client_calls(self) -> None:
+        client = FakeS3Client()
+        storage = S3CompatibleStorage(client=client)
         storage.bucket = "opspilot-files"
         storage.ensure_bucket()
         self.assertEqual(storage.provider, "s3")
-        with self.assertRaises(NotImplementedError):
-            storage.put("objects/example", b"content")
+        storage.put("objects/example", b"content")
+        self.assertEqual(storage.get("objects/example"), b"content")
 
     def test_credentials_store_secret_references_without_response_secret_leakage(self) -> None:
         credential = self.store.create_credential(
@@ -1848,12 +1887,12 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         )
 
         test_case = self.store.create_test_case(
-            "usr_test_actor",
+            user["id"],
             {"project_id": project["id"], "name": "Login smoke", "case_type": "automated", "steps": [{"action": "open", "expected": "login form"}]},
         )
-        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Smoke", "case_ids": [test_case["id"], test_case["id"]]})
-        run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"], "environment_id": environment["id"]})
-        updated_run = self.store.update_test_run("usr_test_actor", run["id"], {"status": "passed", "results": [{"case_id": test_case["id"], "status": "passed"}]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke", "case_ids": [test_case["id"], test_case["id"]]})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"], "environment_id": environment["id"]})
+        updated_run = self.store.update_test_run(user["id"], run["id"], {"status": "passed", "results": [{"case_id": test_case["id"], "status": "passed"}]})
         artifact = self.store.upload_file_object(
             "usr_test_actor",
             {
@@ -1871,7 +1910,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
             {"project_id": project["id"], "title": "QA Smoke Report", "test_run_id": run["id"], "file_ids": [artifact["id"]], "summary": {"passed": 1}},
         )
         gate = self.store.create_quality_gate(
-            "usr_test_actor",
+            user["id"],
             {"project_id": project["id"], "name": "Smoke Gate", "last_report_id": report["id"], "status": "passed", "conditions": [{"metric": "failed", "equals": 0}]},
         )
 
@@ -1881,7 +1920,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertEqual(gate["status"], "passed")
 
         with self.assertRaises(Exception) as raised:
-            self.store.create_test_suite("usr_test_actor", {"project_id": other_project["id"], "name": "Bad Suite", "case_ids": [test_case["id"]]})
+            self.store.create_test_suite(user["id"], {"project_id": other_project["id"], "name": "Bad Suite", "case_ids": [test_case["id"]]})
         self.assertEqual(getattr(raised.exception, "code", ""), "conflict")
 
         other_project_artifact = self.store.upload_file_object(
@@ -1923,6 +1962,224 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertIn("test_run.updated", audit)
         self.assertIn("report.created", audit)
         self.assertIn("quality_gate.created", audit)
+
+    def test_artifact_ingest_parses_junit_and_updates_quality_gate(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
+        junit = b"""<testsuite tests="2" failures="1" errors="0" skipped="0">
+          <testcase classname="auth" name="login"/>
+          <testcase classname="auth" name="logout"><failure message="boom"/></testcase>
+        </testsuite>"""
+
+        ingest = self.store.ingest_test_run_artifacts(
+            user["id"],
+            run["id"],
+            {
+                "title": "CI Smoke",
+                "artifacts": [
+                    {"filename": "junit.xml", "content_type": "application/xml", "content_base64": base64.b64encode(junit).decode("ascii")},
+                    {"filename": "console.log", "content_type": "text/plain", "content_base64": base64.b64encode(b"raw logs").decode("ascii")},
+                ],
+            },
+        )
+
+        self.assertEqual(ingest["report"]["summary"]["parse_status"], "parsed")
+        self.assertEqual(ingest["report"]["summary"]["failed"], 1)
+        self.assertEqual(ingest["test_run"]["status"], "failed")
+        self.assertEqual(ingest["quality_gate"]["status"], "failed")
+        self.assertEqual(ingest["quality_gate"]["last_report_id"], ingest["report"]["id"])
+        self.assertEqual(len(ingest["files"]), 2)
+        self.assertNotIn("storage_key", json.dumps(ingest))
+        downloaded = self.store.download_file_object(user["id"], ingest["files"][0]["id"], {"owner_id": user["id"]})
+        self.assertEqual(base64.b64decode(downloaded["content_base64"]), junit)
+        audit = json.dumps(self.store.list_audit_events())
+        self.assertIn("report.ingested", audit)
+        self.assertIn("quality_gate.created", audit)
+        self.assertNotIn("objects/", audit)
+
+    def test_artifact_ingest_preserves_parse_failure_report(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
+
+        ingest = self.store.ingest_test_run_artifacts(
+            user["id"],
+            run["id"],
+            {"artifacts": [{"filename": "junit.xml", "content_type": "application/xml", "content_base64": base64.b64encode(b"<testsuite").decode("ascii")}]},
+        )
+
+        self.assertEqual(ingest["report"]["summary"]["parse_status"], "failed")
+        self.assertEqual(ingest["report"]["status"], "failed")
+        self.assertEqual(ingest["test_run"]["status"], "failed")
+        self.assertEqual(ingest["quality_gate"]["status"], "failed")
+        self.assertEqual(len(ingest["report"]["summary"]["parse_errors"]), 1)
+        self.assertEqual(base64.b64decode(self.store.download_file_object(user["id"], ingest["files"][0]["id"], {"owner_id": user["id"]})["content_base64"]), b"<testsuite")
+
+    def test_service_identity_can_ingest_artifacts_through_authenticated_api(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin", "roles": [{"scope": "platform", "name": "Admin"}]})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
+        with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+            service = self.store.create_service_identity(user["id"], {"name": "ci-uploader", "role": "Operator", "project_ids": [project["id"]]})
+            token = service["access_token"]
+
+        original_store = FoundationHandler.store
+        FoundationHandler.store = self.store
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+                response = self.http_json(
+                    base_url,
+                    "POST",
+                    f"/v1/test-runs/{run['id']}/artifacts",
+                    headers={"Authorization": f"Bearer {token}"},
+                    body={
+                        "artifacts": [
+                            {
+                                "filename": "summary.json",
+                                "content_type": "application/json",
+                                "content_base64": base64.b64encode(json.dumps({"total": 1, "passed": 1, "failed": 0}).encode("utf-8")).decode("ascii"),
+                            }
+                        ]
+                    },
+                    expected_status=201,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            FoundationHandler.store = original_store
+
+        self.assertEqual(response["test_run"]["status"], "passed")
+        self.assertEqual(response["quality_gate"]["status"], "passed")
+        self.assertEqual(response["files"][0]["owner_id"], service["id"])
+
+        with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+            viewer = self.store.create_service_identity(user["id"], {"name": "ci-viewer", "role": "Viewer"})
+        FoundationHandler.store = self.store
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+                denied = self.http_json(
+                    base_url,
+                    "POST",
+                    f"/v1/test-runs/{run['id']}/artifacts",
+                    headers={"Authorization": f"Bearer {viewer['access_token']}"},
+                    body={
+                        "artifacts": [
+                            {"filename": "summary.json", "content_type": "application/json", "content_base64": base64.b64encode(b"{}").decode("ascii")}
+                        ]
+                    },
+                    expected_status=403,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            FoundationHandler.store = original_store
+
+        self.assertEqual(denied["error"], "permission_denied")
+
+    def test_service_identity_ingest_rejects_cross_project_scope(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin", "roles": [{"scope": "platform", "name": "Admin"}]})
+        allowed_project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        blocked_project = self.store.create_project("usr_test_actor", {"key": "WEB", "name": "Web Console", "owner_id": user["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": blocked_project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": blocked_project["id"], "suite_id": suite["id"]})
+        with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+            service = self.store.create_service_identity(user["id"], {"name": "ci-uploader", "role": "Operator", "project_ids": [allowed_project["id"]]})
+
+        with self.assertRaises(Exception) as raised:
+            self.store.ingest_test_run_artifacts(
+                service["id"],
+                run["id"],
+                {"artifacts": [{"filename": "summary.json", "content_type": "application/json", "content_base64": base64.b64encode(b'{"total":1,"passed":1}').decode("ascii")}]},
+            )
+
+        self.assertEqual(getattr(raised.exception, "code", ""), "permission_denied")
+        self.assertEqual(self.store.list_reports(), [])
+        self.assertEqual(self.store.list_quality_gates(), [])
+
+    def test_service_identity_test_resource_creation_rejects_cross_project_scope(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin", "roles": [{"scope": "platform", "name": "Admin"}]})
+        allowed_project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        blocked_project = self.store.create_project("usr_test_actor", {"key": "WEB", "name": "Web Console", "owner_id": user["id"]})
+        blocked_case = self.store.create_test_case(user["id"], {"project_id": blocked_project["id"], "name": "Blocked smoke"})
+        blocked_suite = self.store.create_test_suite(user["id"], {"project_id": blocked_project["id"], "name": "Blocked suite", "case_ids": [blocked_case["id"]]})
+        blocked_run = self.store.create_test_run(user["id"], {"project_id": blocked_project["id"], "suite_id": blocked_suite["id"]})
+        with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+            service = self.store.create_service_identity(user["id"], {"name": "ci-test-resource-writer", "role": "Operator", "project_ids": [allowed_project["id"]]})
+
+        with self.assertRaises(Exception) as case_denied:
+            self.store.create_test_case(service["id"], {"project_id": blocked_project["id"], "name": "Cross-project case"})
+        with self.assertRaises(Exception) as suite_denied:
+            self.store.create_test_suite(service["id"], {"project_id": blocked_project["id"], "name": "Cross-project suite", "case_ids": [blocked_case["id"]]})
+        with self.assertRaises(Exception) as run_denied:
+            self.store.create_test_run(service["id"], {"project_id": blocked_project["id"], "suite_id": blocked_suite["id"]})
+        with self.assertRaises(Exception) as update_run_denied:
+            self.store.update_test_run(service["id"], blocked_run["id"], {"status": "passed", "results": [{"case_id": blocked_case["id"], "status": "passed"}]})
+        with self.assertRaises(Exception) as gate_denied:
+            self.store.create_quality_gate(service["id"], {"project_id": blocked_project["id"], "name": "Cross-project gate", "status": "passed"})
+
+        self.assertEqual(getattr(case_denied.exception, "code", ""), "permission_denied")
+        self.assertEqual(getattr(suite_denied.exception, "code", ""), "permission_denied")
+        self.assertEqual(getattr(run_denied.exception, "code", ""), "permission_denied")
+        self.assertEqual(getattr(update_run_denied.exception, "code", ""), "permission_denied")
+        self.assertEqual(getattr(gate_denied.exception, "code", ""), "permission_denied")
+        self.assertEqual([case["name"] for case in self.store.list_test_cases()], ["Blocked smoke"])
+        self.assertEqual([suite["name"] for suite in self.store.list_test_suites()], ["Blocked suite"])
+        self.assertEqual(self.store.list_test_runs()[0]["status"], "queued")
+        self.assertEqual(self.store.list_test_runs()[0]["results"], [])
+        self.assertEqual(self.store.list_quality_gates(), [])
+
+    def test_artifact_ingest_invalid_later_artifact_leaves_no_partial_file_state(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
+
+        with self.assertRaises(Exception) as raised:
+            self.store.ingest_test_run_artifacts(
+                user["id"],
+                run["id"],
+                {
+                    "artifacts": [
+                        {"filename": "summary.json", "content_type": "application/json", "content_base64": base64.b64encode(b'{"total":1,"passed":1}').decode("ascii")},
+                        {"filename": "../bad.log", "content_type": "text/plain", "content_base64": base64.b64encode(b"bad").decode("ascii")},
+                    ]
+                },
+            )
+
+        self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+        self.assertEqual(self.store.files, {})
+        self.assertEqual(self.store.list_reports(), [])
+        self.assertNotIn("file.uploaded", json.dumps(self.store.list_audit_events()))
+
+    def test_artifact_ingest_without_parseable_summary_fails_gate(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
+
+        ingest = self.store.ingest_test_run_artifacts(
+            user["id"],
+            run["id"],
+            {"artifacts": [{"filename": "console.log", "content_type": "text/plain", "content_base64": base64.b64encode(b"raw logs").decode("ascii")}]},
+        )
+
+        self.assertEqual(ingest["report"]["summary"]["parse_status"], "skipped")
+        self.assertEqual(ingest["test_run"]["status"], "running")
+        self.assertEqual(ingest["quality_gate"]["status"], "failed")
 
 
 if __name__ == "__main__":

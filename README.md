@@ -96,7 +96,7 @@ Run the foundation service with auth enabled, create a service identity as an Ad
 ```sh
 curl -X POST http://localhost:8080/v1/service-identities \
   -H 'Content-Type: application/json' -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN" \
-  -d '{"name":"local-agent-worker","role":"Operator"}'
+  -d '{"name":"local-agent-worker","role":"Operator","project_ids":["prj_000001"]}'
 
 curl -X POST http://localhost:8080/v1/service-identities/$SERVICE_ID/token \
   -H 'Content-Type: application/json' \
@@ -188,9 +188,36 @@ The file service stores metadata in the foundation store and file bytes behind a
 The storage adapter is selected with `OPSPILOT_OBJECT_STORAGE_ADAPTER`:
 
 - `local` (default): creates the local object root automatically.
-- `s3` or `minio`: validates `OPSPILOT_S3_BUCKET` and captures endpoint/region/auto-bucket settings (`OPSPILOT_S3_ENDPOINT_URL`, `OPSPILOT_S3_REGION`, `OPSPILOT_S3_AUTO_CREATE_BUCKET`) as the extension boundary for a future concrete S3 client.
+- `s3` or `minio`: uses the optional boto3 S3 client against AWS S3 or any MinIO-compatible endpoint. Set `OPSPILOT_S3_BUCKET`, optionally `OPSPILOT_S3_ENDPOINT_URL`, `OPSPILOT_S3_REGION`, and `OPSPILOT_S3_AUTO_CREATE_BUCKET=false` when the bucket must already exist. The local docker-compose MinIO service is reachable at `http://localhost:9000` with root credentials `opspilot` / `opspilot-secret`.
+
+Local MinIO smoke without host Python package tooling:
+
+```bash
+make run-foundation-minio
+```
+
+That target starts MinIO and a `python:3.12-slim` foundation container that installs `boto3` inside the container before running the service. It publishes MinIO on host ports `19000`/`19001` to avoid collisions with an existing local MinIO, while the foundation container uses the internal `http://minio:9000` endpoint. To run the service directly on the host instead, install the optional S3 dependency first:
+
+```bash
+docker compose -f infra/docker-compose/docker-compose.yml up -d minio
+python3 -m pip install boto3
+OPSPILOT_OBJECT_STORAGE_ADAPTER=minio \
+OPSPILOT_S3_ENDPOINT_URL=http://localhost:9000 \
+OPSPILOT_S3_BUCKET=opspilot-artifacts \
+AWS_ACCESS_KEY_ID=opspilot \
+AWS_SECRET_ACCESS_KEY=opspilot-secret \
+make run-foundation
+```
 
 The API never returns internal storage keys. Upload/download grants and upload sessions expose opaque `opspilot://file-capabilities/...` URLs generated at the storage boundary. Business modules should keep only the returned file `id` or reference fields (`owner_id`, `resource_type`, `resource_id`, `module`). Asset and environment topology records attach files through `file_ids` only.
+
+Test-run artifact ingestion is available at `POST /v1/test-runs/{runID}/artifacts` for Admin/Operator users and service identities. The body accepts one or more base64 artifacts (`junit`, `json`, `html`, or `log`). The service stores each artifact as a `test_run`/`reports` file ref, parses JUnit XML or JSON summaries when present, creates a report, updates the test run status/results, and upserts the `Automated Test Report Gate`. Parser failures keep the raw artifact and create a failed report with `summary.parse_errors`.
+
+```bash
+curl -X POST http://localhost:8080/v1/test-runs/trn_000001/artifacts \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN" \
+  -d '{"artifacts":[{"filename":"junit.xml","content_type":"application/xml","artifact_type":"junit","content_base64":"PHRlc3RzdWl0ZSB0ZXN0cz0iMSIgZmFpbHVyZXM9IjAiLz4="}]}'
+```
 
 ### Asset And Environment Topology
 

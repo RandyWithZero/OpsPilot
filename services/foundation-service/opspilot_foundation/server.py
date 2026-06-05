@@ -196,6 +196,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if path == "/v1/quality-gates":
             self._call(lambda: self.store.create_quality_gate(actor_id, body), HTTPStatus.CREATED)
             return
+        if len(parts) == 4 and parts[:2] == ["v1", "test-runs"] and parts[3] == "artifacts":
+            self._call(lambda: self.store.ingest_test_run_artifacts(actor_id, parts[2], body), HTTPStatus.CREATED)
+            return
         if path == "/v1/runtime/tasks/claim":
             self._call(lambda: self.store.claim_runtime_task(actor_id, body))
             return

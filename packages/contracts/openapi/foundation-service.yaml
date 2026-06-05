@@ -1992,6 +1992,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TestRun"
+  /v1/test-runs/{runID}/artifacts:
+    post:
+      summary: Ingest test run artifacts and create a report
+      description: Uploads report artifacts for a test run, stores file refs without exposing storage keys, parses JUnit XML or JSON summaries when present, updates the test run, and upserts the automated quality gate.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactIngestRequest"
+      responses:
+        "201":
+          description: Ingested artifacts and report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactIngestResponse"
   /v1/reports:
     get:
       summary: List reports
@@ -2194,6 +2219,11 @@ components:
           type: string
         role:
           $ref: "#/components/schemas/RoleName"
+        project_ids:
+          type: array
+          description: Project IDs this service identity may access for project-scoped operations. Required for artifact/report ingestion.
+          items:
+            type: string
         access_token_ttl_seconds:
           type: integer
           minimum: 1
@@ -2207,6 +2237,10 @@ components:
           type: string
         role:
           $ref: "#/components/schemas/RoleName"
+        project_ids:
+          type: array
+          items:
+            type: string
         status:
           enum: [active, revoked]
         created_at:
@@ -3393,7 +3427,7 @@ components:
           type: object
           additionalProperties: true
         status:
-          enum: [draft, published, archived]
+          enum: [draft, published, failed, archived]
     Report:
       allOf:
         - $ref: "#/components/schemas/ReportCreate"
@@ -3408,6 +3442,47 @@ components:
             updated_at:
               type: string
               format: date-time
+    ArtifactIngestFile:
+      type: object
+      required: [filename, content_type, content_base64]
+      properties:
+        filename:
+          type: string
+          description: Basename only; path separators and control characters are rejected.
+        content_type:
+          type: string
+        artifact_type:
+          enum: [junit, json, html, log]
+        content_base64:
+          type: string
+          description: Base64 encoded artifact bytes. Default decoded limit is 5 MiB via OPSPILOT_MAX_FILE_UPLOAD_BYTES.
+    ArtifactIngestRequest:
+      type: object
+      required: [artifacts]
+      properties:
+        title:
+          type: string
+        report_type:
+          enum: [test, qa, qe, operations]
+        artifacts:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ArtifactIngestFile"
+    ArtifactIngestResponse:
+      type: object
+      required: [report, files, test_run, quality_gate]
+      properties:
+        report:
+          $ref: "#/components/schemas/Report"
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileObject"
+        test_run:
+          $ref: "#/components/schemas/TestRun"
+        quality_gate:
+          $ref: "#/components/schemas/QualityGate"
     QualityGateCreate:
       type: object
       required: [project_id, name]

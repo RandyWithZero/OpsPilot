@@ -75,6 +75,7 @@ class ServiceIdentity:
     name: str
     role: str
     token_hash: str
+    project_ids: list[str] = field(default_factory=list)
     id: str = ""
     status: str = "active"
     created_at: str = ""

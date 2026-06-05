@@ -5,6 +5,8 @@ import hmac
 import os
 import secrets
 import base64
+import json
+import xml.etree.ElementTree as ET
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from threading import RLock
@@ -151,9 +153,16 @@ class MemoryStore:
         if not role:
             raise InvalidInput("role is invalid")
         service_token = new_refresh_token()
-        identity = ServiceIdentity(name=str(data.get("name", "") or "").strip(), role=role, token_hash=hash_token(service_token))
+        identity = ServiceIdentity(
+            name=str(data.get("name", "") or "").strip(),
+            role=role,
+            token_hash=hash_token(service_token),
+            project_ids=self._normalize_service_identity_project_ids(data),
+        )
         identity.validate()
         with self._lock:
+            for project_id in identity.project_ids:
+                self._project(project_id)
             if any(existing.name.lower() == identity.name.lower() for existing in self.service_identities.values()):
                 raise Conflict("service identity name already exists")
             identity.id = self._id("svc")
@@ -234,6 +243,22 @@ class MemoryStore:
         data = asdict(identity)
         data.pop("token_hash", None)
         return data
+
+    def _normalize_service_identity_project_ids(self, data: dict[str, Any]) -> list[str]:
+        raw_project_ids = data.get("project_ids", [])
+        if "project_id" in data and data.get("project_id"):
+            raw_project_ids = [*raw_project_ids, data.get("project_id")] if isinstance(raw_project_ids, list) else [data.get("project_id")]
+        if raw_project_ids in (None, ""):
+            return []
+        if not isinstance(raw_project_ids, list):
+            raise InvalidInput("service identity project_ids must be an array")
+        project_ids: list[str] = []
+        for project_id in raw_project_ids:
+            value = str(project_id or "").strip()
+            if not value:
+                raise InvalidInput("service identity project_ids cannot contain empty values")
+            project_ids.append(value)
+        return unique(project_ids)
 
     def _active_user_role(self, user_id: str) -> str:
         user = self.users.get(user_id)
@@ -1511,7 +1536,8 @@ class MemoryStore:
         test_case = TestCase(**pick(data, TestCase))
         test_case.validate()
         with self._lock:
-            self._project(test_case.project_id)
+            project = self._project(test_case.project_id)
+            self._require_project_actor(actor_id, project)
             test_case.id = self._id("tca")
             stamp(test_case)
             self.test_cases[test_case.id] = test_case
@@ -1526,7 +1552,8 @@ class MemoryStore:
         suite = TestSuite(**pick(data, TestSuite))
         suite.validate()
         with self._lock:
-            self._project(suite.project_id)
+            project = self._project(suite.project_id)
+            self._require_project_actor(actor_id, project)
             suite.case_ids = unique(suite.case_ids)
             for case_id in suite.case_ids:
                 test_case = self._test_case(case_id)
@@ -1546,7 +1573,8 @@ class MemoryStore:
         run = TestRun(**pick(data, TestRun))
         run.validate()
         with self._lock:
-            self._project(run.project_id)
+            project = self._project(run.project_id)
+            self._require_project_actor(actor_id, project)
             suite = self._test_suite(run.suite_id)
             if suite.project_id != run.project_id:
                 raise Conflict("test suite belongs to another project")
@@ -1567,6 +1595,8 @@ class MemoryStore:
     def update_test_run(self, actor_id: str, run_id: str, data: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             run = self._test_run(run_id)
+            project = self._project(run.project_id)
+            self._require_project_actor(actor_id, project)
             for key in ("status", "results"):
                 if key in data:
                     setattr(run, key, data[key])
@@ -1595,6 +1625,84 @@ class MemoryStore:
             self._audit(actor_id, "report.created", "report", report.id, {"project_id": report.project_id, "report_type": report.report_type})
             return asdict(report)
 
+    def ingest_test_run_artifacts(self, actor_id: str, test_run_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        artifacts = data.get("artifacts")
+        if not isinstance(artifacts, list) or not artifacts:
+            raise InvalidInput("artifact ingest requires artifacts")
+        with self._lock:
+            run = self._test_run(test_run_id)
+            project = self._project(run.project_id)
+            self._require_project_actor(actor_id, project)
+            if run.environment_id:
+                environment = self._environment(run.environment_id)
+                if environment.project_id != project.id:
+                    raise Conflict("environment belongs to another project")
+            staged_files: list[tuple[FileObject, bytes, dict[str, Any]]] = []
+            summaries: list[dict[str, Any]] = []
+            parse_errors: list[dict[str, str]] = []
+            for raw_artifact in artifacts:
+                if not isinstance(raw_artifact, dict):
+                    raise InvalidInput("artifact entries must be objects")
+                content = self._decode_file_content(raw_artifact)
+                file_object = FileObject(
+                    filename=str(raw_artifact.get("filename", "") or ""),
+                    content_type=str(raw_artifact.get("content_type", "") or "application/octet-stream"),
+                    size_bytes=len(content),
+                    owner_id=actor_id,
+                    resource_type="test_run",
+                    resource_id=run.id,
+                    module="reports",
+                    status="available",
+                    checksum=f"sha256:{hashlib.sha256(content).hexdigest()}",
+                )
+                file_object.validate()
+                file_object.id = self._id("fil")
+                file_object.storage_key = self._new_storage_key()
+                stamp(file_object)
+                parsed = self._parse_report_artifact(file_object, content, str(raw_artifact.get("artifact_type", "") or ""))
+                staged_files.append((file_object, content, parsed))
+                if parsed.get("parse_status") == "failed":
+                    parse_errors.append({"file_id": file_object.id, "filename": file_object.filename, "error": str(parsed.get("error", ""))})
+                elif parsed.get("format"):
+                    summaries.append(parsed)
+            summary = self._combine_report_summaries(summaries, parse_errors)
+            file_ids = [file_object.id for file_object, _, _ in staged_files]
+            report = Report(
+                project_id=project.id,
+                title=str(data.get("title", "") or f"Test run {run.id} artifact report"),
+                report_type=str(data.get("report_type", "") or "test"),
+                test_run_id=run.id,
+                file_ids=file_ids,
+                summary=summary,
+                status="failed" if parse_errors else "published",
+            )
+            report.validate()
+            report.id = self._id("rpt")
+            stamp(report)
+            stored_keys: list[str] = []
+            try:
+                for file_object, content, _ in staged_files:
+                    self.storage.put(file_object.storage_key, content)
+                    stored_keys.append(file_object.storage_key)
+            except Exception:
+                for storage_key in stored_keys:
+                    try:
+                        self.storage.delete(storage_key)
+                    except Exception:
+                        pass
+                raise
+            for file_object, _, _ in staged_files:
+                self.files[file_object.id] = file_object
+                self._audit(actor_id, "file.uploaded", "file", file_object.id, self._file_audit_metadata(file_object))
+            self.reports[report.id] = report
+            run.status = self._test_run_status_from_summary(summary)
+            run.results = self._test_run_results_from_summary(summary)
+            run.updated_at = now_utc()
+            gate = self._upsert_ingest_quality_gate(actor_id, project.id, report, summary)
+            self._audit(actor_id, "test_run.updated", "test_run", run.id, {"status": run.status})
+            self._audit(actor_id, "report.ingested", "report", report.id, {"project_id": report.project_id, "test_run_id": run.id, "file_count": len(file_ids), "parse_status": summary["parse_status"]})
+            return {"report": asdict(report), "files": [self._public_file(self.files[file_id]) for file_id in file_ids], "test_run": asdict(run), "quality_gate": asdict(gate)}
+
     def list_reports(self) -> list[dict[str, Any]]:
         with self._lock:
             return [asdict(report) for report in self.reports.values()]
@@ -1603,7 +1711,8 @@ class MemoryStore:
         gate = QualityGate(**pick(data, QualityGate))
         gate.validate()
         with self._lock:
-            self._project(gate.project_id)
+            project = self._project(gate.project_id)
+            self._require_project_actor(actor_id, project)
             if gate.last_report_id:
                 report = self._report(gate.last_report_id)
                 if report.project_id != gate.project_id:
@@ -1799,6 +1908,11 @@ class MemoryStore:
     def _require_project_actor(self, actor_id: str, project: Project) -> None:
         if not actor_id or actor_id == "system":
             raise PermissionDenied("authenticated actor is required")
+        identity = self.service_identities.get(actor_id)
+        if identity is not None and identity.status == "active":
+            if project.id in identity.project_ids:
+                return
+            raise PermissionDenied("service identity is not bound to project")
         if actor_id not in unique([project.owner_id, *project.member_ids]):
             raise PermissionDenied("actor is not a project member")
 
@@ -2221,6 +2335,121 @@ class MemoryStore:
         if len(content) > MAX_FILE_UPLOAD_BYTES:
             raise InvalidInput("file upload exceeds max size")
         return content
+
+    def _parse_report_artifact(self, file_object: FileObject, content: bytes, artifact_type: str = "") -> dict[str, Any]:
+        kind = artifact_type.strip().lower()
+        filename = file_object.filename.lower()
+        content_type = file_object.content_type.lower()
+        if kind == "junit" or filename.endswith(".xml") or "junit" in content_type or content_type in {"application/xml", "text/xml"}:
+            try:
+                return self._parse_junit_summary(content)
+            except (ET.ParseError, ValueError) as exc:
+                return {"parse_status": "failed", "format": "junit", "error": str(exc)}
+        if kind == "json" or filename.endswith(".json") or content_type == "application/json":
+            try:
+                decoded = json.loads(content.decode("utf-8"))
+                if not isinstance(decoded, dict):
+                    raise ValueError("json summary must be an object")
+                return self._parse_json_report_summary(decoded)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
+                return {"parse_status": "failed", "format": "json", "error": str(exc)}
+        return {"parse_status": "skipped", "format": ""}
+
+    def _parse_junit_summary(self, content: bytes) -> dict[str, Any]:
+        root = ET.fromstring(content)
+        suites = [root] if root.tag == "testsuite" else list(root.findall(".//testsuite"))
+        if not suites and root.tag != "testsuites":
+            raise ValueError("junit report requires testsuite or testsuites root")
+        total = failures = errors = skipped = 0
+        cases: list[dict[str, Any]] = []
+        source = suites or [root]
+        for suite in source:
+            total += int(float(suite.attrib.get("tests", "0") or 0))
+            failures += int(float(suite.attrib.get("failures", "0") or 0))
+            errors += int(float(suite.attrib.get("errors", "0") or 0))
+            skipped += int(float(suite.attrib.get("skipped", "0") or 0))
+            for case in suite.findall("testcase"):
+                status = "passed"
+                if case.find("failure") is not None:
+                    status = "failed"
+                elif case.find("error") is not None:
+                    status = "error"
+                elif case.find("skipped") is not None:
+                    status = "skipped"
+                cases.append({"name": case.attrib.get("name", ""), "classname": case.attrib.get("classname", ""), "status": status})
+        if total == 0 and cases:
+            total = len(cases)
+            failures = len([case for case in cases if case["status"] == "failed"])
+            errors = len([case for case in cases if case["status"] == "error"])
+            skipped = len([case for case in cases if case["status"] == "skipped"])
+        passed = max(total - failures - errors - skipped, 0)
+        return {"parse_status": "parsed", "format": "junit", "total": total, "passed": passed, "failed": failures, "errors": errors, "skipped": skipped, "cases": cases[:100]}
+
+    def _parse_json_report_summary(self, data: dict[str, Any]) -> dict[str, Any]:
+        total = int(data.get("total", data.get("tests", 0)) or 0)
+        passed = int(data.get("passed", 0) or 0)
+        failed = int(data.get("failed", data.get("failures", 0)) or 0)
+        errors = int(data.get("errors", 0) or 0)
+        skipped = int(data.get("skipped", 0) or 0)
+        if total == 0:
+            total = passed + failed + errors + skipped
+        if passed == 0 and total:
+            passed = max(total - failed - errors - skipped, 0)
+        cases = data.get("cases", data.get("results", []))
+        if cases is not None and not isinstance(cases, list):
+            raise ValueError("json summary cases must be a list")
+        return {"parse_status": "parsed", "format": "json", "total": total, "passed": passed, "failed": failed, "errors": errors, "skipped": skipped, "cases": (cases or [])[:100]}
+
+    def _combine_report_summaries(self, summaries: list[dict[str, Any]], parse_errors: list[dict[str, str]]) -> dict[str, Any]:
+        combined = {
+            "parse_status": "failed" if parse_errors else ("parsed" if summaries else "skipped"),
+            "total": sum(int(summary.get("total", 0)) for summary in summaries),
+            "passed": sum(int(summary.get("passed", 0)) for summary in summaries),
+            "failed": sum(int(summary.get("failed", 0)) for summary in summaries),
+            "errors": sum(int(summary.get("errors", 0)) for summary in summaries),
+            "skipped": sum(int(summary.get("skipped", 0)) for summary in summaries),
+            "formats": sorted({str(summary.get("format", "")) for summary in summaries if summary.get("format")}),
+            "parse_errors": parse_errors,
+        }
+        cases: list[dict[str, Any]] = []
+        for summary in summaries:
+            cases.extend(case for case in summary.get("cases", []) if isinstance(case, dict))
+        combined["cases"] = cases[:100]
+        return combined
+
+    def _test_run_status_from_summary(self, summary: dict[str, Any]) -> str:
+        if summary.get("parse_status") == "failed" or int(summary.get("failed", 0)) or int(summary.get("errors", 0)):
+            return "failed"
+        if summary.get("parse_status") == "parsed":
+            return "passed"
+        return "running"
+
+    def _test_run_results_from_summary(self, summary: dict[str, Any]) -> list[dict[str, Any]]:
+        results = summary.get("cases", [])
+        return results if isinstance(results, list) else []
+
+    def _upsert_ingest_quality_gate(self, actor_id: str, project_id: str, report: Report, summary: dict[str, Any]) -> QualityGate:
+        status = "passed" if summary.get("parse_status") == "parsed" and not int(summary.get("failed", 0)) and not int(summary.get("errors", 0)) else "failed"
+        gate = next((candidate for candidate in self.quality_gates.values() if candidate.project_id == project_id and candidate.name == "Automated Test Report Gate"), None)
+        conditions = [
+            {"metric": "parse_status", "equals": "parsed"},
+            {"metric": "failed", "equals": 0},
+            {"metric": "errors", "equals": 0},
+        ]
+        if gate is None:
+            gate = QualityGate(project_id=project_id, name="Automated Test Report Gate", conditions=conditions, last_report_id=report.id, status=status)
+            gate.validate()
+            gate.id = self._id("qgt")
+            stamp(gate)
+            self.quality_gates[gate.id] = gate
+            self._audit(actor_id, "quality_gate.created", "quality_gate", gate.id, {"project_id": project_id, "status": gate.status})
+            return gate
+        gate.conditions = conditions
+        gate.last_report_id = report.id
+        gate.status = status
+        gate.updated_at = now_utc()
+        self._audit(actor_id, "quality_gate.updated", "quality_gate", gate.id, {"project_id": project_id, "status": gate.status})
+        return gate
 
     def _matches_file_filters(self, file_object: FileObject, filters: dict[str, str]) -> bool:
         allowed = {"owner_id", "resource_type", "resource_id", "module", "status"}

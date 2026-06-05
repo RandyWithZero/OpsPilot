@@ -33,8 +33,25 @@ services:
       MINIO_ROOT_USER: opspilot
       MINIO_ROOT_PASSWORD: opspilot-secret
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${OPSPILOT_MINIO_API_PORT:-9000}:9000"
+      - "${OPSPILOT_MINIO_CONSOLE_PORT:-9001}:9001"
+
+  foundation-minio:
+    image: python:3.12-slim
+    working_dir: /app
+    command: sh -c "python -m pip install --no-cache-dir boto3 && python -m opspilot_foundation.server"
+    environment:
+      OPSPILOT_OBJECT_STORAGE_ADAPTER: minio
+      OPSPILOT_S3_ENDPOINT_URL: http://minio:9000
+      OPSPILOT_S3_BUCKET: opspilot-artifacts
+      AWS_ACCESS_KEY_ID: opspilot
+      AWS_SECRET_ACCESS_KEY: opspilot-secret
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../../services/foundation-service:/app
+    depends_on:
+      - minio
 
 volumes:
   mysql_data:
