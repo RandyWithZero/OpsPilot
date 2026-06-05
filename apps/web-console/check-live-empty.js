@@ -8,6 +8,7 @@ function createNode() {
     value: "",
     classList: { add() {}, remove() {}, toggle() {} },
     addEventListener() {},
+    focus() {},
     querySelectorAll() { return []; },
     close() {},
     showModal() {},
