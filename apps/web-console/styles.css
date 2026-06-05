@@ -1922,12 +1922,94 @@ dialog::backdrop {
     padding-bottom: 12px;
   }
 
+  .nav-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    overflow: visible;
+    padding-right: 0;
+  }
+
   .nav-group {
-    flex-basis: min(250px, 84vw);
+    display: contents;
+    min-width: 0;
+    padding: 0;
+  }
+
+  .nav-group h2 {
+    display: none;
   }
 
   .nav-list button {
+    width: 100%;
     min-height: 34px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    gap: 8px;
+    padding: 7px 8px;
+  }
+
+  .nav-list button small {
+    flex: 0 0 auto;
+  }
+
+  .identity-table {
+    min-width: 0;
+  }
+
+  .identity-table thead {
+    display: none;
+  }
+
+  .identity-table,
+  .identity-table tbody,
+  .identity-table tr,
+  .identity-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .identity-table tr {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    padding: 12px;
+  }
+
+  .identity-table tr + tr {
+    margin-top: 10px;
+  }
+
+  .identity-table td {
+    border-bottom: 0;
+    padding: 7px 0;
+  }
+
+  .identity-table td:not(:first-child)::before {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .identity-table td:nth-child(2)::before {
+    content: "状态";
+  }
+
+  .identity-table td:nth-child(3)::before {
+    content: "角色";
+  }
+
+  .identity-table td:nth-child(4)::before {
+    content: "更新时间";
+  }
+
+  .identity-table td:nth-child(5)::before {
+    content: "操作";
+  }
+
+  .identity-table .action-row {
+    width: 100%;
   }
 
   .actor-context {

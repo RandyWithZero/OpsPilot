@@ -1733,7 +1733,7 @@ function tableFor(type, rows) {
     modelProviders: ["供应商", "凭据", "模型", "Base URL", "状态", "操作"],
     workflows: ["流程", "项目", "版本", "节点", "运行", "状态", "操作"],
   }[type];
-  return `<table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => rowFor(type, row)).join("")}</tbody></table>`;
+  return `<table class="data-table ${type}-table"><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => rowFor(type, row)).join("")}</tbody></table>`;
 }
 
 function rowFor(type, row) {
