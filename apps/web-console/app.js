@@ -1,30 +1,56 @@
-const API_BASE = localStorage.getItem("opspilot_api_base") || "";
+const API_BASE = normalizeApiBase(localStorage.getItem("opspilot_api_base") || globalThis.OPSPILOT_API_BASE || "");
 const DEFAULT_ACTOR_ID = "web-console";
 const DEV_HEADERS_STORAGE_KEY = "opspilot_auth_dev_headers";
-const navItems = [
-  ["dashboard", "工作台"],
-  ["bigscreen", "Dashboard 大屏"],
-  ["tasks", "运维任务"],
-  ["projects", "项目管理"],
-  ["assets", "资产管理"],
-  ["environments", "环境管理"],
-  ["gitlabProfiles", "GitLab 集成"],
-  ["vcsOperations", "VCS 操作"],
-  ["vcsWebhooks", "Webhook 事件"],
-  ["files", "文件中心"],
-  ["testCases", "测试用例"],
-  ["testSuites", "测试套件"],
-  ["testRuns", "测试运行"],
-  ["reports", "测试报告"],
-  ["qualityGates", "质量门禁"],
-  ["agents", "智能体"],
-  ["skills", "Skill"],
-  ["credentials", "模型 Key"],
-  ["modelProviders", "模型供应商"],
-  ["workflows", "运维流程"],
-  ["workflowRuns", "流程运行"],
-  ["identity", "用户权限"],
+const navSections = [
+  {
+    title: "运营指挥",
+    items: [
+      ["dashboard", "工作台"],
+      ["bigscreen", "Dashboard 大屏"],
+      ["tasks", "运维任务"],
+      ["workflows", "运维流程"],
+      ["workflowRuns", "流程运行"],
+    ],
+  },
+  {
+    title: "资源拓扑",
+    items: [
+      ["projects", "项目管理"],
+      ["assets", "资产管理"],
+      ["environments", "环境管理"],
+      ["files", "文件中心"],
+    ],
+  },
+  {
+    title: "研发集成",
+    items: [
+      ["gitlabProfiles", "GitLab 集成"],
+      ["vcsOperations", "VCS 操作"],
+      ["vcsWebhooks", "Webhook 事件"],
+    ],
+  },
+  {
+    title: "测试质量",
+    items: [
+      ["testCases", "测试用例"],
+      ["testSuites", "测试套件"],
+      ["testRuns", "测试运行"],
+      ["reports", "测试报告"],
+      ["qualityGates", "质量门禁"],
+    ],
+  },
+  {
+    title: "平台治理",
+    items: [
+      ["agents", "智能体"],
+      ["skills", "Skill"],
+      ["modelProviders", "模型供应商"],
+      ["credentials", "模型 Key"],
+      ["identity", "用户权限"],
+    ],
+  },
 ];
+const navItems = navSections.flatMap((section) => section.items);
 
 const collections = {
   identity: "users",
@@ -284,7 +310,12 @@ async function signIn(event) {
   event.preventDefault();
   clearLoginError();
   const email = $("#login-email").value.trim();
+  const password = $("#login-password").value;
   const role = normalizeConsoleRole($("#login-role").value || roleFromEmail(email));
+  if (!isValidPasswordInput(password)) {
+    showLoginError("请输入有效密码，密码至少 8 位。");
+    return;
+  }
   setDevHeadersMode($("#login-dev-mode").checked);
   if (isDevHeadersMode()) {
     setSession({ user: email, role, actorId: email || DEFAULT_ACTOR_ID });
@@ -292,7 +323,7 @@ async function signIn(event) {
     return;
   }
   try {
-    const issued = await authRequest("/v1/auth/login", { email, actor_id: email || DEFAULT_ACTOR_ID, role });
+    const issued = await authRequest("/v1/auth/login", { email, password, actor_id: email || DEFAULT_ACTOR_ID, role });
     setSession({ user: email, role, actorId: email || DEFAULT_ACTOR_ID, tokenPayload: issued });
     showApp();
   } catch (error) {
@@ -643,10 +674,17 @@ function authMessage(error, fallback) {
 }
 
 function renderNav() {
-  $("#nav").innerHTML = navItems.map(([key, label]) => {
-    const allowed = canRoute(key);
-    return `<button data-route="${key}" ${allowed ? "" : "disabled aria-disabled=\"true\" title=\"当前角色无权访问\""}><span>${label}</span><small>${allowed ? countFor(key) : "受限"}</small></button>`;
-  }).join("");
+  $("#nav").innerHTML = navSections.map((section) => `
+    <section class="nav-section" aria-label="${escapeAttr(section.title)}">
+      <h2>${escapeHtml(section.title)}</h2>
+      <div class="nav-section-items">
+        ${section.items.map(([key, label]) => {
+          const allowed = canRoute(key);
+          return `<button data-route="${key}" ${allowed ? "" : "disabled aria-disabled=\"true\" title=\"当前角色无权访问\""}><span>${label}</span><small>${allowed ? countFor(key) : "受限"}</small></button>`;
+        }).join("")}
+      </div>
+    </section>
+  `).join("");
   $("#nav").onclick = (event) => {
     const button = event.target.closest("button[data-route]");
     if (!button) return;
@@ -657,6 +695,16 @@ function renderNav() {
     state.workflowBuilder = null;
     render();
   };
+}
+
+function normalizeApiBase(value) {
+  const base = String(value || "").trim();
+  if (!base || base === "/") return "";
+  return base.replace(/\/+$/, "");
+}
+
+function isValidPasswordInput(password) {
+  return typeof password === "string" && password.trim().length >= 8;
 }
 
 function render() {

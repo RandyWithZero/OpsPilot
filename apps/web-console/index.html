@@ -26,11 +26,11 @@
           <div id="login-error" class="auth-error hidden" role="alert"></div>
           <label>
             账号 / 邮箱
-            <input id="login-email" type="email" value="admin@opspilot.cn" required />
+            <input id="login-email" type="email" value="admin@opspilot.cn" autocomplete="username" required />
           </label>
           <label>
             密码
-            <input id="login-password" type="password" placeholder="请输入密码" />
+            <input id="login-password" type="password" placeholder="请输入密码" autocomplete="current-password" minlength="8" required />
           </label>
           <label>
             登录角色

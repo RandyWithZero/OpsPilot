@@ -129,11 +129,15 @@ const result = vm.runInContext(`
     return { ok: true, status: 200, json: async () => [] };
   };
   document.querySelector("#login-email").value = "admin@opspilot.cn";
+  document.querySelector("#login-password").value = "";
   document.querySelector("#login-role").value = "Viewer";
   document.querySelector("#login-dev-mode").checked = false;
   await signIn({ preventDefault() {} });
+  if (authCalls.length !== 0 || !document.querySelector("#login-error").textContent.includes("有效密码")) throw new Error("empty password was allowed to reach auth request");
+  document.querySelector("#login-password").value = "opspilot-secret";
+  await signIn({ preventDefault() {} });
   if (state.authMode !== "bearer" || state.role !== "Admin" || state.actorId !== "usr_admin" || state.accessToken !== issuedToken) throw new Error("login did not derive session from bearer token");
-  if (!authCalls[0].init.body.includes('"role":"Viewer"') || authCalls[0].init.body.includes("refresh-login")) throw new Error("login request did not preserve role input or leaked token material");
+  if (!authCalls[0].init.body.includes('"role":"Viewer"') || !authCalls[0].init.body.includes('"password":"opspilot-secret"') || authCalls[0].init.body.includes("refresh-login")) throw new Error("login request did not preserve auth input or leaked token material");
 
   let capturedRequest = null;
   fetch = async (path, init = {}) => {
