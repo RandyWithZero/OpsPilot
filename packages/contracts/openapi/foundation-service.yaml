@@ -1701,7 +1701,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/WorkflowRuntimeTask"
+                $ref: "#/components/schemas/WorkflowRuntimeTaskClaimed"
   /v1/runtime/tasks/{taskID}/callback:
     post:
       summary: Update a runtime task from a worker callback
@@ -2883,7 +2883,7 @@ components:
           format: date-time
     WorkflowRuntimeTask:
       type: object
-      required: [id, workflow_run_id, workflow_step_run_id, workflow_id, workflow_version_id, node_id, agent_id, status, attempt, max_attempts, attempt_token, input_summary, created_at, updated_at]
+      required: [id, workflow_run_id, workflow_step_run_id, workflow_id, workflow_version_id, node_id, agent_id, status, attempt, max_attempts, input_summary, created_at, updated_at]
       properties:
         id:
           type: string
@@ -2910,9 +2910,6 @@ components:
           type: integer
         max_attempts:
           type: integer
-        attempt_token:
-          type: string
-          description: Idempotency token for this concrete attempt; callbacks with stale/mismatched tokens are rejected.
         input_summary:
           type: object
           description: Sanitized binding summary with IDs and binding names only, not credential/model key values.
@@ -2936,6 +2933,15 @@ components:
         updated_at:
           type: string
           format: date-time
+    WorkflowRuntimeTaskClaimed:
+      allOf:
+        - $ref: "#/components/schemas/WorkflowRuntimeTask"
+        - type: object
+          required: [attempt_token]
+          properties:
+            attempt_token:
+              type: string
+              description: Idempotency token for this concrete attempt; only returned by the authorized claim path and required on callbacks.
     RuntimeTaskClaim:
       type: object
       properties:

@@ -606,7 +606,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         reloaded_task = reloaded.list_runtime_tasks()[0]
 
         self.assertEqual(reloaded_task["id"], task["id"])
-        self.assertEqual(reloaded_task["attempt_token"], task["attempt_token"])
+        self.assertNotIn("attempt_token", reloaded_task)
         self.assertEqual(reloaded.list_workflow_runs(workflow["id"])[0]["steps"][1]["status"], "running")
 
     def test_failed_gitlab_merge_request_operation_survives_reload(self) -> None:
@@ -1447,6 +1447,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
 
         self.assertEqual(run["status"], "running")
         self.assertEqual(first_task["status"], "queued")
+        self.assertNotIn("attempt_token", first_task)
         self.assertEqual(first_task["agent_id"], agent["id"])
         self.assertEqual(first_task["skill_id"], skill["id"])
         self.assertEqual(first_task["model_provider_id"], provider["id"])
@@ -1457,19 +1458,22 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         claimed = self.store.claim_runtime_task("usr_worker", {"agent_id": agent["id"]})
         self.assertEqual(claimed["id"], first_task["id"])
         self.assertEqual(claimed["status"], "running")
+        self.assertIn("attempt_token", claimed)
 
         with self.assertRaises(Exception) as bad_token:
             self.store.callback_runtime_task("usr_worker", first_task["id"], {"attempt_token": "wrong", "status": "completed"})
         self.assertEqual(getattr(bad_token.exception, "code", ""), "conflict")
 
-        retrying = self.store.callback_runtime_task("usr_worker", first_task["id"], {"attempt_token": first_task["attempt_token"], "status": "failed", "error": "transient", "retry": True})
+        retrying = self.store.callback_runtime_task("usr_worker", first_task["id"], {"attempt_token": claimed["attempt_token"], "status": "failed", "error": "transient", "retry": True})
         self.assertEqual(retrying["status"], "running")
         tasks = self.store.list_runtime_tasks()
         self.assertEqual([task["status"] for task in tasks], ["failed", "queued"])
+        self.assertFalse(any("attempt_token" in task for task in tasks))
         self.assertEqual(tasks[1]["attempt"], 2)
+        second_claim = self.store.claim_runtime_task("usr_worker", {"agent_id": agent["id"]})
 
-        completed = self.store.callback_runtime_task("usr_worker", tasks[1]["id"], {"attempt_token": tasks[1]["attempt_token"], "status": "completed", "output": {"deployment_id": "dep-1"}})
-        completed_again = self.store.callback_runtime_task("usr_worker", tasks[1]["id"], {"attempt_token": tasks[1]["attempt_token"], "status": "completed", "output": {"deployment_id": "dep-1"}})
+        completed = self.store.callback_runtime_task("usr_worker", tasks[1]["id"], {"attempt_token": second_claim["attempt_token"], "status": "completed", "output": {"deployment_id": "dep-1"}})
+        completed_again = self.store.callback_runtime_task("usr_worker", tasks[1]["id"], {"attempt_token": second_claim["attempt_token"], "status": "completed", "output": {"deployment_id": "dep-1"}})
         agent_step = next(step for step in completed["steps"] if step["node_id"] == "deploy")
         approval_step = next(step for step in completed["steps"] if step["node_id"] == "approve")
         done_step = next(step for step in completed["steps"] if step["node_id"] == "done")
@@ -1483,7 +1487,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertEqual(getattr(approval_gate.exception, "code", ""), "conflict")
 
         with self.assertRaises(Exception) as illegal_transition:
-            self.store.callback_runtime_task("usr_worker", tasks[1]["id"], {"attempt_token": tasks[1]["attempt_token"], "status": "failed", "error": "late failure"})
+            self.store.callback_runtime_task("usr_worker", tasks[1]["id"], {"attempt_token": second_claim["attempt_token"], "status": "failed", "error": "late failure"})
         self.assertEqual(getattr(illegal_transition.exception, "code", ""), "conflict")
 
         audit = json.dumps(self.store.list_audit_events())
@@ -1491,6 +1495,67 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertIn("workflow.runtime_task.callback", audit)
         self.assertNotIn("sk-runtime-secret", audit)
         self.assertNotIn("must-not-leak", audit)
+
+    def test_runtime_callback_sanitizes_output_error_and_dispatch_options(self) -> None:
+        credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key", "secret": "sk-runtime-secret"})
+        provider = self.store.create_model_provider("usr_test_actor", {"provider": "openai", "name": "Provider", "credential_ref_id": credential["id"]})
+        skill = self.store.create_skill("usr_test_actor", {"name": "Deploy", "version": "1.0.0", "runtime": "python"})
+        agent = self.store.create_agent("usr_test_actor", {"name": "Deploy Agent", "kind": "automation", "skill_ids": [skill["id"]], "model_provider_id": provider["id"]})
+
+        bad_workflow = self.store.create_workflow("usr_test_actor", {"name": "Bad runtime options"})
+        with self.assertRaises(Exception) as bad_attempts:
+            self.store.create_workflow_version(
+                "usr_test_actor",
+                bad_workflow["id"],
+                {
+                    "version": "1",
+                    "nodes": [
+                        {"id": "start", "type": "trigger"},
+                        {"id": "deploy", "type": "agent_task", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"], "config": {"max_attempts": "many"}},
+                    ],
+                    "edges": [{"from_node_id": "start", "to_node_id": "deploy"}],
+                },
+            )
+        self.assertEqual(getattr(bad_attempts.exception, "code", ""), "invalid_input")
+
+        workflow = self.store.create_workflow("usr_test_actor", {"name": "Sanitized runtime callback"})
+        self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "start", "type": "trigger"},
+                    {"id": "deploy", "type": "agent_task", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"], "config": {"retries": "1", "timeout_seconds": "15"}},
+                ],
+                "edges": [{"from_node_id": "start", "to_node_id": "deploy"}],
+            },
+        )
+        run = self.store.create_workflow_run("usr_test_actor", workflow["id"], {"start": True})
+        public_task = self.store.list_runtime_tasks("queued")[0]
+        claimed = self.store.claim_runtime_task("usr_worker", {"agent_id": agent["id"]})
+        self.assertEqual(public_task["max_attempts"], 2)
+        self.assertEqual(public_task["timeout_seconds"], 15)
+
+        completed = self.store.callback_runtime_task(
+            "usr_worker",
+            claimed["id"],
+            {
+                "attempt_token": claimed["attempt_token"],
+                "status": "completed",
+                "output": {"safe": "ok", "api_token": "abc123", "nested": {"message": "secret=abc123"}},
+                "error": "token=abc123",
+            },
+        )
+        task_after_callback = self.store.list_runtime_tasks("completed")[0]
+        step = next(step for step in completed["steps"] if step["node_id"] == "deploy")
+
+        self.assertEqual(step["output"], {"safe": "ok", "api_token": "[REDACTED]", "nested": {"message": "[REDACTED]"}})
+        self.assertEqual(task_after_callback["output"], step["output"])
+        self.assertEqual(task_after_callback["error"], "[REDACTED]")
+        self.assertNotIn("attempt_token", task_after_callback)
+        self.assertNotIn("abc123", json.dumps(completed))
+        self.assertNotIn("abc123", json.dumps(self.store.list_runtime_tasks()))
 
     def test_runtime_dispatch_waits_for_manual_gate_and_timeout_rolls_up(self) -> None:
         credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key", "secret": "sk-timeout-secret"})

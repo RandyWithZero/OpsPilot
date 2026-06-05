@@ -1207,9 +1207,9 @@ class MemoryStore:
             if "output" in data:
                 if not isinstance(data["output"], dict):
                     raise InvalidInput("workflow step output must be an object")
-                step.output = data["output"]
+                step.output = self._sanitize_runtime_capture(data["output"])
             if "error" in data:
-                step.error = str(data["error"])
+                step.error = self._sanitize_runtime_error(str(data["error"]))
             step.updated_at = stamp_time
             if step.step_type == "agent" and next_status in {"completed", "failed", "skipped"}:
                 self._close_active_runtime_tasks_for_step(step, next_status, stamp_time)
@@ -1223,7 +1223,7 @@ class MemoryStore:
             tasks = self.workflow_runtime_tasks.values()
             if status:
                 tasks = [task for task in tasks if task.status == status]
-            return [asdict(task) for task in sorted(tasks, key=lambda task: (task.created_at, task.id))]
+            return [self._runtime_task_response(task, include_attempt_token=False) for task in sorted(tasks, key=lambda task: (task.created_at, task.id))]
 
     def claim_runtime_task(self, actor_id: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._lock:
@@ -1242,7 +1242,7 @@ class MemoryStore:
             task.claimed_at = task.claimed_at or stamp_time
             task.updated_at = stamp_time
             self._audit(actor_id, "workflow.runtime_task.claimed", "workflow_runtime_task", task.id, {"workflow_run_id": run.id, "workflow_step_run_id": step.id, "status": task.status, "attempt": task.attempt})
-            return asdict(task)
+            return self._runtime_task_response(task, include_attempt_token=True)
 
     def callback_runtime_task(self, actor_id: str, task_id: str, data: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -1253,8 +1253,10 @@ class MemoryStore:
             next_status = str(data.get("status", "")).strip()
             if next_status not in {"running", "completed", "failed"}:
                 raise InvalidInput("runtime callback status must be running, completed, or failed")
+            callback_output = self._runtime_callback_output(data)
+            callback_error = self._runtime_callback_error(data)
             if task.status in {"completed", "failed", "timed_out", "cancelled"}:
-                if self._runtime_callback_is_idempotent(task, data, next_status):
+                if self._runtime_callback_is_idempotent(task, next_status, callback_output, callback_error):
                     return self._workflow_run_response(run)
                 raise Conflict("runtime task cannot transition from current status")
             if run.status != "running" or step.status != "running":
@@ -1270,12 +1272,10 @@ class MemoryStore:
                 return self._workflow_run_response(run)
             if task.status not in {"queued", "running"}:
                 raise Conflict("runtime task cannot transition from current status")
-            if "output" in data:
-                if not isinstance(data["output"], dict):
-                    raise InvalidInput("runtime task output must be an object")
-                task.output = data["output"]
-            if "error" in data:
-                task.error = str(data["error"])
+            if callback_output is not None:
+                task.output = callback_output
+            if callback_error is not None:
+                task.error = callback_error
             task.status = next_status
             task.completed_at = stamp_time
             task.updated_at = stamp_time
@@ -1742,6 +1742,10 @@ class MemoryStore:
                     raise Conflict("workflow node skill is not allowed by agent")
                 if model_provider_id and model_provider_id != agent.model_provider_id:
                     raise Conflict("workflow node model provider is not allowed by agent")
+            config = node.get("config", {})
+            if node_type == "agent_task" and isinstance(config, dict):
+                self._runtime_max_attempts(config)
+                self._runtime_non_negative_int(config, "timeout_seconds", default=0)
 
     def _workflow_run_response(self, run: WorkflowRun) -> dict[str, Any]:
         response = asdict(run)
@@ -1868,8 +1872,8 @@ class MemoryStore:
                 self._validate_step_predecessors(run, step)
             except Conflict:
                 continue
-            max_attempts = int(step.input.get("max_attempts", step.input.get("retries", 0) + 1) or 1)
-            timeout_seconds = int(step.input.get("timeout_seconds", 0) or 0)
+            max_attempts = self._runtime_max_attempts(step.input)
+            timeout_seconds = self._runtime_non_negative_int(step.input, "timeout_seconds", default=0)
             self._queue_runtime_task(actor_id, run, step, self._next_runtime_attempt(step), max(1, max_attempts), max(0, timeout_seconds))
 
     def _queue_runtime_task(self, actor_id: str, run: WorkflowRun, step: WorkflowStepRun, attempt: int, max_attempts: int, timeout_seconds: int) -> WorkflowRuntimeTask:
@@ -1922,12 +1926,12 @@ class MemoryStore:
         if token != task.attempt_token:
             raise Conflict("runtime callback attempt_token does not match")
 
-    def _runtime_callback_is_idempotent(self, task: WorkflowRuntimeTask, data: dict[str, Any], next_status: str) -> bool:
+    def _runtime_callback_is_idempotent(self, task: WorkflowRuntimeTask, next_status: str, output: dict[str, Any] | None, error: str | None) -> bool:
         if next_status != task.status:
             return False
-        if "output" in data and data["output"] != task.output:
+        if output is not None and output != task.output:
             return False
-        if "error" in data and str(data["error"]) != task.error:
+        if error is not None and error != task.error:
             return False
         return True
 
@@ -1940,6 +1944,64 @@ class MemoryStore:
                 task.error = step.error if step_status == "failed" else task.error
                 task.completed_at = stamp_time
                 task.updated_at = stamp_time
+
+    def _runtime_task_response(self, task: WorkflowRuntimeTask, *, include_attempt_token: bool) -> dict[str, Any]:
+        response = asdict(task)
+        if not include_attempt_token:
+            response.pop("attempt_token", None)
+        return response
+
+    def _runtime_callback_output(self, data: dict[str, Any]) -> dict[str, Any] | None:
+        if "output" not in data:
+            return None
+        if not isinstance(data["output"], dict):
+            raise InvalidInput("runtime task output must be an object")
+        return self._sanitize_runtime_capture(data["output"])
+
+    def _runtime_callback_error(self, data: dict[str, Any]) -> str | None:
+        if "error" not in data:
+            return None
+        return self._sanitize_runtime_error(str(data["error"]))
+
+    def _sanitize_runtime_capture(self, value: Any) -> Any:
+        redacted = redact_sensitive_payload(value)
+        if isinstance(redacted, dict):
+            return {str(key): self._sanitize_runtime_capture(item) for key, item in redacted.items()}
+        if isinstance(redacted, list):
+            return [self._sanitize_runtime_capture(item) for item in redacted]
+        if isinstance(redacted, str) and self._looks_token_like(redacted):
+            return "[REDACTED]"
+        return redacted
+
+    def _sanitize_runtime_error(self, value: str) -> str:
+        return "[REDACTED]" if self._looks_token_like(value) else value
+
+    def _looks_token_like(self, value: str) -> bool:
+        lowered = value.lower()
+        return any(marker in lowered for marker in ("token", "secret", "password", "api_key", "apikey", "key=", "key:"))
+
+    def _runtime_max_attempts(self, data: dict[str, Any]) -> int:
+        if "max_attempts" in data:
+            return self._runtime_positive_int(data, "max_attempts")
+        retries = self._runtime_non_negative_int(data, "retries", default=0)
+        return retries + 1
+
+    def _runtime_positive_int(self, data: dict[str, Any], key: str) -> int:
+        value = self._runtime_non_negative_int(data, key, default=1)
+        if value <= 0:
+            raise InvalidInput(f"{key} must be a positive integer")
+        return value
+
+    def _runtime_non_negative_int(self, data: dict[str, Any], key: str, *, default: int) -> int:
+        if key not in data or data[key] is None or data[key] == "":
+            return default
+        try:
+            value = int(data[key])
+        except (TypeError, ValueError) as exc:
+            raise InvalidInput(f"{key} must be an integer") from exc
+        if value < 0:
+            raise InvalidInput(f"{key} must not be negative")
+        return value
 
     def _id(self, prefix: str) -> str:
         self._ids += 1
