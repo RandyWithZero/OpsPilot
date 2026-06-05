@@ -15,12 +15,15 @@ from urllib.request import Request, urlopen
 
 BASE_URL = os.environ.get("OPSPILOT_SMOKE_FOUNDATION_URL", os.environ.get("OPSPILOT_FOUNDATION_URL", "http://127.0.0.1:8080")).rstrip("/")
 TIMEOUT_SECONDS = float(os.environ.get("OPSPILOT_SMOKE_TIMEOUT_SECONDS", "90"))
+DEV_LOGIN_PASSWORD = os.environ.get("OPSPILOT_AUTH_DEV_PASSWORD", "")
 
 
 def main() -> None:
     wait_for_ready()
     suffix = uuid.uuid4().hex[:8]
-    session = request("POST", "/v1/auth/login", {"actor_id": "usr_smoke_admin", "role": "Admin", "email": "smoke@local.opspilot", "name": "Smoke Admin"})
+    if not DEV_LOGIN_PASSWORD:
+        raise RuntimeError("OPSPILOT_AUTH_DEV_PASSWORD is required for release smoke login")
+    session = request("POST", "/v1/auth/login", {"actor_id": "usr_smoke_admin", "role": "Admin", "email": "smoke@local.opspilot", "name": "Smoke Admin", "password": DEV_LOGIN_PASSWORD})
     admin_token = session["access_token"]
     headers = auth(admin_token)
 

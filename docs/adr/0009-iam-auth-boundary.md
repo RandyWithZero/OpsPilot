@@ -12,7 +12,7 @@ The foundation MVP previously trusted local `X-Actor-ID` and `X-Actor-Role` head
 
 Protected foundation routes now resolve `ActorContext` from `Authorization: Bearer` access tokens. Access tokens are short-lived HMAC-signed tokens backed by persistent user sessions or service identities. User sessions can be issued by the explicit local development issuer, refreshed with a rotating refresh token, and revoked through logout. Service identities are managed by Admin callers and provide a separate worker/service token path so runtime callbacks and later model/artifact services do not reuse human sessions.
 
-The local development issuer is enabled only with `OPSPILOT_AUTH_DEV_ISSUER=1`. Legacy actor headers are ignored unless `OPSPILOT_AUTH_DEV_HEADERS=1` is explicitly set, and remain only as deprecated compatibility for local development and tests.
+The local development issuer is enabled only with `OPSPILOT_AUTH_DEV_ISSUER=1` and requires `OPSPILOT_AUTH_DEV_PASSWORD`; `/v1/auth/login` rejects missing, empty, or incorrect passwords with `401 authentication_required`. Legacy actor headers are ignored unless `OPSPILOT_AUTH_DEV_HEADERS=1` is explicitly set, and remain only as deprecated compatibility for local development and tests.
 
 Admin, Operator, and Viewer permission semantics stay unchanged:
 

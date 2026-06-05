@@ -5,8 +5,7 @@ Static first slice for the authenticated operations console. It covers the dense
 - authenticated shell with IAM login, bearer token API calls, refresh-token session renewal, primary navigation, global search, project switcher placeholder, refresh, and sign-out
 - dashboard setup progress, inventory counts, readiness exceptions, and audit activity
 - identity, project, asset, and environment inventory tables with search, filters, detail panels, and create dialogs
-- API integration through same-origin `/v1`, `/healthz`, and `/readyz` routes. In Compose, Nginx proxies those routes to `foundation:8080` inside the Docker network so the browser does not call `localhost` or a public IP for backend traffic.
-- Explicit local mock / development-header fallback for offline checks.
+- API integration through same-origin `/v1/*`, `/healthz`, and `/readyz` routes. In Compose, Nginx proxies those routes to `foundation:8080` inside the Docker network so the browser does not call `localhost` or a public IP for backend traffic; explicit local mock / development-header fallback remains available for offline checks.
 
 Run locally:
 
@@ -19,8 +18,9 @@ Open `http://localhost:5173`.
 
 Auth notes:
 
-- The default console path uses `/v1/auth/login`, stores access and refresh tokens in `sessionStorage`, attaches `Authorization: Bearer ...`, refreshes via `/v1/auth/refresh`, and revokes via `/v1/auth/logout`.
-- The login form requires a non-empty password and submits it as `password` / `credential` for the IAM contract. Empty credentials are blocked before the console shell can load.
+- The default console path uses `/v1/auth/login` with email, role, and password, stores access and refresh tokens in `sessionStorage`, attaches `Authorization: Bearer ...`, refreshes via `/v1/auth/refresh`, and revokes via `/v1/auth/logout`.
+- The API base defaults to same-origin. Set `localStorage.opspilot_api_base` only for direct local development against another origin such as `http://localhost:8080`.
+- The login form requires a non-empty password and submits the backend contract `password` field. Empty credentials are blocked before the console shell can load.
 - The "本地模拟 / 开发头模式" checkbox persists `opspilot_auth_dev_headers=1` in `localStorage` and is the only path that sends deprecated `X-Actor-ID` / `X-Actor-Role` headers.
 - GOO-56 contract gap: the current OpenAPI does not expose a profile/me endpoint, so the console derives actor ID and role from the issued access-token payload after login or refresh.
 

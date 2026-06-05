@@ -291,7 +291,7 @@ async function signIn(event) {
     return;
   }
   try {
-    const issued = await authRequest("/v1/auth/login", { email, password, credential: password, actor_id: email || DEFAULT_ACTOR_ID, role });
+    const issued = await authRequest("/v1/auth/login", { email, actor_id: email || DEFAULT_ACTOR_ID, role, password });
     setSession({ user: email, role, actorId: email || DEFAULT_ACTOR_ID, tokenPayload: issued });
     showApp();
   } catch (error) {

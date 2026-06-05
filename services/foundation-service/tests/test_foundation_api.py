@@ -583,8 +583,8 @@ class FoundationSliceTest(unittest.TestCase):
         self.assert_allowed("Admin", "DELETE", "/v1/projects/prj_1")
 
     def test_auth_sessions_issue_refresh_and_revoke_without_exposing_hashes(self) -> None:
-        with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1"):
-            issued = self.store.issue_dev_session({"actor_id": "usr_admin", "role": "Admin"})
+        with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_DEV_PASSWORD="test-password"):
+            issued = self.store.issue_dev_session({"actor_id": "usr_admin", "role": "Admin", "password": "test-password"})
             self.assertEqual(issued["token_type"], "Bearer")
             self.assertIn("access_token", issued)
             self.assertIn("refresh_token", issued)
@@ -705,8 +705,8 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertEqual(self.reload_store().list_users(), [])
 
     def test_auth_sessions_and_service_identities_survive_mysql_reload(self) -> None:
-        with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1"):
-            session = self.store.issue_dev_session({"actor_id": "usr_worker_admin", "role": "Admin"})
+        with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_DEV_PASSWORD="test-password"):
+            session = self.store.issue_dev_session({"actor_id": "usr_worker_admin", "role": "Admin", "password": "test-password"})
             identity = self.store.create_service_identity("usr_worker_admin", {"name": "runtime-worker", "role": "Operator"})
 
         reloaded = self.reload_store()
@@ -1017,9 +1017,9 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         temp_dir = tempfile.TemporaryDirectory()
         original_store = FoundationHandler.store
         FoundationHandler.store = MemoryStore(storage=LocalFileStorage(temp_dir.name))
-        with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
-            owner_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_owner", "role": "Operator"})
-            other_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_other", "role": "Operator"})
+        with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_DEV_PASSWORD="test-password", OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+            owner_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_owner", "role": "Operator", "password": "test-password"})
+            other_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_other", "role": "Operator", "password": "test-password"})
             owner_headers = {"Authorization": f"Bearer {owner_session['access_token']}"}
             other_headers = {"Authorization": f"Bearer {other_session['access_token']}"}
             server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
@@ -1101,8 +1101,8 @@ class MySQLStorePersistenceTest(unittest.TestCase):
                 expired = self.http_json(base_url, "GET", "/v1/projects", headers={"Authorization": f"Bearer {expired_token}"}, expected_status=401)
             self.assertEqual(expired["error"], "authentication_required")
 
-            with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
-                inactive_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_inactive", "role": "Admin"})
+            with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_DEV_PASSWORD="test-password", OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+                inactive_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_inactive", "role": "Admin", "password": "test-password"})
                 FoundationHandler.store.update_user("usr_inactive", "usr_inactive", {"status": "inactive"})
                 inactive_access = self.http_json(
                     base_url,
@@ -1121,8 +1121,8 @@ class MySQLStorePersistenceTest(unittest.TestCase):
             self.assertEqual(inactive_access["error"], "authentication_required")
             self.assertEqual(inactive_refresh["error"], "authentication_required")
 
-            with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
-                demoted_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_demoted", "role": "Admin"})
+            with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_DEV_PASSWORD="test-password", OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+                demoted_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_demoted", "role": "Admin", "password": "test-password"})
                 FoundationHandler.store.update_user("usr_demoted", "usr_demoted", {"roles": [{"scope": "platform", "name": "Viewer"}]})
                 demoted_high_risk = self.http_json(
                     base_url,
@@ -1144,6 +1144,91 @@ class MySQLStorePersistenceTest(unittest.TestCase):
                     {"service_token": identity["service_token"]},
                 )
             self.assertIn("access_token", service_exchange)
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+            server.server_close()
+            FoundationHandler.store = original_store
+            temp_dir.cleanup()
+
+    def test_http_dev_login_requires_configured_password_and_supports_session_lifecycle(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        original_store = FoundationHandler.store
+        FoundationHandler.store = MemoryStore(storage=LocalFileStorage(temp_dir.name))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+                missing_config = self.http_json(
+                    base_url,
+                    "POST",
+                    "/v1/auth/login",
+                    {"actor_id": "usr_admin", "role": "Admin", "password": "test-password"},
+                    expected_status=401,
+                )
+            self.assertEqual(missing_config["error"], "authentication_required")
+
+            with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_DEV_PASSWORD="test-password", OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+                empty_password = self.http_json(
+                    base_url,
+                    "POST",
+                    "/v1/auth/login",
+                    {"actor_id": "usr_admin", "role": "Admin", "password": ""},
+                    expected_status=401,
+                )
+                wrong_password = self.http_json(
+                    base_url,
+                    "POST",
+                    "/v1/auth/login",
+                    {"actor_id": "usr_admin", "role": "Admin", "password": "wrong"},
+                    expected_status=401,
+                )
+                issued = self.http_json(
+                    base_url,
+                    "POST",
+                    "/v1/auth/login",
+                    {"actor_id": "usr_admin", "role": "Admin", "email": "admin@local.opspilot", "name": "Admin", "password": "test-password"},
+                    expected_status=201,
+                )
+                protected = self.http_json(base_url, "GET", "/v1/projects", headers={"Authorization": f"Bearer {issued['access_token']}"})
+                refreshed = self.http_json(base_url, "POST", "/v1/auth/refresh", {"refresh_token": issued["refresh_token"]})
+                logout = self.http_json(
+                    base_url,
+                    "POST",
+                    "/v1/auth/logout",
+                    {"refresh_token": refreshed["refresh_token"]},
+                    headers={"Authorization": f"Bearer {refreshed['access_token']}"},
+                )
+                revoked_refresh = self.http_json(base_url, "POST", "/v1/auth/refresh", {"refresh_token": refreshed["refresh_token"]}, expected_status=401)
+
+            self.assertEqual(empty_password["error"], "authentication_required")
+            self.assertEqual(wrong_password["error"], "authentication_required")
+            self.assertEqual(protected, [])
+            self.assertIn("access_token", refreshed)
+            self.assertEqual(logout["status"], "revoked")
+            self.assertEqual(revoked_refresh["error"], "authentication_required")
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+            server.server_close()
+            FoundationHandler.store = original_store
+            temp_dir.cleanup()
+
+    def test_http_same_origin_route_contract_keeps_health_public_and_v1_protected(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        original_store = FoundationHandler.store
+        FoundationHandler.store = MemoryStore(storage=LocalFileStorage(temp_dir.name))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            self.assertEqual(self.http_json(base_url, "GET", "/healthz")["status"], "ok")
+            self.assertIn("dependencies", self.http_json(base_url, "GET", "/readyz"))
+            unauthorized = self.http_json(base_url, "GET", "/v1/projects", expected_status=401)
+            self.assertEqual(unauthorized["error"], "authentication_required")
         finally:
             server.shutdown()
             thread.join(timeout=2)

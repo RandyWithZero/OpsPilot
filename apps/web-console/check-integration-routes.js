@@ -143,7 +143,7 @@ const result = vm.runInContext(`
   fetch = loginFetch;
   await signIn({ preventDefault() {} });
   if (state.authMode !== "bearer" || state.role !== "Admin" || state.actorId !== "usr_admin" || state.accessToken !== issuedToken) throw new Error("login did not derive session from bearer token");
-  if (!authCalls[0].init.body.includes('"role":"Viewer"') || !authCalls[0].init.body.includes('"password":"correct-horse-battery-staple"') || !authCalls[0].init.body.includes('"credential":"correct-horse-battery-staple"') || authCalls[0].init.body.includes("refresh-login")) throw new Error("login request did not preserve role/password input or leaked token material");
+  if (!authCalls[0].init.body.includes('"role":"Viewer"') || !authCalls[0].init.body.includes('"password":"correct-horse-battery-staple"') || authCalls[0].init.body.includes('"credential"') || authCalls[0].init.body.includes("refresh-login")) throw new Error("login request did not preserve role/password input, sent legacy credential, or leaked token material");
 
   let capturedRequest = null;
   fetch = async (path, init = {}) => {
