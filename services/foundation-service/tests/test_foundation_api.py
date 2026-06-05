@@ -477,6 +477,19 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertIn(("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS"), headers)
         self.assertIn(("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Actor-ID,X-Actor-Role,X-Gitlab-Token"), headers)
 
+    def test_readiness_diagnostics_are_public_and_do_not_expose_secrets(self) -> None:
+        diagnostics = self.store.diagnostics()
+        actor = FoundationHandler._actor(type("HandlerDouble", (), {"headers": {}, "store": self.store})(), "/readyz")  # type: ignore[arg-type]
+
+        self.assertEqual(actor.actor_id, "system")
+        self.assertEqual(diagnostics["status"], "ok")
+        self.assertEqual(diagnostics["dependencies"]["store"]["adapter"], "memory")
+        self.assertEqual(diagnostics["dependencies"]["storage"]["adapter"], "local")
+        self.assertEqual(diagnostics["dependencies"]["runtime_queue"]["queued"], 0)
+        self.assertIn("projects", diagnostics["metrics"])
+        self.assertNotIn("secret", json.dumps(diagnostics).lower())
+        self.assertNotIn("token", json.dumps(diagnostics).lower())
+
     def test_local_rbac_permission_matrix_for_high_risk_apis(self) -> None:
         self.assertEqual(actor_from_headers({}).role, "Viewer")
         self.assertEqual(actor_from_headers({"X-Actor-ID": "usr_operator", "X-Actor-Role": "operator"}).actor_id, "usr_operator")
@@ -654,6 +667,17 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertIn(session["session_id"], reloaded.auth_sessions)
         self.assertEqual(reloaded.list_service_identities()[0]["id"], identity["id"])
         self.assertNotIn("token_hash", reloaded.list_service_identities()[0])
+
+    def test_mysql_readiness_reports_migration_status_without_dsn_material(self) -> None:
+        diagnostics = self.store.diagnostics()
+        serialized = json.dumps(diagnostics)
+
+        self.assertEqual(diagnostics["status"], "ok")
+        self.assertEqual(diagnostics["dependencies"]["store"]["adapter"], "mysql")
+        self.assertEqual(diagnostics["dependencies"]["store"]["migration_status"], "ok")
+        self.assertGreaterEqual(diagnostics["dependencies"]["store"]["applied_migrations"], 1)
+        self.assertNotIn("opspilot:opspilot", serialized)
+        self.assertNotIn("127.0.0.1", serialized)
 
     def test_cross_table_references_still_validate_before_persist(self) -> None:
         with self.assertRaises(Exception) as raised:
@@ -1641,6 +1665,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertEqual(first_task["model_provider_id"], provider["id"])
         self.assertEqual(first_task["input_summary"]["binding_names"], ["api_key", "max_attempts", "timeout_seconds"])
         self.assertNotIn("must-not-leak", json.dumps(first_task))
+        self.assertNotIn("must-not-leak", json.dumps(run))
         self.assertNotIn("sk-runtime-secret", json.dumps(first_task))
 
         claimed = self.store.claim_runtime_task("usr_worker", {"agent_id": agent["id"]})

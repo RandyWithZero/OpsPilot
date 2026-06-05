@@ -37,6 +37,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         routes: dict[str, Callable[[], Any]] = {
             "/healthz": self.store.health,
+            "/readyz": self.store.diagnostics,
             "/v1/users": self.store.list_users,
             "/v1/projects": self.store.list_projects,
             "/v1/credentials": self.store.list_credentials,
@@ -430,7 +431,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return False
 
     def _actor(self, path: str) -> ActorContext | None:
-        if path == "/healthz":
+        if path in {"/healthz", "/readyz"}:
             return ActorContext(actor_id="system", role=ROLE_ADMIN)
         try:
             if dev_headers_enabled() and (self.headers.get("X-Actor-ID") or self.headers.get("X-Actor-Role")):

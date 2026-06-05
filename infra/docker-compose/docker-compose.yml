@@ -2,56 +2,126 @@ services:
   mysql:
     image: mysql:8.4
     environment:
-      MYSQL_ROOT_PASSWORD: opspilot
-      MYSQL_DATABASE: opspilot_foundation
-      MYSQL_USER: opspilot
-      MYSQL_PASSWORD: opspilot
+      MYSQL_ROOT_PASSWORD: ${OPSPILOT_MYSQL_ROOT_PASSWORD:-opspilot}
+      MYSQL_DATABASE: ${OPSPILOT_MYSQL_DATABASE:-opspilot_foundation}
+      MYSQL_USER: ${OPSPILOT_MYSQL_USER:-opspilot}
+      MYSQL_PASSWORD: ${OPSPILOT_MYSQL_PASSWORD:-opspilot}
     ports:
-      - "3306:3306"
+      - "${OPSPILOT_MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uopspilot", "-popspilot"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u${OPSPILOT_MYSQL_USER:-opspilot}", "-p${OPSPILOT_MYSQL_PASSWORD:-opspilot}"]
       interval: 10s
       timeout: 5s
-      retries: 10
-
-  redis:
-    image: redis:7.2
-    ports:
-      - "6379:6379"
-
-  nats:
-    image: nats:2.10
-    ports:
-      - "4222:4222"
+      retries: 20
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: opspilot
-      MINIO_ROOT_PASSWORD: opspilot-secret
+      MINIO_ROOT_USER: ${OPSPILOT_MINIO_ROOT_USER:-opspilot}
+      MINIO_ROOT_PASSWORD: ${OPSPILOT_MINIO_ROOT_PASSWORD:-opspilot-secret}
     ports:
       - "${OPSPILOT_MINIO_API_PORT:-9000}:9000"
       - "${OPSPILOT_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
 
-  foundation-minio:
-    image: python:3.12-slim
-    working_dir: /app
-    command: sh -c "python -m pip install --no-cache-dir boto3 && python -m opspilot_foundation.server"
+  redis:
+    image: redis:7.2
+    profiles: ["queue"]
+    ports:
+      - "${OPSPILOT_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  nats:
+    image: nats:2.10
+    profiles: ["queue"]
+    ports:
+      - "${OPSPILOT_NATS_PORT:-4222}:4222"
+    healthcheck:
+      test: ["CMD", "nats-server", "--help"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  foundation:
+    build:
+      context: ../..
+      dockerfile: services/foundation-service/Dockerfile
     environment:
+      OPSPILOT_AUTH_DEV_ISSUER: "1"
+      OPSPILOT_AUTH_TOKEN_SECRET: ${OPSPILOT_AUTH_TOKEN_SECRET:-local-compose-secret}
+      OPSPILOT_SECRET_FINGERPRINT_KEY: ${OPSPILOT_SECRET_FINGERPRINT_KEY:-local-compose-fingerprint-key}
+      OPSPILOT_FOUNDATION_MYSQL_DSN: mysql://${OPSPILOT_MYSQL_USER:-opspilot}:${OPSPILOT_MYSQL_PASSWORD:-opspilot}@mysql:3306/${OPSPILOT_MYSQL_DATABASE:-opspilot_foundation}
       OPSPILOT_OBJECT_STORAGE_ADAPTER: minio
       OPSPILOT_S3_ENDPOINT_URL: http://minio:9000
-      OPSPILOT_S3_BUCKET: opspilot-artifacts
-      AWS_ACCESS_KEY_ID: opspilot
-      AWS_SECRET_ACCESS_KEY: opspilot-secret
+      OPSPILOT_S3_BUCKET: ${OPSPILOT_S3_BUCKET:-opspilot-artifacts}
+      AWS_ACCESS_KEY_ID: ${OPSPILOT_MINIO_ROOT_USER:-opspilot}
+      AWS_SECRET_ACCESS_KEY: ${OPSPILOT_MINIO_ROOT_PASSWORD:-opspilot-secret}
     ports:
-      - "8080:8080"
-    volumes:
-      - ../../services/foundation-service:/app
+      - "${OPSPILOT_FOUNDATION_PORT:-8080}:8080"
     depends_on:
-      - minio
+      mysql:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  agent-worker:
+    build:
+      context: ../..
+      dockerfile: services/agent-worker/Dockerfile
+    profiles: ["worker"]
+    environment:
+      OPSPILOT_FOUNDATION_URL: http://foundation:8080
+      OPSPILOT_WORKER_ACCESS_TOKEN: ${OPSPILOT_WORKER_ACCESS_TOKEN:-}
+      OPSPILOT_WORKER_ID: ${OPSPILOT_WORKER_ID:-compose-agent-worker}
+      OPSPILOT_WORKER_AGENT_ID: ${OPSPILOT_WORKER_AGENT_ID:-}
+    depends_on:
+      foundation:
+        condition: service_healthy
+
+  web-console:
+    image: python:3.12-slim
+    profiles: ["web"]
+    working_dir: /app
+    command: python -m http.server 5173
+    ports:
+      - "${OPSPILOT_WEB_PORT:-5173}:5173"
+    volumes:
+      - ../../apps/web-console:/app:ro
+    depends_on:
+      foundation:
+        condition: service_healthy
+
+  release-smoke:
+    image: python:3.12-slim
+    profiles: ["smoke"]
+    working_dir: /workspace
+    command: python scripts/release_smoke.py
+    environment:
+      OPSPILOT_SMOKE_FOUNDATION_URL: http://foundation:8080
+    volumes:
+      - ../../:/workspace:ro
+    depends_on:
+      foundation:
+        condition: service_healthy
 
 volumes:
   mysql_data:
+  minio_data:

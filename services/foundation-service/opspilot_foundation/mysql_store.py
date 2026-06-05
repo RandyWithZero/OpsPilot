@@ -188,6 +188,23 @@ class MySQLStore(MemoryStore):
                 cursor.execute("SELECT 1")
         return {"status": "ok", "store": "mysql"}
 
+    def diagnostics(self) -> dict[str, Any]:
+        data = super().diagnostics()
+        store = data["dependencies"]["store"]
+        store["adapter"] = "mysql"
+        if store["status"] == "ok":
+            try:
+                applied = self._applied_migrations()
+                expected = [path.name for path in sorted(MIGRATIONS_DIR.glob("*.sql"))]
+                store["migration_status"] = "ok" if set(expected).issubset(applied) else "pending"
+                store["applied_migrations"] = len(applied)
+                store["expected_migrations"] = len(expected)
+            except Exception:
+                store["status"] = "error"
+                store["migration_status"] = "unknown"
+                data["status"] = "degraded"
+        return data
+
     def _build_connection_factory(self, dsn: str) -> Callable[[], Any]:
         try:
             pymysql = importlib.import_module("pymysql")
@@ -228,6 +245,12 @@ class MySQLStore(MemoryStore):
                         cursor.execute(statement)
                     cursor.execute("INSERT INTO foundation_schema_migrations (version) VALUES (%s)", (path.name,))
             conn.commit()
+
+    def _applied_migrations(self) -> set[str]:
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT version FROM foundation_schema_migrations")
+                return {str(row["version"]) for row in cursor.fetchall()}
 
     def _load_snapshot(self) -> None:
         with self._lock:

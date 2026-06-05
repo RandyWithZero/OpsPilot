@@ -1,4 +1,4 @@
-.PHONY: test run-foundation run-foundation-minio run-agent-worker run-web-console
+.PHONY: test release-check compose-up compose-smoke compose-down run-foundation run-foundation-minio run-agent-worker run-web-console
 
 test:
 	python3 -m unittest discover -s services/foundation-service/tests
@@ -6,11 +6,23 @@ test:
 	node apps/web-console/check-credential-sanitization.js
 	node apps/web-console/check-integration-routes.js
 
+release-check: test
+	docker compose -f infra/docker-compose/docker-compose.yml config >/dev/null
+
+compose-up:
+	docker compose -f infra/docker-compose/docker-compose.yml up -d --build foundation
+
+compose-smoke:
+	OPSPILOT_FOUNDATION_PORT=18080 OPSPILOT_MYSQL_PORT=13306 OPSPILOT_MINIO_API_PORT=19000 OPSPILOT_MINIO_CONSOLE_PORT=19001 docker compose -f infra/docker-compose/docker-compose.yml --profile smoke up --build --abort-on-container-exit --exit-code-from release-smoke release-smoke
+
+compose-down:
+	docker compose -f infra/docker-compose/docker-compose.yml --profile smoke --profile web --profile worker --profile queue down
+
 run-foundation:
 	cd services/foundation-service && python3 -m opspilot_foundation.server
 
 run-foundation-minio:
-	OPSPILOT_MINIO_API_PORT=19000 OPSPILOT_MINIO_CONSOLE_PORT=19001 docker compose -f infra/docker-compose/docker-compose.yml up minio foundation-minio
+	OPSPILOT_MINIO_API_PORT=19000 OPSPILOT_MINIO_CONSOLE_PORT=19001 docker compose -f infra/docker-compose/docker-compose.yml up --build foundation
 
 run-agent-worker:
 	cd services/agent-worker && python3 -m opspilot_agent_worker
