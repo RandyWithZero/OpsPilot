@@ -42,6 +42,7 @@ function createNode() {
     dataset: {},
     classList: { add() {}, remove() {}, toggle() {} },
     addEventListener() {},
+    focus() {},
     querySelector() { return createNode(); },
     querySelectorAll() { return []; },
     close() {},
@@ -121,19 +122,28 @@ const result = vm.runInContext(`
   const issuedToken = makeToken({ sub: "usr_admin", role: "Admin", session_id: "ses_login" });
   const refreshedToken = makeToken({ sub: "usr_admin", role: "Admin", session_id: "ses_login", exp: Math.floor(Date.now() / 1000) + 1200 });
   let authCalls = [];
-  fetch = async (path, init = {}) => {
+  const loginFetch = async (path, init = {}) => {
     authCalls.push({ path, init });
     if (String(path).endsWith("/v1/auth/login")) return { ok: true, status: 201, json: async () => ({ access_token: issuedToken, access_token_expires_at: new Date(Date.now() + 120000).toISOString(), refresh_token: "refresh-login", refresh_token_expires_at: new Date(Date.now() + 3600000).toISOString(), token_type: "Bearer", session_id: "ses_login" }) };
     if (String(path).endsWith("/v1/auth/refresh")) return { ok: true, status: 200, json: async () => ({ access_token: refreshedToken, access_token_expires_at: new Date(Date.now() + 1200000).toISOString(), refresh_token: "refresh-rotated", refresh_token_expires_at: new Date(Date.now() + 3600000).toISOString(), token_type: "Bearer", session_id: "ses_login" }) };
     if (String(path).endsWith("/v1/auth/logout")) return { ok: true, status: 200, json: async () => ({ ok: true }) };
     return { ok: true, status: 200, json: async () => [] };
   };
+  fetch = loginFetch;
   document.querySelector("#login-email").value = "admin@opspilot.cn";
+  document.querySelector("#login-password").value = "";
+  document.querySelector("#login-dev-mode").checked = false;
+  fetch = async () => { throw new Error("empty password should not call login"); };
+  await signIn({ preventDefault() {} });
+  if (!document.querySelector("#login-error").textContent.includes("请输入密码")) throw new Error("empty password did not show required validation");
+
+  document.querySelector("#login-password").value = "correct-horse-battery-staple";
   document.querySelector("#login-role").value = "Viewer";
   document.querySelector("#login-dev-mode").checked = false;
+  fetch = loginFetch;
   await signIn({ preventDefault() {} });
   if (state.authMode !== "bearer" || state.role !== "Admin" || state.actorId !== "usr_admin" || state.accessToken !== issuedToken) throw new Error("login did not derive session from bearer token");
-  if (!authCalls[0].init.body.includes('"role":"Viewer"') || authCalls[0].init.body.includes("refresh-login")) throw new Error("login request did not preserve role input or leaked token material");
+  if (!authCalls[0].init.body.includes('"role":"Viewer"') || !authCalls[0].init.body.includes('"password":"correct-horse-battery-staple"') || !authCalls[0].init.body.includes('"credential":"correct-horse-battery-staple"') || authCalls[0].init.body.includes("refresh-login")) throw new Error("login request did not preserve role/password input or leaked token material");
 
   let capturedRequest = null;
   fetch = async (path, init = {}) => {
