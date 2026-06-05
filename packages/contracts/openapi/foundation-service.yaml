@@ -2219,6 +2219,11 @@ components:
           type: string
         role:
           $ref: "#/components/schemas/RoleName"
+        project_ids:
+          type: array
+          description: Project IDs this service identity may access for project-scoped operations. Required for artifact/report ingestion.
+          items:
+            type: string
         access_token_ttl_seconds:
           type: integer
           minimum: 1
@@ -2232,6 +2237,10 @@ components:
           type: string
         role:
           $ref: "#/components/schemas/RoleName"
+        project_ids:
+          type: array
+          items:
+            type: string
         status:
           enum: [active, revoked]
         created_at:

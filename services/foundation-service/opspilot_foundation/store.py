@@ -153,9 +153,16 @@ class MemoryStore:
         if not role:
             raise InvalidInput("role is invalid")
         service_token = new_refresh_token()
-        identity = ServiceIdentity(name=str(data.get("name", "") or "").strip(), role=role, token_hash=hash_token(service_token))
+        identity = ServiceIdentity(
+            name=str(data.get("name", "") or "").strip(),
+            role=role,
+            token_hash=hash_token(service_token),
+            project_ids=self._normalize_service_identity_project_ids(data),
+        )
         identity.validate()
         with self._lock:
+            for project_id in identity.project_ids:
+                self._project(project_id)
             if any(existing.name.lower() == identity.name.lower() for existing in self.service_identities.values()):
                 raise Conflict("service identity name already exists")
             identity.id = self._id("svc")
@@ -236,6 +243,22 @@ class MemoryStore:
         data = asdict(identity)
         data.pop("token_hash", None)
         return data
+
+    def _normalize_service_identity_project_ids(self, data: dict[str, Any]) -> list[str]:
+        raw_project_ids = data.get("project_ids", [])
+        if "project_id" in data and data.get("project_id"):
+            raw_project_ids = [*raw_project_ids, data.get("project_id")] if isinstance(raw_project_ids, list) else [data.get("project_id")]
+        if raw_project_ids in (None, ""):
+            return []
+        if not isinstance(raw_project_ids, list):
+            raise InvalidInput("service identity project_ids must be an array")
+        project_ids: list[str] = []
+        for project_id in raw_project_ids:
+            value = str(project_id or "").strip()
+            if not value:
+                raise InvalidInput("service identity project_ids cannot contain empty values")
+            project_ids.append(value)
+        return unique(project_ids)
 
     def _active_user_role(self, user_id: str) -> str:
         user = self.users.get(user_id)
@@ -1609,7 +1632,7 @@ class MemoryStore:
                 environment = self._environment(run.environment_id)
                 if environment.project_id != project.id:
                     raise Conflict("environment belongs to another project")
-            file_ids: list[str] = []
+            staged_files: list[tuple[FileObject, bytes, dict[str, Any]]] = []
             summaries: list[dict[str, Any]] = []
             parse_errors: list[dict[str, str]] = []
             for raw_artifact in artifacts:
@@ -1631,16 +1654,14 @@ class MemoryStore:
                 file_object.id = self._id("fil")
                 file_object.storage_key = self._new_storage_key()
                 stamp(file_object)
-                self.storage.put(file_object.storage_key, content)
-                self.files[file_object.id] = file_object
-                file_ids.append(file_object.id)
-                self._audit(actor_id, "file.uploaded", "file", file_object.id, self._file_audit_metadata(file_object))
                 parsed = self._parse_report_artifact(file_object, content, str(raw_artifact.get("artifact_type", "") or ""))
+                staged_files.append((file_object, content, parsed))
                 if parsed.get("parse_status") == "failed":
                     parse_errors.append({"file_id": file_object.id, "filename": file_object.filename, "error": str(parsed.get("error", ""))})
                 elif parsed.get("format"):
                     summaries.append(parsed)
             summary = self._combine_report_summaries(summaries, parse_errors)
+            file_ids = [file_object.id for file_object, _, _ in staged_files]
             report = Report(
                 project_id=project.id,
                 title=str(data.get("title", "") or f"Test run {run.id} artifact report"),
@@ -1653,6 +1674,21 @@ class MemoryStore:
             report.validate()
             report.id = self._id("rpt")
             stamp(report)
+            stored_keys: list[str] = []
+            try:
+                for file_object, content, _ in staged_files:
+                    self.storage.put(file_object.storage_key, content)
+                    stored_keys.append(file_object.storage_key)
+            except Exception:
+                for storage_key in stored_keys:
+                    try:
+                        self.storage.delete(storage_key)
+                    except Exception:
+                        pass
+                raise
+            for file_object, _, _ in staged_files:
+                self.files[file_object.id] = file_object
+                self._audit(actor_id, "file.uploaded", "file", file_object.id, self._file_audit_metadata(file_object))
             self.reports[report.id] = report
             run.status = self._test_run_status_from_summary(summary)
             run.results = self._test_run_results_from_summary(summary)
@@ -1868,7 +1904,9 @@ class MemoryStore:
             raise PermissionDenied("authenticated actor is required")
         identity = self.service_identities.get(actor_id)
         if identity is not None and identity.status == "active":
-            return
+            if project.id in identity.project_ids:
+                return
+            raise PermissionDenied("service identity is not bound to project")
         if actor_id not in unique([project.owner_id, *project.member_ids]):
             raise PermissionDenied("actor is not a project member")
 
@@ -2385,7 +2423,7 @@ class MemoryStore:
         return results if isinstance(results, list) else []
 
     def _upsert_ingest_quality_gate(self, actor_id: str, project_id: str, report: Report, summary: dict[str, Any]) -> QualityGate:
-        status = "failed" if summary.get("parse_status") == "failed" or int(summary.get("failed", 0)) or int(summary.get("errors", 0)) else "passed"
+        status = "passed" if summary.get("parse_status") == "parsed" and not int(summary.get("failed", 0)) and not int(summary.get("errors", 0)) else "failed"
         gate = next((candidate for candidate in self.quality_gates.values() if candidate.project_id == project_id and candidate.name == "Automated Test Report Gate"), None)
         conditions = [
             {"metric": "parse_status", "equals": "parsed"},

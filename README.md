@@ -96,7 +96,7 @@ Run the foundation service with auth enabled, create a service identity as an Ad
 ```sh
 curl -X POST http://localhost:8080/v1/service-identities \
   -H 'Content-Type: application/json' -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN" \
-  -d '{"name":"local-agent-worker","role":"Operator"}'
+  -d '{"name":"local-agent-worker","role":"Operator","project_ids":["prj_000001"]}'
 
 curl -X POST http://localhost:8080/v1/service-identities/$SERVICE_ID/token \
   -H 'Content-Type: application/json' \
@@ -188,12 +188,13 @@ The file service stores metadata in the foundation store and file bytes behind a
 The storage adapter is selected with `OPSPILOT_OBJECT_STORAGE_ADAPTER`:
 
 - `local` (default): creates the local object root automatically.
-- `s3` or `minio`: uses the boto3 S3 client against AWS S3 or any MinIO-compatible endpoint. Set `OPSPILOT_S3_BUCKET`, optionally `OPSPILOT_S3_ENDPOINT_URL`, `OPSPILOT_S3_REGION`, and `OPSPILOT_S3_AUTO_CREATE_BUCKET=false` when the bucket must already exist. The local docker-compose MinIO service is reachable at `http://localhost:9000` with root credentials `opspilot` / `opspilot-secret`.
+- `s3` or `minio`: uses the optional boto3 S3 client against AWS S3 or any MinIO-compatible endpoint. Install it with `python3 -m pip install boto3` before running the service with this adapter. Set `OPSPILOT_S3_BUCKET`, optionally `OPSPILOT_S3_ENDPOINT_URL`, `OPSPILOT_S3_REGION`, and `OPSPILOT_S3_AUTO_CREATE_BUCKET=false` when the bucket must already exist. The local docker-compose MinIO service is reachable at `http://localhost:9000` with root credentials `opspilot` / `opspilot-secret`.
 
 Local MinIO smoke:
 
 ```bash
 docker compose -f infra/docker-compose/docker-compose.yml up -d minio
+python3 -m pip install boto3
 OPSPILOT_OBJECT_STORAGE_ADAPTER=minio \
 OPSPILOT_S3_ENDPOINT_URL=http://localhost:9000 \
 OPSPILOT_S3_BUCKET=opspilot-artifacts \
