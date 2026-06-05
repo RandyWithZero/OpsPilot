@@ -40,6 +40,7 @@ Then call the health endpoint:
 
 ```sh
 curl http://localhost:8080/healthz
+curl http://localhost:8080/readyz
 ```
 
 Run the first web-console slice in another terminal:
@@ -56,7 +57,32 @@ Optional local infrastructure placeholders are in `infra/docker-compose/docker-c
 docker compose -f infra/docker-compose/docker-compose.yml up -d
 ```
 
+For the release/readiness baseline, use the documented Compose path:
+
+```sh
+make release-check
+make compose-up
+curl http://localhost:8080/readyz
+make compose-smoke
+make compose-down
+```
+
+`make compose-up` builds and starts the MySQL, MinIO, and foundation-service stack. `make compose-smoke` runs a one-shot smoke container that waits for `/readyz`, issues a local Admin session, creates a project, uploads/downloads a file, ingests a JUnit report, creates a service identity, claims/completes a runtime task, and verifies readiness/run payloads do not include raw credential, model key, worker attempt token, or workflow secret material.
+
+Additional Compose profiles are available when needed:
+
+```sh
+docker compose -f infra/docker-compose/docker-compose.yml --profile web up --build web-console
+docker compose -f infra/docker-compose/docker-compose.yml --profile queue up -d redis nats
+OPSPILOT_WORKER_ACCESS_TOKEN="$OPSPILOT_WORKER_ACCESS_TOKEN" \
+  docker compose -f infra/docker-compose/docker-compose.yml --profile worker up --build agent-worker
+```
+
+The worker profile intentionally requires an explicit short-lived service-identity access token. Do not put production credentials in the Compose file or commit them to the repository.
+
 The current service uses in-memory persistence by default so the backend slice is immediately testable without third-party dependencies. By default, GitLab calls use the local adapter for deterministic development and tests. Set `OPSPILOT_GITLAB_LIVE=1` before `make run-foundation` to use the standard-library GitLab HTTP adapter; token material still stays behind credential references and is not returned in responses or audit events.
+
+`/healthz` is a liveness check. `/readyz` is the operational readiness endpoint and returns only coarse dependency state: store adapter and migration status, object-storage adapter status, runtime queue counts, active worker count/latest heartbeat, GitLab adapter mode, and safe record counts. It must not include DSNs, credential values, bearer tokens, storage keys, worker attempt tokens, or raw workflow output/error material.
 
 ### IAM/Auth Boundary
 
@@ -146,6 +172,14 @@ unset OPSPILOT_FOUNDATION_MYSQL_DSN
 make run-foundation
 ```
 
+Rollback from the Compose demo stack to local memory/file mode:
+
+```sh
+make compose-down
+unset OPSPILOT_FOUNDATION_MYSQL_DSN OPSPILOT_OBJECT_STORAGE_ADAPTER OPSPILOT_S3_ENDPOINT_URL OPSPILOT_S3_BUCKET
+make run-foundation
+```
+
 Secrets remain behind the credential boundary. Credential responses include only `secret_ref` and `secret_fingerprint`; audit events store redacted metadata and never include raw secret material. The MySQL schema stores raw secret values only in the `secret_refs` boundary table used by credential and adapter flows.
 
 GitLab MVP flow:
@@ -228,3 +262,12 @@ Environments are project-owned DEV/QA/QE scopes. `GET /v1/environments` supports
 Local MVP uploads accept base64 JSON content up to `OPSPILOT_MAX_FILE_UPLOAD_BYTES` bytes after decode (default 5 MiB). HTTP request bodies are capped by `OPSPILOT_MAX_REQUEST_BODY_BYTES` (default 8 MiB). Non-admin HTTP callers are scoped to the authenticated actor ID as `owner_id`; admin callers may filter across owners.
 
 MySQL migrations and the concrete persistence adapter live behind the existing repository boundary; HTTP handlers continue to call the store-facing API and do not depend on MySQL driver details.
+
+## Release And Operations Notes
+
+- `make test` runs backend unit tests plus web-console checks.
+- `make release-check` runs the same checks and validates the Compose file renders.
+- `make compose-smoke` is the local release smoke gate for auth, project, file/report ingestion, readiness, and runtime worker callback.
+- Foundation image: `services/foundation-service/Dockerfile`; includes optional `pymysql` and `boto3` clients for MySQL and MinIO/S3 readiness.
+- Worker image: `services/agent-worker/Dockerfile`; uses only the foundation API and requires `OPSPILOT_WORKER_ACCESS_TOKEN`.
+- Production gaps: replace the dev token issuer, move secrets to a managed secret store, pin organization-approved base image digests, add registry scanning/signing, and add cloud/Kubernetes manifests with resource limits, probes, and rollback automation before any production deployment.

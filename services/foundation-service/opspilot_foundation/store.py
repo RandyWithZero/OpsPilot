@@ -93,6 +93,65 @@ class MemoryStore:
     def health(self) -> dict[str, str]:
         return {"status": "ok"}
 
+    def diagnostics(self) -> dict[str, Any]:
+        with self._lock:
+            self._expire_runtime_task_leases("system")
+            runtime_by_status: dict[str, int] = {}
+            worker_ids: set[str] = set()
+            latest_heartbeat_at = ""
+            for task in self.workflow_runtime_tasks.values():
+                runtime_by_status[task.status] = runtime_by_status.get(task.status, 0) + 1
+                if task.status == "running" and task.worker_id:
+                    worker_ids.add(task.worker_id)
+                    latest_heartbeat_at = max(latest_heartbeat_at, task.heartbeat_at)
+            storage_status = self._dependency_status(lambda: self.storage.ensure_bucket())
+            health_status = self._dependency_status(lambda: self.health())
+            dependencies = {
+                "store": {
+                    "status": health_status,
+                    "adapter": "memory",
+                    "migration_status": "not_applicable",
+                },
+                "storage": {
+                    "status": storage_status,
+                    "adapter": self.storage.provider,
+                },
+                "runtime_queue": {
+                    "status": "ok",
+                    "queued": runtime_by_status.get("queued", 0),
+                    "running": runtime_by_status.get("running", 0),
+                    "failed": runtime_by_status.get("failed", 0),
+                    "timed_out": runtime_by_status.get("timed_out", 0),
+                    "worker_count": len(worker_ids),
+                    "latest_heartbeat_at": latest_heartbeat_at,
+                },
+                "gitlab_adapter": {
+                    "status": "ok",
+                    "mode": "live" if os.environ.get("OPSPILOT_GITLAB_LIVE") == "1" else "local",
+                },
+            }
+            status = "ok" if all(dependency["status"] == "ok" for dependency in dependencies.values()) else "degraded"
+            return {
+                "status": status,
+                "dependencies": dependencies,
+                "metrics": {
+                    "users": len(self.users),
+                    "projects": len(self.projects),
+                    "files": len(self.files),
+                    "reports": len(self.reports),
+                    "workflow_runs": len(self.workflow_runs),
+                    "runtime_tasks": len(self.workflow_runtime_tasks),
+                    "audit_events": len(self.audit_events),
+                },
+            }
+
+    def _dependency_status(self, fn: Callable[[], Any]) -> str:
+        try:
+            fn()
+        except Exception:
+            return "error"
+        return "ok"
+
     def issue_dev_session(self, data: dict[str, Any]) -> dict[str, Any]:
         role = normalize_role(data.get("role"))
         if not role:
@@ -2025,7 +2084,12 @@ class MemoryStore:
 
     def _workflow_run_response(self, run: WorkflowRun) -> dict[str, Any]:
         response = asdict(run)
-        response["steps"] = [asdict(step) for step in self._steps_for_run(run.id)]
+        steps = []
+        for step in self._steps_for_run(run.id):
+            item = asdict(step)
+            item["input"] = self._sanitize_runtime_capture(item.get("input", {}))
+            steps.append(item)
+        response["steps"] = steps
         return response
 
     def _steps_for_run(self, run_id: str) -> list[WorkflowStepRun]:

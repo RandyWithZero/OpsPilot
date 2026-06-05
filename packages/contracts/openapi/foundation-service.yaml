@@ -15,6 +15,50 @@ paths:
       responses:
         "200":
           description: Service is healthy.
+  /readyz:
+    get:
+      summary: Dependency readiness and safe diagnostics
+      security: []
+      description: Returns coarse dependency status, migration state, runtime queue counts, worker heartbeat summary, and non-sensitive record counts. This endpoint must not expose DSNs, tokens, credentials, storage keys, worker attempt tokens, or raw workflow output/error material.
+      responses:
+        "200":
+          description: Dependency readiness diagnostics when required dependencies are ready.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, dependencies, metrics]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, degraded]
+                  dependencies:
+                    type: object
+                    additionalProperties:
+                      type: object
+                  metrics:
+                    type: object
+                    additionalProperties:
+                      type: integer
+        "503":
+          description: Dependency readiness diagnostics when one or more required dependencies are degraded or unavailable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, dependencies, metrics]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, degraded]
+                  dependencies:
+                    type: object
+                    additionalProperties:
+                      type: object
+                  metrics:
+                    type: object
+                    additionalProperties:
+                      type: integer
   /v1/auth/login:
     post:
       summary: Issue a local development user session

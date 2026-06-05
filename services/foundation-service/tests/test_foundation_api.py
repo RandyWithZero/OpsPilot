@@ -22,6 +22,7 @@ from opspilot_foundation.mysql_store import MySQLStore  # noqa: E402
 from opspilot_foundation.server import FoundationHandler  # noqa: E402
 from opspilot_foundation.storage import LocalFileStorage, S3CompatibleStorage  # noqa: E402
 from opspilot_foundation.domain import InvalidInput  # noqa: E402
+from opspilot_foundation.readiness_check import is_ready  # noqa: E402
 from opspilot_foundation.auth import (  # noqa: E402
     ActorContext,
     PermissionDenied,
@@ -477,6 +478,65 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertIn(("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS"), headers)
         self.assertIn(("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Actor-ID,X-Actor-Role,X-Gitlab-Token"), headers)
 
+    def test_readiness_diagnostics_are_public_and_do_not_expose_secrets(self) -> None:
+        diagnostics = self.store.diagnostics()
+        actor = FoundationHandler._actor(type("HandlerDouble", (), {"headers": {}, "store": self.store})(), "/readyz")  # type: ignore[arg-type]
+
+        self.assertEqual(actor.actor_id, "system")
+        self.assertEqual(diagnostics["status"], "ok")
+        self.assertEqual(diagnostics["dependencies"]["store"]["adapter"], "memory")
+        self.assertEqual(diagnostics["dependencies"]["storage"]["adapter"], "local")
+        self.assertEqual(diagnostics["dependencies"]["runtime_queue"]["queued"], 0)
+        self.assertIn("projects", diagnostics["metrics"])
+        self.assertNotIn("secret", json.dumps(diagnostics).lower())
+        self.assertNotIn("token", json.dumps(diagnostics).lower())
+
+    def test_readiness_healthcheck_requires_ok_status_and_migrations(self) -> None:
+        diagnostics = self.store.diagnostics()
+        self.assertTrue(is_ready(diagnostics))
+
+        degraded = json.loads(json.dumps(diagnostics))
+        degraded["dependencies"]["storage"]["status"] = "error"
+        self.assertFalse(is_ready(degraded))
+
+        pending = json.loads(json.dumps(diagnostics))
+        pending["dependencies"]["store"]["migration_status"] = "pending"
+        self.assertFalse(is_ready(pending))
+
+        top_level_degraded = json.loads(json.dumps(diagnostics))
+        top_level_degraded["status"] = "degraded"
+        self.assertFalse(is_ready(top_level_degraded))
+
+    def test_degraded_readiness_returns_service_unavailable(self) -> None:
+        class FailingStorage:
+            provider = "local"
+
+            def ensure_bucket(self) -> None:
+                raise RuntimeError("storage unavailable")
+
+        temp_dir = tempfile.TemporaryDirectory()
+        original_store = FoundationHandler.store
+        FoundationHandler.store = MemoryStore(storage=LocalFileStorage(temp_dir.name))
+        FoundationHandler.store.storage = FailingStorage()  # type: ignore[assignment]
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(base_url + "/readyz", timeout=5)
+            self.assertEqual(raised.exception.code, 503)
+            response = json.loads(raised.exception.read().decode("utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            FoundationHandler.store = original_store
+            temp_dir.cleanup()
+
+        self.assertEqual(response["status"], "degraded")
+        self.assertEqual(response["dependencies"]["storage"]["status"], "error")
+
     def test_local_rbac_permission_matrix_for_high_risk_apis(self) -> None:
         self.assertEqual(actor_from_headers({}).role, "Viewer")
         self.assertEqual(actor_from_headers({"X-Actor-ID": "usr_operator", "X-Actor-Role": "operator"}).actor_id, "usr_operator")
@@ -654,6 +714,30 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertIn(session["session_id"], reloaded.auth_sessions)
         self.assertEqual(reloaded.list_service_identities()[0]["id"], identity["id"])
         self.assertNotIn("token_hash", reloaded.list_service_identities()[0])
+
+    def test_mysql_readiness_reports_migration_status_without_dsn_material(self) -> None:
+        diagnostics = self.store.diagnostics()
+        serialized = json.dumps(diagnostics)
+
+        self.assertEqual(diagnostics["status"], "ok")
+        self.assertEqual(diagnostics["dependencies"]["store"]["adapter"], "mysql")
+        self.assertEqual(diagnostics["dependencies"]["store"]["migration_status"], "ok")
+        self.assertGreaterEqual(diagnostics["dependencies"]["store"]["applied_migrations"], 1)
+        self.assertNotIn("opspilot:opspilot", serialized)
+        self.assertNotIn("127.0.0.1", serialized)
+
+    def test_mysql_readiness_degrades_when_migrations_are_pending(self) -> None:
+        self.database.tables["foundation_schema_migrations"] = self.database.tables["foundation_schema_migrations"][:-1]
+
+        diagnostics = self.store.diagnostics()
+
+        self.assertEqual(diagnostics["status"], "degraded")
+        self.assertEqual(diagnostics["dependencies"]["store"]["status"], "degraded")
+        self.assertEqual(diagnostics["dependencies"]["store"]["migration_status"], "pending")
+        self.assertLess(
+            diagnostics["dependencies"]["store"]["applied_migrations"],
+            diagnostics["dependencies"]["store"]["expected_migrations"],
+        )
 
     def test_cross_table_references_still_validate_before_persist(self) -> None:
         with self.assertRaises(Exception) as raised:
@@ -1641,6 +1725,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertEqual(first_task["model_provider_id"], provider["id"])
         self.assertEqual(first_task["input_summary"]["binding_names"], ["api_key", "max_attempts", "timeout_seconds"])
         self.assertNotIn("must-not-leak", json.dumps(first_task))
+        self.assertNotIn("must-not-leak", json.dumps(run))
         self.assertNotIn("sk-runtime-secret", json.dumps(first_task))
 
         claimed = self.store.claim_runtime_task("usr_worker", {"agent_id": agent["id"]})

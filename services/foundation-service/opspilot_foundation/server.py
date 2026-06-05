@@ -37,6 +37,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         routes: dict[str, Callable[[], Any]] = {
             "/healthz": self.store.health,
+            "/readyz": self.store.diagnostics,
             "/v1/users": self.store.list_users,
             "/v1/projects": self.store.list_projects,
             "/v1/credentials": self.store.list_credentials,
@@ -104,6 +105,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "runs":
             self._call(lambda: self.store.list_workflow_runs(parts[2]))
+            return
+        if path == "/readyz":
+            self._readyz()
             return
         if path in routes:
             self._call(routes[path])
@@ -421,6 +425,14 @@ class FoundationHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             self._json({"error": "invalid_input"}, HTTPStatus.BAD_REQUEST)
 
+    def _readyz(self) -> None:
+        try:
+            payload = self.store.diagnostics()
+            status = HTTPStatus.OK if payload.get("status") == "ok" else HTTPStatus.SERVICE_UNAVAILABLE
+            self._json(payload, status)
+        except (TypeError, ValueError):
+            self._json({"error": "invalid_input"}, HTTPStatus.BAD_REQUEST)
+
     def _authorize(self, actor: Any, method: str, path: str, body: dict[str, Any] | None = None) -> bool:
         try:
             require_permission(actor, permission_for_request(method, path, body))
@@ -430,7 +442,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return False
 
     def _actor(self, path: str) -> ActorContext | None:
-        if path == "/healthz":
+        if path in {"/healthz", "/readyz"}:
             return ActorContext(actor_id="system", role=ROLE_ADMIN)
         try:
             if dev_headers_enabled() and (self.headers.get("X-Actor-ID") or self.headers.get("X-Actor-Role")):
