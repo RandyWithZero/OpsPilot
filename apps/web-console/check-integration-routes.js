@@ -22,6 +22,11 @@ assertStyle(".json-block", ["max-width: 100%", "white-space: pre-wrap", "overflo
 assertStyle(".workflow-run-panel", ["min-width: 0"]);
 assertStyle(".run-step", ["min-width: 0"]);
 assertStyle(".gate-copy", ["overflow-wrap: anywhere"]);
+assertStyle(".topology-tree", ["min-width: 0"]);
+assertStyle(".environment-board", ["grid-template-columns: repeat(3, minmax(220px, 1fr))"]);
+assertStyle(".runtime-board", ["grid-template-columns: repeat(auto-fit, minmax(260px, 1fr))"]);
+assertStyle(".runtime-task", ["min-width: 0"]);
+assertStyle(".mini-kv", ["grid-template-columns: 82px minmax(0, 1fr)", "min-width: 0"]);
 assertStyle(".builder-mode .sidebar,\n.builder-mode .topbar", ["display: none"]);
 assertStyle(".builder-shell", ["grid-template-columns: 220px minmax(520px, 1fr) 300px", "min-width: 0"]);
 assertStyle(".workflow-canvas", ["overflow: auto"]);
@@ -99,6 +104,7 @@ const result = vm.runInContext(`
     workflows: clone(seed.workflows),
     workflowVersions: clone(seed.workflowVersions),
     workflowRuns: clone(seed.workflowRuns),
+    runtimeTasks: clone(seed.runtimeTasks),
     auditEvents: clone(seed.auditEvents),
     filters: {},
     detail: null,
@@ -154,12 +160,59 @@ const result = vm.runInContext(`
     if (!content.innerHTML.includes(resourceConfig(route).title)) throw new Error("route title missing: " + route);
   }
 
+  for (const route of ["assets", "environments", "reports"]) {
+    state.role = "Admin";
+    state.route = route;
+    state.filters = {};
+    state.detail = null;
+    render();
+  }
+  state.route = "assets";
+  render();
+  if (!content.innerHTML.includes("资产层级与能力工作台") || !content.innerHTML.includes("资产层级浏览") || !content.innerHTML.includes("能力 / 标签筛选")) throw new Error("asset topology workbench missing");
+  state.filters.capability = "cuda";
+  renderAssetWorkbench();
+  if (filteredRows("assets").some((asset) => !(asset.capabilities || []).includes("cuda"))) throw new Error("asset capability filter did not apply");
+
+  state.filters = {};
+  state.route = "environments";
+  render();
+  if (!content.innerHTML.includes("DEV / QA / QE 环境绑定") || !content.innerHTML.includes("端点和附件管理") || !content.innerHTML.includes("核心 QA")) throw new Error("environment workbench missing");
+
+  state.filters = { project_id: "prj_mock_core" };
+  state.route = "reports";
+  render();
+  if (!content.innerHTML.includes("测试运行、报告与质量门禁") || !content.innerHTML.includes("项目质量摘要") || !content.innerHTML.includes("QA 夜间回归报告")) throw new Error("test report workbench missing");
+
+  state.fileContexts = {};
+  state.files = [
+    { id: "fil_live_asset", filename: "asset-live-evidence.log", content_type: "text/plain", size_bytes: 64, owner_id: "usr_mock_admin", status: "available" },
+    { id: "fil_live_env", filename: "env-live-report.pdf", content_type: "application/pdf", size_bytes: 128, owner_id: "usr_mock_ops", status: "available" },
+  ];
+  state.assets = [
+    { id: "ast_live_file_ids", category: "server", name: "live-api-asset", status: "available", owner_id: "usr_mock_admin", location: "live", capabilities: ["linux"], file_ids: ["fil_live_asset"] },
+  ];
+  state.environments = [
+    { id: "env_live_file_ids", project_id: "prj_mock_core", name: "Live QA", type: "QA", status: "active", owner_id: "usr_mock_ops", member_ids: ["usr_mock_ops"], asset_ids: ["ast_live_file_ids"], file_ids: ["fil_live_env"], endpoints: [{ name: "api", url: "https://qa.live.local" }] },
+  ];
+  state.filters = {};
+  renderAssetWorkbench();
+  if (!content.innerHTML.includes("asset-live-evidence.log") || content.innerHTML.includes("env-live-report.pdf")) throw new Error("asset attachment projection did not prefer asset.file_ids");
+  renderEnvironmentWorkbench();
+  if (!content.innerHTML.includes("env-live-report.pdf") || content.innerHTML.includes("asset-live-evidence.log")) throw new Error("environment attachment projection did not prefer environment.file_ids");
+
+  state.files = clone(seed.files);
+  state.fileContexts = clone(seed.fileContexts);
+  state.assets = clone(seed.assets);
+  state.environments = clone(seed.environments);
+
   state.route = "workflowRuns";
   state.filters = {};
   state.detail = null;
   render();
   if (!content.innerHTML.includes("运行状态复核入口")) throw new Error("workflow run page missing");
   if (!content.innerHTML.includes("人工控制节点") || !content.innerHTML.includes("不能自动跳过")) throw new Error("manual approval step guard missing");
+  if (!content.innerHTML.includes("Dispatch Queue / Runtime Tasks") || !content.innerHTML.includes("wrt_mock_release_1") || content.innerHTML.includes("attempt_token")) throw new Error("runtime task queue rendering or sanitization missing");
 
   state.apiOnline = true;
   for (const route of newRoutes) {
@@ -170,6 +223,24 @@ const result = vm.runInContext(`
     if (!content.innerHTML.includes("基础服务暂无记录")) throw new Error("live empty state missing: " + route);
     if (content.innerHTML.includes("企业 GitLab 主通道") || content.innerHTML.includes("QA 夜间回归报告")) throw new Error("live empty route leaked mock data: " + route);
   }
+
+  state.assets = [];
+  state.environments = [];
+  state.reports = [];
+  state.testCases = [];
+  state.testSuites = [];
+  state.testRuns = [];
+  state.qualityGates = [];
+  state.fileContexts = {};
+  state.route = "assets";
+  renderAssetWorkbench();
+  if (!content.innerHTML.includes("基础服务暂无记录") || content.innerHTML.includes("上海工作站")) throw new Error("live empty asset workbench leaked mock data");
+  state.route = "environments";
+  renderEnvironmentWorkbench();
+  if (!content.innerHTML.includes("基础服务暂无记录") || content.innerHTML.includes("核心 DEV")) throw new Error("live empty environment workbench leaked mock data");
+  state.route = "reports";
+  renderTestReportWorkbench();
+  if (!content.innerHTML.includes("基础服务暂无记录") || content.innerHTML.includes("QA 夜间回归报告")) throw new Error("live empty report workbench leaked mock data");
 
   state.apiOnline = false;
   state.credentials = [];

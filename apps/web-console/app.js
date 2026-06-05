@@ -100,6 +100,7 @@ const state = {
   workflows: [],
   workflowVersions: {},
   workflowRuns: [],
+  runtimeTasks: [],
   workflowBuilder: null,
   auditEvents: [],
 };
@@ -239,6 +240,10 @@ const seed = {
       error_output: "",
     },
   ],
+  runtimeTasks: [
+    { id: "wrt_mock_release_1", workflow_run_id: "wfr_mock_release_1", workflow_step_run_id: "wfs_mock_agent", workflow_id: "wfl_mock_release", workflow_version_id: "wfv_mock_release_v1", node_id: "agent-check", agent_id: "agt_mock_ops", skill_id: "skl_mock_release", model_provider_id: "mdl_mock_deepseek", status: "running", attempt: 1, max_attempts: 2, timeout_seconds: 900, input_summary: { binding_names: ["project_id", "environment_id", "max_attempts"], project_id: "prj_mock_core" }, output: { summary: "正在复核 QA 报告和环境容量。" }, error: "", claimed_at: "2026-06-04T08:23:05Z", created_at: "2026-06-04T08:23:00Z", updated_at: "2026-06-04T08:24:00Z" },
+    { id: "wrt_mock_release_0", workflow_run_id: "wfr_mock_release_239", workflow_step_run_id: "wfs_mock_agent_failed", workflow_id: "wfl_mock_release", workflow_version_id: "wfv_mock_release_v1", node_id: "agent-check", agent_id: "agt_mock_ops", skill_id: "skl_mock_release", model_provider_id: "mdl_mock_deepseek", status: "failed", attempt: 1, max_attempts: 1, timeout_seconds: 300, input_summary: { binding_names: ["asset_id", "timeout_seconds"], asset_id: "ast_mock_vm" }, output: {}, error: "Connection refused: qa-runner-03:22", created_at: "2026-06-04T06:11:00Z", updated_at: "2026-06-04T06:22:00Z", completed_at: "2026-06-04T06:22:00Z" },
+  ],
   auditEvents: [
     { id: "aud_mock_1", actor_id: "system", action: "project.created", resource_type: "project", resource_id: "prj_mock_core", occurred_at: "2026-06-04T07:21:00Z", metadata: { key: "OPS" } },
     { id: "aud_mock_2", actor_id: "system", action: "asset.created", resource_type: "asset", resource_id: "ast_mock_gpu", occurred_at: "2026-06-04T07:21:40Z", metadata: { category: "gpu" } },
@@ -313,7 +318,7 @@ function syncActorControls() {
 
 async function loadData(forceToast = false) {
   try {
-    const [users, projects, assets, environments, gitlabProfiles, vcsOperations, vcsWebhooks, files, testCases, testSuites, testRuns, reports, qualityGates, agents, skills, credentials, modelProviders, workflows, workflowRuns, auditEvents] = await Promise.all([
+    const [users, projects, assets, environments, gitlabProfiles, vcsOperations, vcsWebhooks, files, testCases, testSuites, testRuns, reports, qualityGates, agents, skills, credentials, modelProviders, workflows, workflowRuns, runtimeTasks, auditEvents] = await Promise.all([
       apiGet("/v1/users"),
       apiGet("/v1/projects"),
       apiGet("/v1/assets"),
@@ -333,6 +338,7 @@ async function loadData(forceToast = false) {
       apiGet("/v1/model-providers"),
       apiGet("/v1/workflows"),
       apiGet("/v1/workflow-runs"),
+      apiGet("/v1/runtime/tasks"),
       apiGet("/v1/audit-events", { permissionFallback: [] }),
     ]);
     const workflowVersions = {};
@@ -368,6 +374,7 @@ async function loadData(forceToast = false) {
     state.workflows = workflows;
     state.workflowVersions = workflowVersions;
     state.workflowRuns = workflowRuns;
+    state.runtimeTasks = runtimeTasks.map(sanitizeRuntimeTask);
     state.auditEvents = auditEvents;
     if (forceToast) toast("基础服务数据已刷新。");
   } catch (error) {
@@ -396,6 +403,7 @@ async function loadData(forceToast = false) {
     state.workflows = clone(seed.workflows);
     state.workflowVersions = clone(seed.workflowVersions);
     state.workflowRuns = clone(seed.workflowRuns);
+    state.runtimeTasks = clone(seed.runtimeTasks).map(sanitizeRuntimeTask);
     state.auditEvents = clone(seed.auditEvents);
     if (forceToast) toast("基础服务不可用，已切换本地模拟数据。");
   }
@@ -465,8 +473,8 @@ function render() {
   if (state.route === "tasks") renderTasks();
   if (state.route === "identity") renderResource("identity");
   if (state.route === "projects") renderResource("projects");
-  if (state.route === "assets") renderResource("assets");
-  if (state.route === "environments") renderResource("environments");
+  if (state.route === "assets") renderAssetWorkbench();
+  if (state.route === "environments") renderEnvironmentWorkbench();
   if (state.route === "gitlabProfiles") renderGitLabConsole();
   if (state.route === "vcsOperations") renderResource("vcsOperations");
   if (state.route === "vcsWebhooks") renderResource("vcsWebhooks");
@@ -474,7 +482,7 @@ function render() {
   if (state.route === "testCases") renderResource("testCases");
   if (state.route === "testSuites") renderResource("testSuites");
   if (state.route === "testRuns") renderResource("testRuns");
-  if (state.route === "reports") renderResource("reports");
+  if (state.route === "reports") renderTestReportWorkbench();
   if (state.route === "qualityGates") renderResource("qualityGates");
   if (state.route === "agents") renderResource("agents");
   if (state.route === "skills") renderResource("skills");
@@ -698,6 +706,144 @@ function renderFileConsole() {
   bindActions(content);
 }
 
+function renderAssetWorkbench() {
+  const rows = filteredRows("assets");
+  content.innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">资产 / 环境拓扑</p>
+        <h1>资产层级与能力工作台</h1>
+        <p class="muted">按层级、能力标签、DEV/QA/QE 绑定和文件上下文复核资产可用性。</p>
+      </div>
+      ${actionButton("create", "登记资产", "primary-button", "create-assets", { type: "assets" })}
+    </div>
+    ${permissionBanner()}
+    <div class="metric-grid">
+      ${metric("资产总数", state.assets.length, `${state.assets.filter((asset) => !asset.parent_id).length} 个根节点`)}
+      ${metric("能力标签", assetCapabilityTags().length, assetCapabilityTags().slice(0, 3).join(" / ") || "暂无标签")}
+      ${metric("环境绑定", state.environments.reduce((total, env) => total + (env.asset_ids || []).length, 0), "来自 /v1/environments asset_ids")}
+      ${metric("附件关联", assetAttachmentCount(), "优先使用 asset.file_ids")}
+    </div>
+    <div class="toolbar topology-toolbar">
+      <label>本页搜索<input data-filter="localQuery" type="search" value="${escapeHtml(state.filters.localQuery || "")}" placeholder="资产名、类别、位置、能力" /></label>
+      ${filterControl({ key: "category", label: "类别", values: ["all", "server", "workstation", "vm", "gpu", "memory"] })}
+      ${filterControl({ key: "status", label: "状态", values: ["all", "available", "in_use", "maintenance", "retired"] })}
+      <label>能力<select data-filter="capability">${selectedOptions(["all", ...assetCapabilityTags()], state.filters.capability || "all")}</select></label>
+      <button class="ghost-button" data-clear>清除</button>
+    </div>
+    <section class="ops-grid">
+      <div class="panel stack-panel">
+        <h2>资产层级浏览</h2>
+        ${assetTopologyTree(rows)}
+      </div>
+      <aside class="panel stack-panel">
+        <h2>能力 / 标签筛选</h2>
+        ${capabilityMatrix()}
+      </aside>
+    </section>
+    <section class="ops-grid">
+      <div class="table-wrap">${rows.length ? tableFor("assets", rows) : emptyStateFor("assets")}</div>
+      <aside class="panel stack-panel">
+        <h2>环境与附件</h2>
+        ${assetEnvironmentMatrix(rows)}
+      </aside>
+    </section>
+    <section id="detail-slot">${state.detail?.type === "assets" ? detailMarkup("assets", state.detail.id) : ""}</section>
+  `;
+  bindToolbar("assets");
+  bindActions(content);
+}
+
+function renderEnvironmentWorkbench() {
+  const rows = filteredRows("environments");
+  content.innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">环境拓扑</p>
+        <h1>DEV / QA / QE 环境绑定</h1>
+        <p class="muted">集中查看环境责任人、成员、资产、端点和附件；就绪判断与后端 OpenAPI 错误边界一致。</p>
+      </div>
+      ${actionButton("create", "新建环境", "primary-button", "create-environments", { type: "environments" })}
+    </div>
+    ${permissionBanner()}
+    <div class="metric-grid">
+      ${metric("环境实例", state.environments.length, `${rows.length} 条当前筛选`)}
+      ${metric("DEV", state.environments.filter((env) => env.type === "DEV").length, "开发验证入口")}
+      ${metric("QA/QE", state.environments.filter((env) => ["QA", "QE"].includes(env.type)).length, "测试与工程环境")}
+      ${metric("待修复", state.environments.filter((env) => readiness(env).level !== "ok").length, "缺成员、资产或端点")}
+    </div>
+    <div class="toolbar">
+      <label>本页搜索<input data-filter="localQuery" type="search" value="${escapeHtml(state.filters.localQuery || "")}" placeholder="环境、项目、端点、资产" /></label>
+      ${filterControl({ key: "type", label: "类型", values: ["all", "DEV", "QA", "QE"] })}
+      ${filterControl({ key: "readiness", label: "就绪状态", values: ["all", "ready", "warning"] })}
+      <label>行数<select data-filter="limit"><option>10</option><option ${state.filters.limit === "25" ? "selected" : ""}>25</option></select></label>
+      <button class="ghost-button" data-clear>清除</button>
+    </div>
+    <section class="environment-board">
+      ${["DEV", "QA", "QE"].map((type) => environmentLane(type, rows.filter((env) => env.type === type))).join("")}
+    </section>
+    <section class="ops-grid">
+      <div class="table-wrap">${rows.length ? tableFor("environments", rows) : emptyStateFor("environments")}</div>
+      <aside class="panel stack-panel">
+        <h2>端点和附件管理</h2>
+        ${environmentEndpointMatrix(rows)}
+      </aside>
+    </section>
+    <section id="detail-slot">${state.detail?.type === "environments" ? detailMarkup("environments", state.detail.id) : ""}</section>
+  `;
+  bindToolbar("environments");
+  bindActions(content);
+}
+
+function renderTestReportWorkbench() {
+  const reports = filteredRows("reports");
+  const projectId = state.filters.project_id || "all";
+  content.innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">测试报告工作台</p>
+        <h1>测试运行、报告与质量门禁</h1>
+        <p class="muted">按项目串联 test cases / suites / runs / reports / quality gates 与关联文件。</p>
+      </div>
+      ${actionButton("create", "新增报告", "primary-button", "create-reports", { type: "reports" })}
+    </div>
+    ${permissionBanner()}
+    <div class="metric-grid">
+      ${metric("用例", scopedByProject(state.testCases, projectId).length, "test cases")}
+      ${metric("套件", scopedByProject(state.testSuites, projectId).length, "test suites")}
+      ${metric("运行", scopedByProject(state.testRuns, projectId).length, "test runs")}
+      ${metric("门禁阻断", scopedByProject(state.qualityGates, projectId).filter((gate) => gate.status === "failed").length, "quality gates")}
+    </div>
+    <div class="toolbar report-toolbar">
+      <label>本页搜索<input data-report-filter="localQuery" type="search" value="${escapeHtml(state.filters.localQuery || "")}" placeholder="报告、运行、文件、门禁" /></label>
+      <label>项目<select data-report-filter="project_id">${scopedOptions("projects", projectId, "全部项目")}</select></label>
+      ${filterControl({ key: "report_type", label: "类型", values: ["all", "test", "qa", "qe", "operations"] }).replaceAll("data-filter", "data-report-filter")}
+      <label>状态<select data-report-filter="status">${selectedOptions(["all", "draft", "published", "archived"], state.filters.status || "all")}</select></label>
+      <button class="ghost-button" data-report-clear>清除</button>
+    </div>
+    <section class="ops-grid">
+      <div class="table-wrap">${reports.length ? tableFor("reports", reports) : emptyStateFor("reports")}</div>
+      <aside class="panel stack-panel">
+        <h2>项目质量摘要</h2>
+        ${testReportSummary(projectId)}
+      </aside>
+    </section>
+    <section class="ops-grid">
+      <div class="panel stack-panel">
+        <h2>测试运行与套件</h2>
+        ${testRunMatrix(projectId)}
+      </div>
+      <div class="panel stack-panel">
+        <h2>关联文件与门禁</h2>
+        ${reportFileGateMatrix(projectId)}
+      </div>
+    </section>
+    <section id="detail-slot">${state.detail?.type === "reports" ? detailMarkup("reports", state.detail.id) : ""}</section>
+  `;
+  bindReportToolbar();
+  bindActions(content);
+}
+
 function renderWorkflowRuns() {
   const runs = filteredWorkflowRuns();
   const selected = state.detail?.type === "workflowRuns" ? state.workflowRuns.find((run) => run.id === state.detail.id) : runs[0];
@@ -715,7 +861,7 @@ function renderWorkflowRuns() {
       ${metric("运行记录", state.workflowRuns.length, "mock adapter: /v1/workflow-runs")}
       ${metric("执行中", state.workflowRuns.filter((run) => ["queued", "running"].includes(run.status)).length, "智能体或 Skill 正在处理")}
       ${metric("待人工", state.workflowRuns.filter((run) => run.status === "pending_manual" || (run.steps || []).some((step) => workflowRunStepManual(step) && ["pending", "waiting_approval"].includes(step.status))).length, "审批节点需人工复核")}
-      ${metric("失败", state.workflowRuns.filter((run) => run.status === "failed").length, "查看错误输出")}
+      ${metric("任务队列", state.runtimeTasks.filter((task) => ["queued", "running"].includes(task.status)).length, "来自 /v1/runtime/tasks")}
     </div>
     <div class="toolbar">
       <label>本页搜索<input data-run-filter="localQuery" type="search" value="${escapeHtml(state.filters.localQuery || "")}" placeholder="运行号、流程、触发源、错误" /></label>
@@ -727,6 +873,10 @@ function renderWorkflowRuns() {
       <section class="table-wrap">${runs.length ? workflowRunTable(runs) : `<div class="empty-state"><strong>暂无流程运行</strong><span>${state.apiOnline ? "当前 OpenAPI 尚未提供 workflow run endpoint。" : "本地模拟数据中没有匹配记录。"}</span></div>`}</section>
       <aside class="detail-panel">${selected ? workflowRunDetail(selected) : "<h2>运行详情</h2><p class=\"muted\">选择一条运行记录查看步骤状态。</p>"}</aside>
     </div>
+    <section class="panel stack-panel">
+      <h2>Dispatch Queue / Runtime Tasks</h2>
+      ${runtimeTaskBoard()}
+    </section>
   `;
   bindWorkflowRunToolbar();
   bindActions(content);
@@ -934,6 +1084,210 @@ function bindWorkflowRunToolbar() {
   });
 }
 
+function bindReportToolbar() {
+  content.querySelectorAll("[data-report-filter]").forEach((control) => {
+    control.addEventListener("input", () => {
+      state.filters[control.dataset.reportFilter] = control.value;
+      renderTestReportWorkbench();
+    });
+  });
+  content.querySelector("[data-report-clear]").addEventListener("click", () => {
+    state.filters = {};
+    state.detail = null;
+    renderTestReportWorkbench();
+  });
+}
+
+function assetCapabilityTags() {
+  return [...new Set(state.assets.flatMap((asset) => asset.capabilities || []))].sort();
+}
+
+function assetTopologyTree(rows = state.assets) {
+  const visible = new Set(rows.map((asset) => asset.id));
+  const roots = state.assets.filter((asset) => !asset.parent_id || !state.assets.some((candidate) => candidate.id === asset.parent_id));
+  const html = roots.map((asset) => assetTreeNode(asset, visible)).filter(Boolean).join("");
+  return html ? `<ul class="topology-tree">${html}</ul>` : `<div class="empty-state compact">暂无匹配资产。</div>`;
+}
+
+function assetTreeNode(asset, visible) {
+  const children = state.assets.filter((item) => item.parent_id === asset.id).map((child) => assetTreeNode(child, visible)).filter(Boolean).join("");
+  if (!visible.has(asset.id) && !children) return "";
+  const envs = environmentsForAsset(asset.id);
+  return `<li class="${visible.has(asset.id) ? "" : "muted-node"}">
+    <div>
+      <strong>${escapeHtml(asset.name)}</strong>
+      <small>${escapeHtml(asset.category)} · ${escapeHtml(asset.location || "未分配")} · ${envs.length ? envs.map((env) => `${env.type}:${env.name}`).join(" / ") : "未绑定环境"}</small>
+    </div>
+    <span>${statusPill(asset.status)}</span>
+    ${children ? `<ul>${children}</ul>` : ""}
+  </li>`;
+}
+
+function capabilityMatrix() {
+  const tags = assetCapabilityTags();
+  if (!tags.length) return `<div class="empty-state compact">暂无能力标签。</div>`;
+  return `<div class="capability-cloud">${tags.map((tag) => {
+    const assets = state.assets.filter((asset) => (asset.capabilities || []).includes(tag));
+    return `<button data-filter="capability" value="${escapeAttr(tag)}" title="按能力筛选 ${escapeAttr(tag)}"><strong>${escapeHtml(tag)}</strong><small>${assets.length} 资产 · ${assets.map((asset) => asset.name).slice(0, 3).join(" / ")}</small></button>`;
+  }).join("")}</div>`;
+}
+
+function assetEnvironmentMatrix(rows = state.assets) {
+  const visible = new Set(rows.map((asset) => asset.id));
+  const items = state.assets.filter((asset) => visible.has(asset.id)).map((asset) => {
+    const envs = environmentsForAsset(asset.id);
+    const files = filesForAsset(asset.id);
+    return `<li>
+      <div><strong>${escapeHtml(asset.name)}</strong><small>${envs.length ? envs.map((env) => `${env.type} ${env.name}`).join(" / ") : "暂无环境绑定"}</small></div>
+      <span>${files.length} 文件</span>
+      <small>${files.map((file) => escapeHtml(file.filename)).join(" / ") || "暂无附件"}</small>
+    </li>`;
+  });
+  return items.length ? `<ul class="link-list">${items.join("")}</ul>` : `<div class="empty-state compact">暂无资产环境映射。</div>`;
+}
+
+function environmentLane(type, environments) {
+  return `<section class="environment-lane">
+    <header><strong>${type}</strong><span>${environments.length}</span></header>
+    ${environments.length ? environments.map((env) => environmentCard(env)).join("") : `<div class="empty-state compact">暂无 ${type} 环境。</div>`}
+  </section>`;
+}
+
+function environmentCard(env) {
+  const ready = readiness(env);
+  const files = filesForEnvironment(env.id);
+  return `<article>
+    <div class="detail-heading">
+      <div><strong>${escapeHtml(env.name)}</strong><small>${projectName(env.project_id)} · ${nameFor("users", env.owner_id)}</small></div>
+      <span class="pill ${ready.level === "ok" ? "ok" : "warn"}">${ready.message}</span>
+    </div>
+    <dl class="mini-kv">
+      <dt>成员</dt><dd>${env.member_ids?.length || 0}</dd>
+      <dt>资产</dt><dd>${(env.asset_ids || []).map(assetLabel).join(" / ") || "未绑定"}</dd>
+      <dt>端点</dt><dd>${(env.endpoints || []).map((endpoint) => endpoint.name || endpoint.url).join(" / ") || "未配置"}</dd>
+      <dt>附件</dt><dd>${files.length ? files.map((file) => escapeHtml(file.filename)).join(" / ") : "暂无附件"}</dd>
+    </dl>
+    <div class="action-row">${actionButton("open", "详情", "ghost-button small", `env-open-${env.id}`, { type: "environments", id: env.id })}</div>
+  </article>`;
+}
+
+function environmentEndpointMatrix(rows = state.environments) {
+  const items = rows.flatMap((env) => {
+    const endpoints = env.endpoints?.length ? env.endpoints : [{ name: "endpoint", url: "未配置" }];
+    const files = filesForEnvironment(env.id);
+    return endpoints.map((endpoint) => `<li>
+      <div><strong>${escapeHtml(env.type)} · ${escapeHtml(env.name)}</strong><small>${escapeHtml(endpoint.name || "endpoint")} · ${escapeHtml(endpoint.url || "未配置")} · ${files.map((file) => escapeHtml(file.filename)).join(" / ") || "暂无附件"}</small></div>
+      <span>${files.length} 附件</span>
+    </li>`);
+  });
+  return items.length ? `<ul class="link-list">${items.join("")}</ul>` : `<div class="empty-state compact">暂无端点。</div>`;
+}
+
+function testReportSummary(projectId = "all") {
+  const runs = scopedByProject(state.testRuns, projectId);
+  const reports = scopedByProject(state.reports, projectId);
+  const gates = scopedByProject(state.qualityGates, projectId);
+  return `
+    ${listItems([
+      `最近运行 ${runs[0] ? `${escapeHtml(runs[0].id)} · ${statusPill(runs[0].status)}` : "暂无"}`,
+      `已发布报告 ${reports.filter((report) => report.status === "published").length} / ${reports.length}`,
+      `通过门禁 ${gates.filter((gate) => gate.status === "passed").length} / ${gates.length}`,
+      `关联文件 ${reports.reduce((total, report) => total + (report.file_ids || []).length, 0)} 个`,
+    ])}
+  `;
+}
+
+function testRunMatrix(projectId = "all") {
+  const runs = scopedByProject(state.testRuns, projectId);
+  if (!runs.length) return `<div class="empty-state compact">暂无测试运行。</div>`;
+  return `<ul class="mini-timeline">${runs.map((run) => `<li>
+    <span>${statusPill(run.status)}</span>
+    <div><strong>${escapeHtml(run.id)} · ${testSuiteName(run.suite_id)}</strong><small>${environmentName(run.environment_id)} · ${run.results?.length || 0} 结果 · ${date(run.updated_at)}</small></div>
+  </li>`).join("")}</ul>`;
+}
+
+function reportFileGateMatrix(projectId = "all") {
+  const reports = scopedByProject(state.reports, projectId);
+  const items = reports.map((report) => {
+    const gates = state.qualityGates.filter((gate) => gate.last_report_id === report.id);
+    return `<li>
+      <div><strong>${escapeHtml(report.title)}</strong><small>${(report.file_ids || []).map(fileName).join(" / ") || "无文件"} · ${gates.map((gate) => `${gate.name}:${translateStatus(gate.status)}`).join(" / ") || "无门禁"}</small></div>
+      ${statusPill(report.status)}
+    </li>`;
+  });
+  return items.length ? `<ul class="link-list">${items.join("")}</ul>` : `<div class="empty-state compact">暂无报告文件或门禁。</div>`;
+}
+
+function runtimeTaskBoard() {
+  if (!state.runtimeTasks.length) return `<div class="empty-state compact">暂无 runtime task；创建并启动包含 agent_task 的流程后会出现队列记录。</div>`;
+  const groups = ["queued", "running", "failed", "timed_out", "completed", "cancelled"];
+  return `<div class="runtime-board">${groups.map((status) => {
+    const tasks = state.runtimeTasks.filter((task) => task.status === status);
+    if (!tasks.length) return "";
+    return `<section>
+      <header><strong>${translateStatus(status)}</strong><span>${tasks.length}</span></header>
+      ${tasks.map(runtimeTaskCard).join("")}
+    </section>`;
+  }).join("")}</div>`;
+}
+
+function runtimeTaskCard(task) {
+  return `<article class="runtime-task">
+    <div class="detail-heading">
+      <div><strong>${escapeHtml(task.id)}</strong><small>${workflowName(task.workflow_id)} · ${agentName(task.agent_id)} · ${skillName(task.skill_id)}</small></div>
+      ${statusPill(task.status)}
+    </div>
+    <dl class="mini-kv">
+      <dt>Run</dt><dd>${escapeHtml(task.workflow_run_id)}</dd>
+      <dt>Step</dt><dd>${escapeHtml(task.node_id)} / ${escapeHtml(task.workflow_step_run_id)}</dd>
+      <dt>Attempt</dt><dd>${Number(task.attempt || 0)} / ${Number(task.max_attempts || 0)}</dd>
+      <dt>Timeout</dt><dd>${Number(task.timeout_seconds || 0)}s</dd>
+    </dl>
+    <h4>Input Summary</h4>${jsonBlock(task.input_summary || {})}
+    ${task.output && Object.keys(task.output).length ? `<h4>Output</h4>${jsonBlock(task.output)}` : ""}
+    ${task.error ? `<h4>Error</h4><pre class="json-block error-block">${escapeHtml(task.error)}</pre>` : ""}
+  </article>`;
+}
+
+function scopedByProject(rows, projectId = "all") {
+  return projectId && projectId !== "all" ? rows.filter((row) => row.project_id === projectId) : rows;
+}
+
+function assetAttachmentCount() {
+  return state.assets.reduce((total, asset) => total + fileIdsForAsset(asset).length, 0);
+}
+
+function environmentsForAsset(assetId) {
+  return state.environments.filter((env) => (env.asset_ids || []).includes(assetId));
+}
+
+function filesForAsset(assetOrId) {
+  return resolveFiles(fileIdsForAsset(assetOrId));
+}
+
+function filesForEnvironment(environmentOrId) {
+  return resolveFiles(fileIdsForEnvironment(environmentOrId));
+}
+
+function fileIdsForAsset(assetOrId) {
+  const asset = typeof assetOrId === "object" ? assetOrId : state.assets.find((item) => item.id === assetOrId);
+  if (!asset) return [];
+  if (Object.prototype.hasOwnProperty.call(asset, "file_ids")) return unique(asset.file_ids || []);
+  return state.files.filter((file) => (state.fileContexts[file.id] || {}).asset_id === asset.id).map((file) => file.id);
+}
+
+function fileIdsForEnvironment(environmentOrId) {
+  const environment = typeof environmentOrId === "object" ? environmentOrId : state.environments.find((item) => item.id === environmentOrId);
+  if (!environment) return [];
+  if (Object.prototype.hasOwnProperty.call(environment, "file_ids")) return unique(environment.file_ids || []);
+  return state.files.filter((file) => (state.fileContexts[file.id] || {}).environment_id === environment.id).map((file) => file.id);
+}
+
+function resolveFiles(fileIds = []) {
+  const ids = new Set(fileIds);
+  return state.files.filter((file) => ids.has(file.id));
+}
+
 function scopedOptions(source, selected = "all", emptyLabel = "全部") {
   const rows = source === "projects" ? state.projects : source === "assets" ? state.assets : state.environments;
   return `<option value="all">${emptyLabel}</option>${rows.map((row) => `<option value="${row.id}" ${selected === row.id ? "selected" : ""}>${labelFor(source, row.id)}</option>`).join("")}`;
@@ -1115,8 +1469,10 @@ function filteredRows(type) {
     const text = JSON.stringify(searchableRow(type, row)).toLowerCase();
     if (query && !query.split(/\s+/).every((token) => text.includes(token))) return false;
     if (type === "assets" && state.filters.category && state.filters.category !== "all" && row.category !== state.filters.category) return false;
+    if (type === "assets" && state.filters.capability && state.filters.capability !== "all" && !(row.capabilities || []).includes(state.filters.capability)) return false;
     if ((type === "identity" || type === "projects" || type === "assets") && state.filters.status && state.filters.status !== "all" && row.status !== state.filters.status) return false;
-    if (["gitlabProfiles", "vcsOperations", "vcsWebhooks", "files", "testCases", "testSuites", "testRuns", "qualityGates", "agents", "skills", "credentials", "modelProviders", "workflows"].includes(type) && state.filters.status && state.filters.status !== "all" && row.status !== state.filters.status) return false;
+    if (["gitlabProfiles", "vcsOperations", "vcsWebhooks", "files", "testCases", "testSuites", "testRuns", "reports", "qualityGates", "agents", "skills", "credentials", "modelProviders", "workflows"].includes(type) && state.filters.status && state.filters.status !== "all" && row.status !== state.filters.status) return false;
+    if (["testCases", "testSuites", "testRuns", "reports", "qualityGates"].includes(type) && state.filters.project_id && state.filters.project_id !== "all" && row.project_id !== state.filters.project_id) return false;
     if (type === "vcsOperations" && state.filters.operation_type && state.filters.operation_type !== "all" && row.operation_type !== state.filters.operation_type) return false;
     if (type === "testCases" && state.filters.case_type && state.filters.case_type !== "all" && row.case_type !== state.filters.case_type) return false;
     if (type === "reports" && state.filters.report_type && state.filters.report_type !== "all" && row.report_type !== state.filters.report_type) return false;
@@ -2494,6 +2850,9 @@ function localStartWorkflowRun(runId) {
       step.updated_at = now;
       step.output = step.output || { trigger: "manual" };
     }
+    if (step.step_type === "agent" && step.status === "pending") {
+      queueLocalRuntimeTask(run, step, now);
+    }
   });
   localRefreshWorkflowRunStatus(run);
 }
@@ -2521,7 +2880,39 @@ function localUpdateWorkflowStep(runId, stepRunId, payload) {
   if ("output" in payload) step.output = payload.output;
   if ("error" in payload) step.error = payload.error;
   step.updated_at = now;
+  closeLocalRuntimeTasksForStep(step, payload, now);
   localRefreshWorkflowRunStatus(run);
+}
+
+function queueLocalRuntimeTask(run, step, now = new Date().toISOString()) {
+  if (state.runtimeTasks.some((task) => task.workflow_step_run_id === step.id && ["queued", "running"].includes(task.status))) return;
+  state.runtimeTasks = [sanitizeRuntimeTask({
+    id: `wrt_local_${Date.now()}_${state.runtimeTasks.length + 1}`,
+    workflow_run_id: run.id,
+    workflow_step_run_id: step.id,
+    workflow_id: run.workflow_id,
+    workflow_version_id: run.workflow_version_id,
+    node_id: step.node_id,
+    agent_id: step.agent_id,
+    skill_id: step.skill_id,
+    model_provider_id: step.model_provider_id,
+    status: "queued",
+    attempt: 1,
+    max_attempts: Number(step.input?.max_attempts || step.input?.retries || 1),
+    timeout_seconds: Number(step.input?.timeout_seconds || 0),
+    input_summary: { binding_names: Object.keys(step.input || {}).sort(), agent_id: step.agent_id, skill_id: step.skill_id },
+    created_at: now,
+    updated_at: now,
+  }), ...state.runtimeTasks];
+}
+
+function closeLocalRuntimeTasksForStep(step, payload, now) {
+  if (step.step_type !== "agent" || !["completed", "failed", "skipped"].includes(payload.status)) return;
+  state.runtimeTasks = state.runtimeTasks.map((task) => {
+    if (task.workflow_step_run_id !== step.id || !["queued", "running"].includes(task.status)) return task;
+    const status = payload.status === "completed" ? "completed" : payload.status === "failed" ? "failed" : "cancelled";
+    return sanitizeRuntimeTask({ ...task, status, output: payload.output || task.output || {}, error: payload.error || task.error || "", completed_at: now, updated_at: now });
+  });
 }
 
 function localRefreshWorkflowRunStatus(run) {
@@ -2695,14 +3086,21 @@ function sanitizeCredential(item = {}, previous = {}, options = {}) {
 
 function bindToolbar(type) {
   content.querySelectorAll("[data-filter]").forEach((control) => {
+    if (control.tagName === "BUTTON") {
+      control.addEventListener("click", () => {
+        state.filters[control.dataset.filter] = control.value;
+        render();
+      });
+      return;
+    }
     control.addEventListener("input", () => {
       state.filters[control.dataset.filter] = control.value;
-      renderResource(type);
+      render();
     });
   });
   content.querySelector("[data-clear]").addEventListener("click", () => {
     state.filters = {};
-    renderResource(type);
+    render();
   });
 }
 
@@ -2722,7 +3120,8 @@ function bindActions(root) {
       try {
         if (action === "open") {
           state.detail = { type, id };
-          renderResource(type);
+          if (canRoute(type)) state.route = type;
+          render();
         } else if (action === "create" || action?.startsWith("create-")) {
           openCreate(node.dataset.type || (action === "create-project" ? "projects" : action.replace("create-", "")));
         } else if (action === "edit") {
@@ -2849,7 +3248,7 @@ function readiness(env) {
 }
 
 function statusPill(status = "active") {
-  const tone = ["active", "available", "in_use", "done", "completed", "passed", "skipped", "available"].includes(status) ? "ok" : ["inactive", "maintenance", "archived", "warning", "pending", "created", "queued", "low", "medium", "draft", "deprecated", "pending_upload", "open", "received", "pending_manual", "waiting_approval"].includes(status) ? "warn" : ["high", "retired", "failed", "cancelled", "rejected", "blocked"].includes(status) ? "bad" : status === "running" ? "" : "";
+  const tone = ["active", "available", "in_use", "done", "completed", "passed", "skipped", "available"].includes(status) ? "ok" : ["inactive", "maintenance", "archived", "warning", "pending", "created", "queued", "low", "medium", "draft", "deprecated", "pending_upload", "open", "received", "pending_manual", "waiting_approval"].includes(status) ? "warn" : ["high", "retired", "failed", "cancelled", "rejected", "blocked", "timed_out"].includes(status) ? "bad" : status === "running" ? "" : "";
   return `<span class="pill ${tone}">${escapeHtml(translateStatus(status))}</span>`;
 }
 
@@ -3173,6 +3572,15 @@ function sanitizeWebhookEvent(event = {}) {
   const safe = { ...event };
   safe.payload = redactClientPayload(safe.payload || {});
   delete safe.authenticity_token;
+  return safe;
+}
+
+function sanitizeRuntimeTask(task = {}) {
+  const safe = { ...task };
+  delete safe.attempt_token;
+  safe.input_summary = redactClientPayload(safe.input_summary || {});
+  safe.output = redactClientPayload(safe.output || {});
+  safe.error = redactSensitiveString(safe.error || "");
   return safe;
 }
 

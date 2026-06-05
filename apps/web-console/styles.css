@@ -722,6 +722,7 @@ tr:hover td {
 }
 
 .link-list li > span,
+.link-list li > small,
 .link-list li > a,
 .link-list li > button,
 .link-list li > div {
@@ -755,6 +756,153 @@ tr:hover td {
 
 .file-toolbar {
   grid-template-columns: minmax(180px, 1fr) repeat(4, minmax(130px, 180px)) auto;
+}
+
+.topology-toolbar,
+.report-toolbar {
+  grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(130px, 180px)) auto;
+}
+
+.topology-tree,
+.topology-tree ul,
+.environment-board,
+.runtime-board {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.topology-tree {
+  min-width: 0;
+}
+
+.topology-tree ul {
+  margin-top: 10px;
+  padding-left: 22px;
+}
+
+.topology-tree li {
+  min-width: 0;
+  border-left: 3px solid var(--line-strong);
+  border-radius: 0 10px 10px 0;
+  background: var(--panel-soft);
+  padding: 10px 12px;
+}
+
+.topology-tree li > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.topology-tree li > span {
+  margin-top: 8px;
+}
+
+.topology-tree strong,
+.topology-tree small,
+.capability-cloud strong,
+.capability-cloud small,
+.environment-lane strong,
+.environment-lane small,
+.runtime-task strong,
+.runtime-task small,
+.mini-kv dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.topology-tree .muted-node {
+  opacity: 0.72;
+}
+
+.capability-cloud {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.capability-cloud button {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  color: var(--text);
+  padding: 10px;
+  text-align: left;
+}
+
+.capability-cloud button:hover {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.environment-board {
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+}
+
+.environment-lane,
+.runtime-board section {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 14px;
+}
+
+.environment-lane header,
+.runtime-board header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+}
+
+.environment-lane article,
+.runtime-task {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  padding: 12px;
+}
+
+.mini-kv {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 6px 10px;
+  min-width: 0;
+  margin: 0;
+}
+
+.mini-kv dt {
+  color: var(--muted);
+}
+
+.mini-kv dd {
+  margin: 0;
+}
+
+.runtime-board {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.runtime-task {
+  min-width: 0;
 }
 
 .repository-matrix {
@@ -1563,6 +1711,8 @@ dialog::backdrop {
   .topbar,
   .toolbar,
   .file-toolbar,
+  .topology-toolbar,
+  .report-toolbar,
   .metric-grid,
   .setup-grid,
   .insight-grid,
@@ -1571,6 +1721,7 @@ dialog::backdrop {
   .command-grid,
   .command-panels,
   .task-layout,
+  .environment-board,
   .ops-grid,
   .run-layout {
     grid-template-columns: 1fr;
@@ -1637,6 +1788,10 @@ dialog::backdrop {
   .command-center > *,
   .command-card,
   .command-panels .panel,
+  .environment-lane,
+  .runtime-board,
+  .runtime-task,
+  .topology-tree,
   .workflow-builder,
   .builder-topbar,
   .builder-shell,
@@ -1686,5 +1841,14 @@ dialog::backdrop {
   .heat-map {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px;
+  }
+
+  .runtime-board,
+  .capability-cloud {
+    grid-template-columns: 1fr;
+  }
+
+  .mini-kv {
+    grid-template-columns: 1fr;
   }
 }
