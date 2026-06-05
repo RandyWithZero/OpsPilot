@@ -189,6 +189,33 @@ h1 {
   text-align: center;
 }
 
+.auth-error {
+  border: 1px solid rgba(201, 56, 56, 0.35);
+  border-radius: 8px;
+  background: var(--red-soft);
+  color: var(--red);
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.check-line {
+  display: flex;
+  grid-template-columns: none;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.check-line input {
+  flex: 0 0 auto;
+  width: 16px;
+  min-height: 16px;
+  margin: 0;
+}
+
 label {
   display: grid;
   gap: 8px;
@@ -332,7 +359,7 @@ small {
   top: 0;
   z-index: 2;
   display: grid;
-  grid-template-columns: minmax(260px, 360px) minmax(160px, 1fr) minmax(260px, auto) auto auto;
+  grid-template-columns: minmax(240px, 340px) minmax(150px, 1fr) minmax(150px, auto) minmax(260px, auto) auto auto;
   gap: 12px;
   align-items: center;
   height: 72px;
@@ -391,6 +418,16 @@ small {
   grid-template-columns: minmax(96px, 120px) minmax(132px, 1fr);
   gap: 8px;
   min-width: 0;
+}
+
+.session-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .actor-context label {
@@ -1776,6 +1813,10 @@ dialog::backdrop {
 
   .actor-context {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .session-summary {
+    white-space: normal;
   }
 
   .command-center {
