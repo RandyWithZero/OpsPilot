@@ -1818,7 +1818,7 @@ paths:
                   $ref: "#/components/schemas/WorkflowRuntimeTask"
   /v1/runtime/tasks/claim:
     post:
-      summary: Claim the next queued runtime task for a fake/local worker
+      summary: Claim the next queued runtime task for a local agent worker
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -1838,7 +1838,7 @@ paths:
   /v1/runtime/tasks/{taskID}/callback:
     post:
       summary: Update a runtime task from a worker callback
-      description: Requires the attempt_token from the claimed task. Repeated identical terminal callbacks are idempotent; stale or mismatched attempt tokens are rejected.
+      description: Requires the attempt_token from the claimed task. Repeated identical terminal callbacks are idempotent; stale or mismatched attempt tokens are rejected. Running callbacks act as worker heartbeats and may renew the task lease.
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -3178,6 +3178,16 @@ components:
           type: string
         timeout_seconds:
           type: integer
+        worker_id:
+          type: string
+          description: Worker instance that most recently claimed the task.
+        heartbeat_at:
+          type: string
+          format: date-time
+        lease_expires_at:
+          type: string
+          format: date-time
+          description: When the current running claim expires. Expired running tasks are requeued with a rotated attempt token.
         claimed_at:
           type: string
           format: date-time
@@ -3205,6 +3215,12 @@ components:
         agent_id:
           type: string
           description: Optional worker filter; omitted claims the oldest queued task.
+        worker_id:
+          type: string
+          description: Optional worker instance ID recorded on the running lease.
+        lease_seconds:
+          type: integer
+          description: Positive lease duration for the claim. Defaults to 60 seconds.
     RuntimeTaskCallback:
       type: object
       required: [attempt_token, status]
@@ -3221,6 +3237,9 @@ components:
         retry:
           type: boolean
           description: On failed callbacks, enqueue another attempt when max_attempts allows.
+        lease_seconds:
+          type: integer
+          description: On running callbacks, renew the lease for this many seconds.
     WorkflowRun:
       type: object
       required: [id, workflow_id, workflow_version_id, trigger_type, status, steps, created_at, updated_at]

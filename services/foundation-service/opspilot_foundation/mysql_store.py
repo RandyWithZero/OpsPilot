@@ -327,7 +327,7 @@ class MySQLStore(MemoryStore):
         for step in self.workflow_step_runs.values():
             self._insert_payload(cursor, "workflow_step_runs", ["id", "workflow_run_id", "workflow_id", "workflow_version_id", "node_id", "step_type", "sequence", "status", "predecessor_node_ids", "created_at", "updated_at"], step)
         for task in self.workflow_runtime_tasks.values():
-            self._insert_payload(cursor, "workflow_runtime_tasks", ["id", "workflow_run_id", "workflow_step_run_id", "workflow_id", "workflow_version_id", "node_id", "agent_id", "skill_id", "model_provider_id", "status", "attempt", "max_attempts", "attempt_token", "created_at", "updated_at"], task)
+            self._insert_payload(cursor, "workflow_runtime_tasks", ["id", "workflow_run_id", "workflow_step_run_id", "workflow_id", "workflow_version_id", "node_id", "agent_id", "skill_id", "model_provider_id", "status", "attempt", "max_attempts", "attempt_token", "worker_id", "heartbeat_at", "lease_expires_at", "created_at", "updated_at"], task)
         for operation in self.vcs_operations.values():
             self._insert_payload(cursor, "vcs_operations", ["id", "provider", "profile_id", "repository_id", "operation_type", "status", "created_at", "updated_at"], operation)
         for event in self.vcs_webhook_events.values():

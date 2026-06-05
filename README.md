@@ -19,6 +19,7 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 - model provider configuration through safe credential references
 - workflow definitions with versioned node/edge models
 - workflow run execution records with ordered step runs and manual status transitions
+- runtime task outbox, local agent worker, controlled skill adapter, and fake model gateway boundary
 - test cases, suites, runs, reports, and quality gates
 - audit events for create/link actions
 
@@ -85,6 +86,39 @@ curl http://localhost:8080/v1/projects \
 Refresh and logout use `/v1/auth/refresh` and `/v1/auth/logout`. Runtime workers and future model/artifact services should use service identities rather than human sessions: Admins create `/v1/service-identities`, store the one-time `service_token` securely, and exchange it at `/v1/service-identities/{serviceIdentityID}/token` for short-lived worker access tokens. That exchange authenticates with the `service_token` body field and does not require a human/Admin bearer session.
 
 The old `X-Actor-ID` / `X-Actor-Role` headers are deprecated compatibility headers. They are ignored unless `OPSPILOT_AUTH_DEV_HEADERS=1` is set, and must not be treated as a production contract.
+
+### Agent Worker
+
+The first real worker process lives in `services/agent-worker`. It uses the foundation API boundary only: claim runtime tasks, heartbeat with the claimed `attempt_token`, call a controlled built-in skill adapter, call the fake model gateway by model provider reference, and callback completion/failure. The worker never reads the credential or secret tables directly, and raw model keys do not enter runtime task, worker output, or audit payloads.
+
+Run the foundation service with auth enabled, create a service identity as an Admin, then exchange the one-time `service_token` for a short-lived worker token:
+
+```sh
+curl -X POST http://localhost:8080/v1/service-identities \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN" \
+  -d '{"name":"local-agent-worker","role":"Operator"}'
+
+curl -X POST http://localhost:8080/v1/service-identities/$SERVICE_ID/token \
+  -H 'Content-Type: application/json' \
+  -d "{\"service_token\":\"$SERVICE_TOKEN\"}"
+```
+
+Start the worker:
+
+```sh
+OPSPILOT_FOUNDATION_URL=http://localhost:8080 \
+OPSPILOT_WORKER_ACCESS_TOKEN="$OPSPILOT_WORKER_ACCESS_TOKEN" \
+make run-agent-worker
+```
+
+For smoke tests, add `--once` by running the module directly:
+
+```sh
+cd services/agent-worker
+OPSPILOT_WORKER_ACCESS_TOKEN="$OPSPILOT_WORKER_ACCESS_TOKEN" python3 -m opspilot_agent_worker --once
+```
+
+Claims accept optional `worker_id`, `agent_id`, and `lease_seconds`. Running callbacks act as heartbeats and may renew the lease; if a running task lease expires, the foundation service requeues the task and rotates the attempt token so stale workers cannot complete it later. Skill execution is intentionally limited to deterministic built-in/mock behavior until a signed external skill package loader is designed.
 
 ### MySQL Persistence
 

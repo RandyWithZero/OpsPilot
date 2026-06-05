@@ -6,7 +6,7 @@ import os
 import secrets
 import base64
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import RLock
 from typing import Any, TypeVar
 
@@ -1371,6 +1371,7 @@ class MemoryStore:
 
     def list_runtime_tasks(self, status: str = "") -> list[dict[str, Any]]:
         with self._lock:
+            self._expire_runtime_task_leases("system")
             tasks = self.workflow_runtime_tasks.values()
             if status:
                 tasks = [task for task in tasks if task.status == status]
@@ -1379,7 +1380,10 @@ class MemoryStore:
     def claim_runtime_task(self, actor_id: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._lock:
             data = data or {}
+            self._expire_runtime_task_leases(actor_id)
             agent_id = str(data.get("agent_id", "")).strip()
+            worker_id = str(data.get("worker_id", "") or actor_id).strip()
+            lease_seconds = self._runtime_non_negative_int(data, "lease_seconds", default=60)
             queued = [task for task in self.workflow_runtime_tasks.values() if task.status == "queued" and (not agent_id or task.agent_id == agent_id)]
             if not queued:
                 raise NotFound("runtime task not found")
@@ -1391,8 +1395,11 @@ class MemoryStore:
             stamp_time = now_utc()
             task.status = "running"
             task.claimed_at = task.claimed_at or stamp_time
+            task.worker_id = worker_id
+            task.heartbeat_at = stamp_time
+            task.lease_expires_at = self._runtime_lease_expires_at(stamp_time, lease_seconds)
             task.updated_at = stamp_time
-            self._audit(actor_id, "workflow.runtime_task.claimed", "workflow_runtime_task", task.id, {"workflow_run_id": run.id, "workflow_step_run_id": step.id, "status": task.status, "attempt": task.attempt})
+            self._audit(actor_id, "workflow.runtime_task.claimed", "workflow_runtime_task", task.id, {"workflow_run_id": run.id, "workflow_step_run_id": step.id, "status": task.status, "attempt": task.attempt, "worker_id": worker_id})
             return self._runtime_task_response(task, include_attempt_token=True)
 
     def callback_runtime_task(self, actor_id: str, task_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1416,8 +1423,12 @@ class MemoryStore:
             if next_status == "running":
                 if task.status not in {"queued", "running"}:
                     raise Conflict("runtime task cannot transition from current status")
+                lease_seconds = self._runtime_non_negative_int(data, "lease_seconds", default=0)
                 task.status = "running"
                 task.claimed_at = task.claimed_at or stamp_time
+                task.heartbeat_at = stamp_time
+                if lease_seconds:
+                    task.lease_expires_at = self._runtime_lease_expires_at(stamp_time, lease_seconds)
                 task.updated_at = stamp_time
                 self._audit(actor_id, "workflow.runtime_task.updated", "workflow_runtime_task", task.id, {"workflow_run_id": run.id, "workflow_step_run_id": step.id, "status": task.status, "attempt": task.attempt})
                 return self._workflow_run_response(run)
@@ -2069,6 +2080,30 @@ class MemoryStore:
                 "binding_names": sorted(step.input.keys()),
             }
         )
+
+    def _expire_runtime_task_leases(self, actor_id: str) -> None:
+        stamp_time = now_utc()
+        for task in self.workflow_runtime_tasks.values():
+            if task.status != "running" or not task.lease_expires_at or not _is_past(task.lease_expires_at):
+                continue
+            run = self.workflow_runs.get(task.workflow_run_id)
+            step = self.workflow_step_runs.get(task.workflow_step_run_id)
+            if run is None or step is None or run.status != "running" or step.status != "running":
+                continue
+            previous_worker_id = task.worker_id
+            task.status = "queued"
+            task.worker_id = ""
+            task.claimed_at = ""
+            task.heartbeat_at = ""
+            task.lease_expires_at = ""
+            task.attempt_token = secrets.token_urlsafe(24)
+            task.updated_at = stamp_time
+            self._audit(actor_id, "workflow.runtime_task.lease_expired", "workflow_runtime_task", task.id, {"workflow_run_id": run.id, "workflow_step_run_id": step.id, "status": task.status, "attempt": task.attempt, "worker_id": previous_worker_id})
+
+    def _runtime_lease_expires_at(self, stamp_time: str, lease_seconds: int) -> str:
+        if lease_seconds <= 0:
+            return ""
+        return (datetime.fromisoformat(stamp_time) + timedelta(seconds=lease_seconds)).isoformat()
 
     def _validate_runtime_callback_token(self, task: WorkflowRuntimeTask, data: dict[str, Any]) -> None:
         token = str(data.get("attempt_token", "")).strip()

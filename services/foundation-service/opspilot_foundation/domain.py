@@ -480,6 +480,9 @@ class WorkflowRuntimeTask:
     output: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     timeout_seconds: int = 0
+    worker_id: str = ""
+    heartbeat_at: str = ""
+    lease_expires_at: str = ""
     id: str = ""
     claimed_at: str = ""
     completed_at: str = ""
