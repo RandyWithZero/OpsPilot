@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from threading import RLock
 from typing import Any, TypeVar
 
-from .auth import ActorContext, AuthenticationRequired, PermissionDenied, hash_token, issue_access_token, new_refresh_token, normalize_role, refresh_expires_at
+from .auth import ActorContext, AuthenticationRequired, PermissionDenied, dev_issuer_password, hash_token, issue_access_token, new_refresh_token, normalize_role, refresh_expires_at
 from .domain import (
     Agent,
     Asset,
@@ -153,6 +153,10 @@ class MemoryStore:
         return "ok"
 
     def issue_dev_session(self, data: dict[str, Any]) -> dict[str, Any]:
+        configured_password = dev_issuer_password()
+        supplied_password = str(data.get("password", "") or "")
+        if not configured_password or not supplied_password or not hmac.compare_digest(configured_password, supplied_password):
+            raise AuthenticationRequired("development login password is invalid")
         role = normalize_role(data.get("role"))
         if not role:
             raise InvalidInput("role is invalid")

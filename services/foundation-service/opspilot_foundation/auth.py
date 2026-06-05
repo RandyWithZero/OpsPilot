@@ -66,6 +66,10 @@ def dev_issuer_enabled() -> bool:
     return os.environ.get("OPSPILOT_AUTH_DEV_ISSUER", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def dev_issuer_password() -> str:
+    return os.environ.get("OPSPILOT_AUTH_DEV_PASSWORD", "")
+
+
 def normalize_role(raw_role: str | None) -> str:
     role = str(raw_role or "").strip().lower()
     if not role:

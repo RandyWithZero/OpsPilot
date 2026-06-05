@@ -88,18 +88,23 @@ The current service uses in-memory persistence by default so the backend slice i
 
 Protected foundation routes require an `Authorization: Bearer ...` access token. Access tokens are short-lived and backed by persistent user sessions or service identities; refresh tokens/session records and service identity token hashes are stored by the foundation store and survive MySQL-backed service restarts. Missing, malformed, expired, or revoked tokens return `401 authentication_required`; authenticated callers with insufficient Admin/Operator/Viewer permissions return `403 permission_denied`.
 
+Browser clients should use the web gateway's same-origin routes for foundation calls: `/v1/*`, `/healthz`, and `/readyz`. Shared test environments must not require users to configure `localhost` or a public foundation IP in the browser. Direct `http://localhost:8080` examples below are only for local service development and CLI smoke checks.
+
 For local development, enable the replaceable token issuer explicitly:
 
 ```sh
-OPSPILOT_AUTH_DEV_ISSUER=1 OPSPILOT_AUTH_TOKEN_SECRET='local-dev-secret' make run-foundation
+OPSPILOT_AUTH_DEV_ISSUER=1 \
+OPSPILOT_AUTH_DEV_PASSWORD='local-dev-password' \
+OPSPILOT_AUTH_TOKEN_SECRET='local-dev-secret' \
+make run-foundation
 ```
 
-Then issue a local Admin session:
+Then issue a local Admin session. Missing, empty, or incorrect `password` values return `401 authentication_required`:
 
 ```sh
 curl -X POST http://localhost:8080/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"actor_id":"usr_000001","role":"Admin","email":"admin@local.opspilot","name":"Local Admin"}'
+  -d '{"actor_id":"usr_000001","role":"Admin","email":"admin@local.opspilot","name":"Local Admin","password":"local-dev-password"}'
 ```
 
 Use the returned `access_token` on protected calls:
@@ -111,7 +116,7 @@ curl http://localhost:8080/v1/projects \
 
 Refresh and logout use `/v1/auth/refresh` and `/v1/auth/logout`. Runtime workers and future model/artifact services should use service identities rather than human sessions: Admins create `/v1/service-identities`, store the one-time `service_token` securely, and exchange it at `/v1/service-identities/{serviceIdentityID}/token` for short-lived worker access tokens. That exchange authenticates with the `service_token` body field and does not require a human/Admin bearer session.
 
-The old `X-Actor-ID` / `X-Actor-Role` headers are deprecated compatibility headers. They are ignored unless `OPSPILOT_AUTH_DEV_HEADERS=1` is set, and must not be treated as a production contract.
+The old `X-Actor-ID` / `X-Actor-Role` headers are deprecated compatibility headers. They are ignored unless `OPSPILOT_AUTH_DEV_HEADERS=1` is set, and must not be treated as a production or shared test contract.
 
 ### Agent Worker
 

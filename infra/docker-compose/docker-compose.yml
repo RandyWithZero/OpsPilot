@@ -61,6 +61,7 @@ services:
       dockerfile: services/foundation-service/Dockerfile
     environment:
       OPSPILOT_AUTH_DEV_ISSUER: "1"
+      OPSPILOT_AUTH_DEV_PASSWORD: ${OPSPILOT_AUTH_DEV_PASSWORD:-local-dev-password}
       OPSPILOT_AUTH_TOKEN_SECRET: ${OPSPILOT_AUTH_TOKEN_SECRET:-local-compose-secret}
       OPSPILOT_SECRET_FINGERPRINT_KEY: ${OPSPILOT_SECRET_FINGERPRINT_KEY:-local-compose-fingerprint-key}
       OPSPILOT_FOUNDATION_MYSQL_DSN: mysql://${OPSPILOT_MYSQL_USER:-opspilot}:${OPSPILOT_MYSQL_PASSWORD:-opspilot}@mysql:3306/${OPSPILOT_MYSQL_DATABASE:-opspilot_foundation}
@@ -115,6 +116,7 @@ services:
     command: python scripts/release_smoke.py
     environment:
       OPSPILOT_SMOKE_FOUNDATION_URL: http://foundation:8080
+      OPSPILOT_AUTH_DEV_PASSWORD: ${OPSPILOT_AUTH_DEV_PASSWORD:-local-dev-password}
     volumes:
       - ../../:/workspace:ro
     depends_on:
