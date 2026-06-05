@@ -972,6 +972,50 @@ class MySQLStorePersistenceTest(unittest.TestCase):
                 expired_token, _ = issue_access_token(ActorContext(actor_id="usr_owner", role="Viewer", session_id="ses_expired"), -1)
                 expired = self.http_json(base_url, "GET", "/v1/projects", headers={"Authorization": f"Bearer {expired_token}"}, expected_status=401)
             self.assertEqual(expired["error"], "authentication_required")
+
+            with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+                inactive_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_inactive", "role": "Admin"})
+                FoundationHandler.store.update_user("usr_inactive", "usr_inactive", {"status": "inactive"})
+                inactive_access = self.http_json(
+                    base_url,
+                    "GET",
+                    "/v1/projects",
+                    headers={"Authorization": f"Bearer {inactive_session['access_token']}"},
+                    expected_status=401,
+                )
+                inactive_refresh = self.http_json(
+                    base_url,
+                    "POST",
+                    "/v1/auth/refresh",
+                    {"refresh_token": inactive_session["refresh_token"]},
+                    expected_status=401,
+                )
+            self.assertEqual(inactive_access["error"], "authentication_required")
+            self.assertEqual(inactive_refresh["error"], "authentication_required")
+
+            with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+                demoted_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_demoted", "role": "Admin"})
+                FoundationHandler.store.update_user("usr_demoted", "usr_demoted", {"roles": [{"scope": "platform", "name": "Viewer"}]})
+                demoted_high_risk = self.http_json(
+                    base_url,
+                    "GET",
+                    "/v1/credentials",
+                    headers={"Authorization": f"Bearer {demoted_session['access_token']}"},
+                    expected_status=403,
+                )
+                demoted_read = self.http_json(base_url, "GET", "/v1/projects", headers={"Authorization": f"Bearer {demoted_session['access_token']}"})
+            self.assertEqual(demoted_high_risk["error"], "permission_denied")
+            self.assertEqual(demoted_read, [])
+
+            with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+                identity = FoundationHandler.store.create_service_identity("usr_admin", {"name": "http-worker", "role": "Operator"})
+                service_exchange = self.http_json(
+                    base_url,
+                    "POST",
+                    f"/v1/service-identities/{identity['id']}/token",
+                    {"service_token": identity["service_token"]},
+                )
+            self.assertIn("access_token", service_exchange)
         finally:
             server.shutdown()
             thread.join(timeout=2)

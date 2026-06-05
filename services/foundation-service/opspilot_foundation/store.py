@@ -108,23 +108,27 @@ class MemoryStore:
                 stamp(user)
                 self.users[user.id] = user
                 self._audit(user.id, "identity.user.created", "user", user.id, {"email": user.email, "source": "dev_auth_issuer"})
+            elif not any(normalize_role(existing.get("name")) == role for existing in user.roles):
+                user.roles = [{"scope": "platform", "name": role}]
+                user.updated_at = now_utc()
             return self._create_session(user.id, role)
 
     def refresh_session(self, data: dict[str, Any]) -> dict[str, Any]:
-        token_hash = hash_token(str(data.get("refresh_token", "") or ""))
-        if not token_hash:
+        refresh_token_value = str(data.get("refresh_token", "") or "")
+        if not refresh_token_value:
             raise AuthenticationRequired("refresh token is required")
+        token_hash = hash_token(refresh_token_value)
         with self._lock:
             session = next((candidate for candidate in self.auth_sessions.values() if candidate.refresh_token_hash == token_hash), None)
             if session is None or session.status != "active" or _is_past(session.expires_at):
                 raise AuthenticationRequired("refresh token is invalid")
-            if session.user_id not in self.users:
-                raise AuthenticationRequired("session user no longer exists")
+            user_role = self._active_user_role(session.user_id)
             session.expires_at = refresh_expires_at()
             session.updated_at = now_utc()
+            session.role = user_role
             refresh_token = new_refresh_token()
             session.refresh_token_hash = hash_token(refresh_token)
-            access_token, access_expires_at = issue_access_token(ActorContext(actor_id=session.user_id, role=session.role, session_id=session.id))
+            access_token, access_expires_at = issue_access_token(ActorContext(actor_id=session.user_id, role=user_role, session_id=session.id))
             self._audit(session.user_id, "auth.session.refreshed", "auth_session", session.id, {"subject_type": "user"})
             return {"access_token": access_token, "access_token_expires_at": access_expires_at, "refresh_token": refresh_token, "refresh_token_expires_at": session.expires_at, "token_type": "Bearer"}
 
@@ -164,7 +168,10 @@ class MemoryStore:
             return [self._public_service_identity(identity) for identity in self.service_identities.values()]
 
     def issue_service_identity_token(self, actor_id: str, service_identity_id: str, data: dict[str, Any]) -> dict[str, Any]:
-        service_token_hash = hash_token(str(data.get("service_token", "") or ""))
+        service_token = str(data.get("service_token", "") or "")
+        if not service_token:
+            raise AuthenticationRequired("service identity token is required")
+        service_token_hash = hash_token(service_token)
         with self._lock:
             identity = self.service_identities.get(service_identity_id)
             if identity is None:
@@ -198,9 +205,8 @@ class MemoryStore:
                 raise AuthenticationRequired("session is not active")
             if session.user_id != actor.actor_id:
                 raise AuthenticationRequired("session subject mismatch")
-            if session.user_id not in self.users:
-                raise AuthenticationRequired("session user no longer exists")
-            return ActorContext(actor_id=session.user_id, role=session.role, subject_type="user", session_id=session.id)
+            user_role = self._active_user_role(session.user_id)
+            return ActorContext(actor_id=session.user_id, role=user_role, subject_type="user", session_id=session.id)
 
     def create_user(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
         user = User(**pick(data, User))
@@ -228,6 +234,15 @@ class MemoryStore:
         data = asdict(identity)
         data.pop("token_hash", None)
         return data
+
+    def _active_user_role(self, user_id: str) -> str:
+        user = self.users.get(user_id)
+        if user is None or user.status != "active":
+            raise AuthenticationRequired("session user is not active")
+        role = highest_role(user.roles)
+        if not role:
+            raise AuthenticationRequired("session user has no active role")
+        return role
 
     def list_users(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -2214,6 +2229,18 @@ def unique(values: list[str]) -> list[str]:
             seen.add(value)
             out.append(value)
     return out
+
+
+def highest_role(roles: list[dict[str, str]]) -> str:
+    rank = {"Viewer": 1, "Operator": 2, "Admin": 3}
+    selected = ""
+    selected_rank = 0
+    for role_entry in roles:
+        role = normalize_role(role_entry.get("name"))
+        if rank.get(role, 0) > selected_rank:
+            selected = role
+            selected_rank = rank[role]
+    return selected
 
 
 def stamp(entity: Any) -> None:

@@ -126,6 +126,10 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if path == "/v1/auth/refresh":
             self._call(lambda: self.store.refresh_session(body))
             return
+        parts = [part for part in path.split("/") if part]
+        if len(parts) == 4 and parts[:2] == ["v1", "service-identities"] and parts[3] == "token":
+            self._call(lambda: self.store.issue_service_identity_token(parts[2], parts[2], body))
+            return
         actor = self._actor(path)
         if actor is None:
             return
@@ -202,10 +206,6 @@ class FoundationHandler(BaseHTTPRequestHandler):
             self._call(lambda: self.store.create_service_identity(actor_id, body), HTTPStatus.CREATED)
             return
 
-        parts = [part for part in path.split("/") if part]
-        if len(parts) == 4 and parts[:2] == ["v1", "service-identities"] and parts[3] == "token":
-            self._call(lambda: self.store.issue_service_identity_token(actor_id, parts[2], body))
-            return
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "upload-grants":
             self._call(lambda: self.store.create_upload_grant(actor_id, parts[2], self._file_access_filters(actor, {})), HTTPStatus.CREATED)
             return

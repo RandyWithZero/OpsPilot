@@ -104,6 +104,8 @@ paths:
   /v1/service-identities/{serviceIdentityID}/token:
     post:
       summary: Issue a short-lived access token for a service identity
+      security: []
+      description: Authenticates with the service identity's one-time `service_token` in the request body. This worker/service token exchange does not require a human Admin bearer session.
       parameters:
         - name: serviceIdentityID
           in: path
@@ -125,8 +127,6 @@ paths:
                 $ref: "#/components/schemas/AccessTokenResponse"
         "401":
           $ref: "#/components/responses/AuthenticationRequired"
-        "403":
-          $ref: "#/components/responses/PermissionDenied"
   /v1/service-identities/{serviceIdentityID}:
     delete:
       summary: Revoke a service identity
@@ -748,7 +748,7 @@ paths:
   /v1/files:
     get:
       summary: List file metadata objects
-      description: Non-admin callers are server-scoped to owner_id = X-Actor-ID. Admin callers may filter across owners.
+      description: Non-admin callers are server-scoped to the authenticated actor ID as owner_id. Admin callers may filter across owners.
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -822,7 +822,7 @@ paths:
   /v1/files/{fileID}:
     delete:
       summary: Soft-delete a file object and remove its stored object when present
-      description: Non-admin callers are server-scoped to owner_id = X-Actor-ID. Admin callers may filter across owners.
+      description: Non-admin callers are server-scoped to the authenticated actor ID as owner_id. Admin callers may filter across owners.
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -931,7 +931,7 @@ paths:
   /v1/files/{fileID}/download:
     get:
       summary: Download a file through a controlled response
-      description: Non-admin callers are server-scoped to owner_id = X-Actor-ID. Admin callers may filter across owners.
+      description: Non-admin callers are server-scoped to the authenticated actor ID as owner_id. Admin callers may filter across owners.
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
