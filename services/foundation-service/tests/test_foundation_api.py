@@ -733,9 +733,9 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.store.link_project_asset("usr_test_actor", project["id"], asset["id"])
         self.store.create_environment("usr_test_actor", {"project_id": project["id"], "name": "QA", "type": "QA", "owner_id": user["id"], "asset_ids": [asset["id"]]})
         self.create_workflow_with_run(project["id"])
-        case = self.store.create_test_case("usr_test_actor", {"project_id": project["id"], "name": "Smoke"})
-        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Release", "case_ids": [case["id"]]})
-        test_run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"]})
+        case = self.store.create_test_case(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Release", "case_ids": [case["id"]]})
+        test_run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
         file_object = self.store.upload_file_object(
             user["id"],
             {
@@ -1887,11 +1887,11 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         )
 
         test_case = self.store.create_test_case(
-            "usr_test_actor",
+            user["id"],
             {"project_id": project["id"], "name": "Login smoke", "case_type": "automated", "steps": [{"action": "open", "expected": "login form"}]},
         )
-        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Smoke", "case_ids": [test_case["id"], test_case["id"]]})
-        run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"], "environment_id": environment["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke", "case_ids": [test_case["id"], test_case["id"]]})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"], "environment_id": environment["id"]})
         updated_run = self.store.update_test_run("usr_test_actor", run["id"], {"status": "passed", "results": [{"case_id": test_case["id"], "status": "passed"}]})
         artifact = self.store.upload_file_object(
             "usr_test_actor",
@@ -1920,7 +1920,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertEqual(gate["status"], "passed")
 
         with self.assertRaises(Exception) as raised:
-            self.store.create_test_suite("usr_test_actor", {"project_id": other_project["id"], "name": "Bad Suite", "case_ids": [test_case["id"]]})
+            self.store.create_test_suite(user["id"], {"project_id": other_project["id"], "name": "Bad Suite", "case_ids": [test_case["id"]]})
         self.assertEqual(getattr(raised.exception, "code", ""), "conflict")
 
         other_project_artifact = self.store.upload_file_object(
@@ -1966,8 +1966,8 @@ class MySQLStorePersistenceTest(unittest.TestCase):
     def test_artifact_ingest_parses_junit_and_updates_quality_gate(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
         project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
-        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Smoke"})
-        run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
         junit = b"""<testsuite tests="2" failures="1" errors="0" skipped="0">
           <testcase classname="auth" name="login"/>
           <testcase classname="auth" name="logout"><failure message="boom"/></testcase>
@@ -2002,8 +2002,8 @@ class MySQLStorePersistenceTest(unittest.TestCase):
     def test_artifact_ingest_preserves_parse_failure_report(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
         project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
-        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Smoke"})
-        run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
 
         ingest = self.store.ingest_test_run_artifacts(
             user["id"],
@@ -2021,8 +2021,8 @@ class MySQLStorePersistenceTest(unittest.TestCase):
     def test_service_identity_can_ingest_artifacts_through_authenticated_api(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin", "roles": [{"scope": "platform", "name": "Admin"}]})
         project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
-        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Smoke"})
-        run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
         with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
             service = self.store.create_service_identity(user["id"], {"name": "ci-uploader", "role": "Operator", "project_ids": [project["id"]]})
             token = service["access_token"]
@@ -2094,8 +2094,8 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin", "roles": [{"scope": "platform", "name": "Admin"}]})
         allowed_project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
         blocked_project = self.store.create_project("usr_test_actor", {"key": "WEB", "name": "Web Console", "owner_id": user["id"]})
-        suite = self.store.create_test_suite("usr_test_actor", {"project_id": blocked_project["id"], "name": "Smoke"})
-        run = self.store.create_test_run("usr_test_actor", {"project_id": blocked_project["id"], "suite_id": suite["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": blocked_project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": blocked_project["id"], "suite_id": suite["id"]})
         with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
             service = self.store.create_service_identity(user["id"], {"name": "ci-uploader", "role": "Operator", "project_ids": [allowed_project["id"]]})
 
@@ -2110,11 +2110,34 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertEqual(self.store.list_reports(), [])
         self.assertEqual(self.store.list_quality_gates(), [])
 
+    def test_service_identity_test_resource_creation_rejects_cross_project_scope(self) -> None:
+        user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin", "roles": [{"scope": "platform", "name": "Admin"}]})
+        allowed_project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
+        blocked_project = self.store.create_project("usr_test_actor", {"key": "WEB", "name": "Web Console", "owner_id": user["id"]})
+        blocked_case = self.store.create_test_case(user["id"], {"project_id": blocked_project["id"], "name": "Blocked smoke"})
+        blocked_suite = self.store.create_test_suite(user["id"], {"project_id": blocked_project["id"], "name": "Blocked suite", "case_ids": [blocked_case["id"]]})
+        with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+            service = self.store.create_service_identity(user["id"], {"name": "ci-test-resource-writer", "role": "Operator", "project_ids": [allowed_project["id"]]})
+
+        with self.assertRaises(Exception) as case_denied:
+            self.store.create_test_case(service["id"], {"project_id": blocked_project["id"], "name": "Cross-project case"})
+        with self.assertRaises(Exception) as suite_denied:
+            self.store.create_test_suite(service["id"], {"project_id": blocked_project["id"], "name": "Cross-project suite", "case_ids": [blocked_case["id"]]})
+        with self.assertRaises(Exception) as run_denied:
+            self.store.create_test_run(service["id"], {"project_id": blocked_project["id"], "suite_id": blocked_suite["id"]})
+
+        self.assertEqual(getattr(case_denied.exception, "code", ""), "permission_denied")
+        self.assertEqual(getattr(suite_denied.exception, "code", ""), "permission_denied")
+        self.assertEqual(getattr(run_denied.exception, "code", ""), "permission_denied")
+        self.assertEqual([case["name"] for case in self.store.list_test_cases()], ["Blocked smoke"])
+        self.assertEqual([suite["name"] for suite in self.store.list_test_suites()], ["Blocked suite"])
+        self.assertEqual(self.store.list_test_runs(), [])
+
     def test_artifact_ingest_invalid_later_artifact_leaves_no_partial_file_state(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
         project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
-        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Smoke"})
-        run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
 
         with self.assertRaises(Exception) as raised:
             self.store.ingest_test_run_artifacts(
@@ -2136,8 +2159,8 @@ class MySQLStorePersistenceTest(unittest.TestCase):
     def test_artifact_ingest_without_parseable_summary_fails_gate(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
         project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
-        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Smoke"})
-        run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"]})
+        suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke"})
+        run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"]})
 
         ingest = self.store.ingest_test_run_artifacts(
             user["id"],

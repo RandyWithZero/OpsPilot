@@ -1536,7 +1536,8 @@ class MemoryStore:
         test_case = TestCase(**pick(data, TestCase))
         test_case.validate()
         with self._lock:
-            self._project(test_case.project_id)
+            project = self._project(test_case.project_id)
+            self._require_project_actor(actor_id, project)
             test_case.id = self._id("tca")
             stamp(test_case)
             self.test_cases[test_case.id] = test_case
@@ -1551,7 +1552,8 @@ class MemoryStore:
         suite = TestSuite(**pick(data, TestSuite))
         suite.validate()
         with self._lock:
-            self._project(suite.project_id)
+            project = self._project(suite.project_id)
+            self._require_project_actor(actor_id, project)
             suite.case_ids = unique(suite.case_ids)
             for case_id in suite.case_ids:
                 test_case = self._test_case(case_id)
@@ -1571,7 +1573,8 @@ class MemoryStore:
         run = TestRun(**pick(data, TestRun))
         run.validate()
         with self._lock:
-            self._project(run.project_id)
+            project = self._project(run.project_id)
+            self._require_project_actor(actor_id, project)
             suite = self._test_suite(run.suite_id)
             if suite.project_id != run.project_id:
                 raise Conflict("test suite belongs to another project")

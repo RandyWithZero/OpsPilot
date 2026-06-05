@@ -188,9 +188,15 @@ The file service stores metadata in the foundation store and file bytes behind a
 The storage adapter is selected with `OPSPILOT_OBJECT_STORAGE_ADAPTER`:
 
 - `local` (default): creates the local object root automatically.
-- `s3` or `minio`: uses the optional boto3 S3 client against AWS S3 or any MinIO-compatible endpoint. Install it with `python3 -m pip install boto3` before running the service with this adapter. Set `OPSPILOT_S3_BUCKET`, optionally `OPSPILOT_S3_ENDPOINT_URL`, `OPSPILOT_S3_REGION`, and `OPSPILOT_S3_AUTO_CREATE_BUCKET=false` when the bucket must already exist. The local docker-compose MinIO service is reachable at `http://localhost:9000` with root credentials `opspilot` / `opspilot-secret`.
+- `s3` or `minio`: uses the optional boto3 S3 client against AWS S3 or any MinIO-compatible endpoint. Set `OPSPILOT_S3_BUCKET`, optionally `OPSPILOT_S3_ENDPOINT_URL`, `OPSPILOT_S3_REGION`, and `OPSPILOT_S3_AUTO_CREATE_BUCKET=false` when the bucket must already exist. The local docker-compose MinIO service is reachable at `http://localhost:9000` with root credentials `opspilot` / `opspilot-secret`.
 
-Local MinIO smoke:
+Local MinIO smoke without host Python package tooling:
+
+```bash
+make run-foundation-minio
+```
+
+That target starts MinIO and a `python:3.12-slim` foundation container that installs `boto3` inside the container before running the service. It publishes MinIO on host ports `19000`/`19001` to avoid collisions with an existing local MinIO, while the foundation container uses the internal `http://minio:9000` endpoint. To run the service directly on the host instead, install the optional S3 dependency first:
 
 ```bash
 docker compose -f infra/docker-compose/docker-compose.yml up -d minio
