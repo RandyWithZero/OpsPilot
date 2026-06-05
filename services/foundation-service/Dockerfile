@@ -12,6 +12,6 @@ COPY services/foundation-service/ /app/
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=10s --timeout=5s --retries=12 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).read()"
+HEALTHCHECK --interval=10s --timeout=5s --retries=12 CMD python -m opspilot_foundation.readiness_check
 
 CMD ["python", "-m", "opspilot_foundation.server"]

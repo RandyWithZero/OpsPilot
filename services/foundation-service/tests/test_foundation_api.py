@@ -22,6 +22,7 @@ from opspilot_foundation.mysql_store import MySQLStore  # noqa: E402
 from opspilot_foundation.server import FoundationHandler  # noqa: E402
 from opspilot_foundation.storage import LocalFileStorage, S3CompatibleStorage  # noqa: E402
 from opspilot_foundation.domain import InvalidInput  # noqa: E402
+from opspilot_foundation.readiness_check import is_ready  # noqa: E402
 from opspilot_foundation.auth import (  # noqa: E402
     ActorContext,
     PermissionDenied,
@@ -489,6 +490,22 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertIn("projects", diagnostics["metrics"])
         self.assertNotIn("secret", json.dumps(diagnostics).lower())
         self.assertNotIn("token", json.dumps(diagnostics).lower())
+
+    def test_readiness_healthcheck_requires_ok_status_and_migrations(self) -> None:
+        diagnostics = self.store.diagnostics()
+        self.assertTrue(is_ready(diagnostics))
+
+        degraded = json.loads(json.dumps(diagnostics))
+        degraded["dependencies"]["storage"]["status"] = "error"
+        self.assertFalse(is_ready(degraded))
+
+        pending = json.loads(json.dumps(diagnostics))
+        pending["dependencies"]["store"]["migration_status"] = "pending"
+        self.assertFalse(is_ready(pending))
+
+        top_level_degraded = json.loads(json.dumps(diagnostics))
+        top_level_degraded["status"] = "degraded"
+        self.assertFalse(is_ready(top_level_degraded))
 
     def test_local_rbac_permission_matrix_for_high_risk_apis(self) -> None:
         self.assertEqual(actor_from_headers({}).role, "Viewer")
