@@ -139,6 +139,9 @@ class MemoryStore:
         with self._lock:
             if project.owner_id not in self.users:
                 raise NotFound("owner not found")
+            for member_id in project.member_ids:
+                if member_id not in self.users:
+                    raise NotFound("member not found")
             if any(existing.key.lower() == project.key.lower() for existing in self.projects.values()):
                 raise Conflict("project key already exists")
             project.id = self._id("prj")
@@ -157,6 +160,9 @@ class MemoryStore:
             project = self._project(project_id)
             if "owner_id" in data and data["owner_id"] and data["owner_id"] not in self.users:
                 raise NotFound("owner not found")
+            for member_id in data.get("member_ids", []):
+                if member_id not in self.users:
+                    raise NotFound("member not found")
             if "key" in data and any(existing.id != project_id and existing.key.lower() == str(data["key"]).lower() for existing in self.projects.values()):
                 raise Conflict("project key already exists")
             for key in ("key", "name", "owner_id", "description", "member_ids", "status"):
@@ -214,6 +220,61 @@ class MemoryStore:
             project.updated_at = now_utc()
             self._audit(actor_id, "project.asset.unlinked", "project", project.id, {"asset_id": asset_id})
             return asdict(project)
+
+    def link_environment_asset(self, actor_id: str, environment_id: str, asset_id: str) -> dict[str, Any]:
+        with self._lock:
+            environment = self._environment(environment_id)
+            project = self._project(environment.project_id)
+            self._validate_environment_asset(project, asset_id)
+            environment.asset_ids = unique([*environment.asset_ids, asset_id])
+            environment.updated_at = now_utc()
+            self._audit(actor_id, "environment.asset.linked", "environment", environment.id, {"asset_id": asset_id})
+            return asdict(environment)
+
+    def unlink_environment_asset(self, actor_id: str, environment_id: str, asset_id: str) -> dict[str, Any]:
+        with self._lock:
+            environment = self._environment(environment_id)
+            environment.asset_ids = [existing_id for existing_id in environment.asset_ids if existing_id != asset_id]
+            environment.updated_at = now_utc()
+            self._audit(actor_id, "environment.asset.unlinked", "environment", environment.id, {"asset_id": asset_id})
+            return asdict(environment)
+
+    def link_environment_member(self, actor_id: str, environment_id: str, user_id: str) -> dict[str, Any]:
+        with self._lock:
+            environment = self._environment(environment_id)
+            project = self._project(environment.project_id)
+            self._validate_environment_member(project, user_id)
+            environment.member_ids = unique([*environment.member_ids, user_id])
+            environment.updated_at = now_utc()
+            self._audit(actor_id, "environment.member.linked", "environment", environment.id, {"user_id": user_id})
+            return asdict(environment)
+
+    def unlink_environment_member(self, actor_id: str, environment_id: str, user_id: str) -> dict[str, Any]:
+        with self._lock:
+            environment = self._environment(environment_id)
+            if user_id == environment.owner_id:
+                raise Conflict("environment owner cannot be unlinked")
+            environment.member_ids = [existing_id for existing_id in environment.member_ids if existing_id != user_id]
+            environment.updated_at = now_utc()
+            self._audit(actor_id, "environment.member.unlinked", "environment", environment.id, {"user_id": user_id})
+            return asdict(environment)
+
+    def link_environment_file(self, actor_id: str, environment_id: str, file_id: str) -> dict[str, Any]:
+        with self._lock:
+            environment = self._environment(environment_id)
+            self._validate_topology_file("environment", environment.id, file_id)
+            environment.file_ids = unique([*environment.file_ids, file_id])
+            environment.updated_at = now_utc()
+            self._audit(actor_id, "environment.file.linked", "environment", environment.id, {"file_id": file_id})
+            return asdict(environment)
+
+    def unlink_environment_file(self, actor_id: str, environment_id: str, file_id: str) -> dict[str, Any]:
+        with self._lock:
+            environment = self._environment(environment_id)
+            environment.file_ids = [existing_id for existing_id in environment.file_ids if existing_id != file_id]
+            environment.updated_at = now_utc()
+            self._audit(actor_id, "environment.file.unlinked", "environment", environment.id, {"file_id": file_id})
+            return asdict(environment)
 
     def link_project_environment(self, actor_id: str, project_id: str, environment_id: str) -> dict[str, Any]:
         with self._lock:
@@ -275,15 +336,19 @@ class MemoryStore:
             if asset.parent_id and asset.parent_id not in self.assets:
                 raise NotFound("parent asset not found")
             asset.id = self._id("ast")
+            self._validate_asset_files(asset)
             asset.capabilities = unique(asset.capabilities)
+            asset.tags = unique(asset.tags)
+            asset.file_ids = unique(asset.file_ids)
             stamp(asset)
             self.assets[asset.id] = asset
             self._audit(actor_id, "asset.created", "asset", asset.id, {"category": asset.category})
             return asdict(asset)
 
-    def list_assets(self) -> list[dict[str, Any]]:
+    def list_assets(self, filters: dict[str, str] | None = None) -> list[dict[str, Any]]:
+        filters = filters or {}
         with self._lock:
-            return [asdict(asset) for asset in self.assets.values()]
+            return [asdict(asset) for asset in self.assets.values() if self._matches_asset_filters(asset, filters)]
 
     def update_asset(self, actor_id: str, asset_id: str, data: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -295,12 +360,18 @@ class MemoryStore:
                     raise Conflict("asset cannot be its own parent")
                 if data["parent_id"] not in self.assets:
                     raise NotFound("parent asset not found")
-            for key in ("category", "name", "status", "owner_id", "location", "parent_id", "capabilities", "properties"):
+                self._validate_asset_parent(asset_id, str(data["parent_id"]))
+            for key in ("category", "name", "status", "owner_id", "location", "parent_id", "capabilities", "tags", "file_ids", "properties"):
                 if key in data:
                     setattr(asset, key, data[key])
             asset.capabilities = unique(asset.capabilities)
+            asset.tags = unique(asset.tags)
+            asset.file_ids = unique(asset.file_ids)
+            self._validate_asset_files(asset)
             asset.validate()
             asset.updated_at = now_utc()
+            if asset.status in {"retired", "archived", "deleted"}:
+                self._cleanup_asset_references(asset.id)
             self._audit(actor_id, "asset.updated", "asset", asset.id, {"status": asset.status})
             return asdict(asset)
 
@@ -309,12 +380,7 @@ class MemoryStore:
             asset = self.assets.pop(asset_id, None)
             if asset is None:
                 raise NotFound("asset not found")
-            for project in self.projects.values():
-                project.asset_ids = [existing_id for existing_id in project.asset_ids if existing_id != asset_id]
-                project.updated_at = now_utc()
-            for environment in self.environments.values():
-                environment.asset_ids = [existing_id for existing_id in environment.asset_ids if existing_id != asset_id]
-                environment.updated_at = now_utc()
+            self._cleanup_asset_references(asset_id)
             for child in self.assets.values():
                 if child.parent_id == asset_id:
                     child.parent_id = ""
@@ -328,42 +394,48 @@ class MemoryStore:
         with self._lock:
             if environment.project_id not in self.projects:
                 raise NotFound("project not found")
-            if environment.owner_id not in self.users:
-                raise NotFound("owner not found")
+            project = self._project(environment.project_id)
+            self._validate_environment_member(project, environment.owner_id)
+            for member_id in environment.member_ids:
+                self._validate_environment_member(project, member_id)
             for asset_id in environment.asset_ids:
-                if asset_id not in self.assets:
-                    raise NotFound("asset not found")
+                self._validate_environment_asset(project, asset_id)
+            self._validate_environment_files(environment)
             environment.id = self._id("env")
             environment.member_ids = unique([*environment.member_ids, environment.owner_id])
             environment.asset_ids = unique(environment.asset_ids)
+            environment.file_ids = unique(environment.file_ids)
             stamp(environment)
             self.environments[environment.id] = environment
-            project = self.projects[environment.project_id]
             project.environment_ids = unique([*project.environment_ids, environment.id])
             project.updated_at = environment.updated_at
             self._audit(actor_id, "environment.created", "environment", environment.id, {"project_id": environment.project_id, "type": environment.type})
             return asdict(environment)
 
-    def list_environments(self) -> list[dict[str, Any]]:
+    def list_environments(self, filters: dict[str, str] | None = None) -> list[dict[str, Any]]:
+        filters = filters or {}
         with self._lock:
-            return [asdict(environment) for environment in self.environments.values()]
+            return [asdict(environment) for environment in self.environments.values() if self._matches_environment_filters(environment, filters)]
 
     def update_environment(self, actor_id: str, environment_id: str, data: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             environment = self._environment(environment_id)
             if "project_id" in data and data["project_id"] not in self.projects:
                 raise NotFound("project not found")
-            if "owner_id" in data and data["owner_id"] and data["owner_id"] not in self.users:
-                raise NotFound("owner not found")
-            for asset_id in data.get("asset_ids", []):
-                if asset_id not in self.assets:
-                    raise NotFound("asset not found")
             old_project_id = environment.project_id
-            for key in ("project_id", "name", "type", "status", "owner_id", "member_ids", "asset_ids", "endpoints"):
+            for key in ("project_id", "name", "type", "status", "owner_id", "member_ids", "asset_ids", "endpoints", "file_ids"):
                 if key in data:
                     setattr(environment, key, data[key])
+            project = self._project(environment.project_id)
+            self._validate_environment_member(project, environment.owner_id)
+            for member_id in environment.member_ids:
+                self._validate_environment_member(project, member_id)
+            for asset_id in environment.asset_ids:
+                self._validate_environment_asset(project, asset_id)
+            self._validate_environment_files(environment)
             environment.member_ids = unique([*environment.member_ids, environment.owner_id])
             environment.asset_ids = unique(environment.asset_ids)
+            environment.file_ids = unique(environment.file_ids)
             environment.validate()
             environment.updated_at = now_utc()
             if old_project_id != environment.project_id and old_project_id in self.projects:
@@ -442,6 +514,7 @@ class MemoryStore:
                 file_object.deleted_at = now_utc()
                 file_object.deleted_by = actor_id or "system"
                 file_object.updated_at = file_object.deleted_at
+                self._cleanup_file_references(file_object.id)
                 self._audit(actor_id, "file.deleted", "file", file_object.id, self._file_audit_metadata(file_object))
             return {"status": "deleted"}
 
@@ -1265,6 +1338,101 @@ class MemoryStore:
         if file_id not in self.files:
             raise NotFound("file not found")
         return self.files[file_id]
+
+    def _validate_asset_parent(self, asset_id: str, parent_id: str) -> None:
+        seen = {asset_id}
+        current_id = parent_id
+        while current_id:
+            if current_id in seen:
+                raise Conflict("asset parent hierarchy cannot contain cycles")
+            seen.add(current_id)
+            current = self.assets.get(current_id)
+            if current is None:
+                raise NotFound("parent asset not found")
+            current_id = current.parent_id
+
+    def _validate_topology_file(self, resource_type: str, resource_id: str, file_id: str) -> None:
+        file_object = self._file(file_id)
+        if file_object.status == "deleted":
+            raise Conflict("file is deleted")
+        if file_object.resource_type and file_object.resource_type != resource_type:
+            raise Conflict("file resource type does not match")
+        if file_object.resource_id and file_object.resource_id != resource_id:
+            raise Conflict("file resource id does not match")
+
+    def _validate_asset_files(self, asset: Asset) -> None:
+        asset.file_ids = unique(asset.file_ids)
+        for file_id in asset.file_ids:
+            self._validate_topology_file("asset", asset.id, file_id)
+
+    def _validate_environment_files(self, environment: Environment) -> None:
+        environment.file_ids = unique(environment.file_ids)
+        for file_id in environment.file_ids:
+            self._validate_topology_file("environment", environment.id, file_id)
+
+    def _validate_environment_member(self, project: Project, user_id: str) -> None:
+        if not user_id or user_id not in self.users:
+            raise NotFound("member not found")
+        if user_id not in unique([project.owner_id, *project.member_ids]):
+            raise Conflict("member belongs to another project")
+
+    def _validate_environment_asset(self, project: Project, asset_id: str) -> None:
+        if asset_id not in self.assets:
+            raise NotFound("asset not found")
+        if asset_id not in project.asset_ids:
+            raise Conflict("asset is not bound to project")
+
+    def _cleanup_asset_references(self, asset_id: str) -> None:
+        for project in self.projects.values():
+            if asset_id in project.asset_ids:
+                project.asset_ids = [existing_id for existing_id in project.asset_ids if existing_id != asset_id]
+                project.updated_at = now_utc()
+        for environment in self.environments.values():
+            if asset_id in environment.asset_ids:
+                environment.asset_ids = [existing_id for existing_id in environment.asset_ids if existing_id != asset_id]
+                environment.updated_at = now_utc()
+
+    def _cleanup_file_references(self, file_id: str) -> None:
+        for asset in self.assets.values():
+            if file_id in asset.file_ids:
+                asset.file_ids = [existing_id for existing_id in asset.file_ids if existing_id != file_id]
+                asset.updated_at = now_utc()
+        for environment in self.environments.values():
+            if file_id in environment.file_ids:
+                environment.file_ids = [existing_id for existing_id in environment.file_ids if existing_id != file_id]
+                environment.updated_at = now_utc()
+
+    def _matches_asset_filters(self, asset: Asset, filters: dict[str, str]) -> bool:
+        if filters.get("category") and asset.category != filters["category"]:
+            return False
+        if filters.get("status") and asset.status != filters["status"]:
+            return False
+        if filters.get("parent_id") and asset.parent_id != filters["parent_id"]:
+            return False
+        if filters.get("capability") and filters["capability"] not in asset.capabilities:
+            return False
+        if filters.get("tag") and filters["tag"] not in asset.tags:
+            return False
+        project_id = filters.get("project_id", "")
+        if project_id and (project_id not in self.projects or asset.id not in self.projects[project_id].asset_ids):
+            return False
+        environment_id = filters.get("environment_id", "")
+        if environment_id and (environment_id not in self.environments or asset.id not in self.environments[environment_id].asset_ids):
+            return False
+        return True
+
+    def _matches_environment_filters(self, environment: Environment, filters: dict[str, str]) -> bool:
+        if filters.get("project_id") and environment.project_id != filters["project_id"]:
+            return False
+        if filters.get("type") and environment.type != filters["type"]:
+            return False
+        if filters.get("status") and environment.status != filters["status"]:
+            return False
+        if filters.get("asset_id") and filters["asset_id"] not in environment.asset_ids:
+            return False
+        if filters.get("member_id") and filters["member_id"] not in environment.member_ids:
+            return False
+        return True
 
     def _upload_session(self, session_id: str) -> UploadSession:
         if session_id not in self.upload_sessions:

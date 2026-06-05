@@ -80,6 +80,8 @@ class Asset:
     location: str = ""
     parent_id: str = ""
     capabilities: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    file_ids: list[str] = field(default_factory=list)
     properties: dict[str, Any] = field(default_factory=dict)
     id: str = ""
     created_at: str = ""
@@ -106,6 +108,7 @@ class Environment:
     member_ids: list[str] = field(default_factory=list)
     asset_ids: list[str] = field(default_factory=list)
     endpoints: list[dict[str, str]] = field(default_factory=list)
+    file_ids: list[str] = field(default_factory=list)
     id: str = ""
     created_at: str = ""
     updated_at: str = ""

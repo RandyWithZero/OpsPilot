@@ -163,9 +163,11 @@ class FoundationSliceTest(unittest.TestCase):
 
         asset = self.store.create_asset(
             "usr_test_actor",
-            {"category": "workstation", "name": "ws-01", "owner_id": user["id"], "capabilities": ["gpu", "linux", "gpu"]},
+            {"category": "workstation", "name": "ws-01", "owner_id": user["id"], "capabilities": ["gpu", "linux", "gpu"], "tags": ["cuda", "cuda"]},
         )
         self.assertEqual(asset["capabilities"], ["gpu", "linux"])
+        self.assertEqual(asset["tags"], ["cuda"])
+        self.store.link_project_asset("usr_test_actor", project["id"], asset["id"])
 
         environment = self.store.create_environment(
             "usr_test_actor",
@@ -197,6 +199,7 @@ class FoundationSliceTest(unittest.TestCase):
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
         project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops Platform", "owner_id": user["id"]})
         asset = self.store.create_asset("usr_test_actor", {"category": "vm", "name": "runner-01"})
+        self.store.link_project_asset("usr_test_actor", project["id"], asset["id"])
         environment = self.store.create_environment(
             "usr_test_actor",
             {"project_id": project["id"], "name": "DEV", "type": "DEV", "owner_id": user["id"], "asset_ids": [asset["id"]]},
@@ -219,6 +222,90 @@ class FoundationSliceTest(unittest.TestCase):
 
         self.store.delete_environment("usr_test_actor", environment["id"])
         self.assertEqual(self.store.list_environments(), [])
+
+    def test_asset_hierarchy_rejects_cycles_and_supports_filters(self) -> None:
+        owner = self.store.create_user("usr_test_actor", {"email": "owner@example.com", "name": "Owner"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops", "owner_id": owner["id"]})
+        workstation = self.store.create_asset(
+            "usr_test_actor",
+            {"category": "workstation", "name": "ws-01", "capabilities": ["linux", "cuda"], "tags": ["qe-lab"]},
+        )
+        gpu = self.store.create_asset(
+            "usr_test_actor",
+            {"category": "gpu", "name": "rtx-01", "parent_id": workstation["id"], "capabilities": ["cuda"]},
+        )
+        self.store.link_project_asset("usr_test_actor", project["id"], workstation["id"])
+        self.store.link_project_asset("usr_test_actor", project["id"], gpu["id"])
+
+        with self.assertRaises(Exception) as raised:
+            self.store.update_asset("usr_test_actor", workstation["id"], {"parent_id": gpu["id"]})
+
+        self.assertEqual(getattr(raised.exception, "code", ""), "conflict")
+        self.assertEqual([asset["id"] for asset in self.store.list_assets({"category": "gpu"})], [gpu["id"]])
+        self.assertEqual([asset["id"] for asset in self.store.list_assets({"capability": "cuda", "project_id": project["id"]})], [workstation["id"], gpu["id"]])
+
+    def test_environment_bindings_validate_project_members_assets_and_files(self) -> None:
+        owner = self.store.create_user("usr_test_actor", {"email": "owner@example.com", "name": "Owner"})
+        member = self.store.create_user("usr_test_actor", {"email": "member@example.com", "name": "Member"})
+        outsider = self.store.create_user("usr_test_actor", {"email": "outsider@example.com", "name": "Outsider"})
+        project = self.store.create_project(
+            "usr_test_actor",
+            {"key": "OPS", "name": "Ops", "owner_id": owner["id"], "member_ids": [member["id"]]},
+        )
+        other_project = self.store.create_project("usr_test_actor", {"key": "OTH", "name": "Other", "owner_id": outsider["id"]})
+        project_asset = self.store.create_asset("usr_test_actor", {"category": "server", "name": "srv-01"})
+        other_asset = self.store.create_asset("usr_test_actor", {"category": "server", "name": "srv-02"})
+        self.store.link_project_asset("usr_test_actor", project["id"], project_asset["id"])
+        self.store.link_project_asset("usr_test_actor", other_project["id"], other_asset["id"])
+
+        with self.assertRaises(Exception) as asset_error:
+            self.store.create_environment(
+                "usr_test_actor",
+                {"project_id": project["id"], "name": "QA", "type": "QA", "owner_id": owner["id"], "asset_ids": [other_asset["id"]]},
+            )
+        self.assertEqual(getattr(asset_error.exception, "code", ""), "conflict")
+
+        with self.assertRaises(Exception) as member_error:
+            self.store.create_environment(
+                "usr_test_actor",
+                {"project_id": project["id"], "name": "QE", "type": "QE", "owner_id": owner["id"], "member_ids": [outsider["id"]]},
+            )
+        self.assertEqual(getattr(member_error.exception, "code", ""), "conflict")
+
+        environment = self.store.create_environment(
+            "usr_test_actor",
+            {"project_id": project["id"], "name": "QA", "type": "QA", "owner_id": owner["id"]},
+        )
+        linked_asset = self.store.link_environment_asset("usr_test_actor", environment["id"], project_asset["id"])
+        linked_member = self.store.link_environment_member("usr_test_actor", environment["id"], member["id"])
+        file_object = self.store.create_file_object(
+            "usr_test_actor",
+            {
+                "filename": "qa-plan.txt",
+                "content_type": "text/plain",
+                "size_bytes": 42,
+                "owner_id": owner["id"],
+                "resource_type": "environment",
+                "resource_id": environment["id"],
+                "module": "attachments",
+            },
+        )
+        linked_file = self.store.link_environment_file("usr_test_actor", environment["id"], file_object["id"])
+
+        self.assertEqual(linked_asset["asset_ids"], [project_asset["id"]])
+        self.assertEqual(linked_member["member_ids"], [owner["id"], member["id"]])
+        self.assertEqual(linked_file["file_ids"], [file_object["id"]])
+        self.assertEqual([env["id"] for env in self.store.list_environments({"project_id": project["id"], "asset_id": project_asset["id"]})], [environment["id"]])
+
+        self.store.delete_file_object("usr_test_actor", file_object["id"])
+        self.assertEqual(self.store.list_environments()[0]["file_ids"], [])
+        self.store.delete_asset("usr_test_actor", project_asset["id"])
+        self.assertEqual(self.store.list_projects()[0]["asset_ids"], [])
+        self.assertEqual(self.store.list_environments()[0]["asset_ids"], [])
+        actions = [event["action"] for event in self.store.list_audit_events()]
+        self.assertIn("environment.asset.linked", actions)
+        self.assertIn("environment.member.linked", actions)
+        self.assertIn("environment.file.linked", actions)
 
     def test_json_contract_uses_snake_case(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
@@ -418,6 +505,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
     def test_project_delete_cascades_mysql_child_rows_before_reload(self) -> None:
         user, project = self.create_owned_project()
         asset = self.store.create_asset("usr_test_actor", {"category": "vm", "name": "runner"})
+        self.store.link_project_asset("usr_test_actor", project["id"], asset["id"])
         self.store.create_environment("usr_test_actor", {"project_id": project["id"], "name": "QA", "type": "QA", "owner_id": user["id"], "asset_ids": [asset["id"]]})
         self.create_workflow_with_run(project["id"])
         case = self.store.create_test_case("usr_test_actor", {"project_id": project["id"], "name": "Smoke"})
