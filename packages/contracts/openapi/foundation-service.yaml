@@ -1618,6 +1618,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkflowRun"
+  /v1/workflow-runs/{runID}/cancel:
+    post:
+      summary: Cancel an active workflow run and any queued/running runtime tasks
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cancelled workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
   /v1/workflow-runs/{runID}/steps/{stepRunID}:
     patch:
       summary: Update an agent, manual, or result workflow step run
@@ -1640,6 +1658,86 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/WorkflowStepRunUpdate"
+      responses:
+        "200":
+          description: Updated workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+  /v1/runtime/tasks:
+    get:
+      summary: List workflow runtime dispatch tasks
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            enum: [queued, running, completed, failed, cancelled, timed_out]
+      responses:
+        "200":
+          description: Runtime tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkflowRuntimeTask"
+  /v1/runtime/tasks/claim:
+    post:
+      summary: Claim the next queued runtime task for a fake/local worker
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuntimeTaskClaim"
+      responses:
+        "200":
+          description: Claimed runtime task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRuntimeTask"
+  /v1/runtime/tasks/{taskID}/callback:
+    post:
+      summary: Update a runtime task from a worker callback
+      description: Requires the attempt_token from the claimed task. Repeated identical terminal callbacks are idempotent; stale or mismatched attempt tokens are rejected.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: taskID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuntimeTaskCallback"
+      responses:
+        "200":
+          description: Updated workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+  /v1/runtime/tasks/{taskID}/timeout:
+    post:
+      summary: Mark a queued/running runtime task as timed out
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: taskID
+          in: path
+          required: true
+          schema:
+            type: string
       responses:
         "200":
           description: Updated workflow run
@@ -1853,7 +1951,7 @@ components:
       schema:
         type: string
         enum: [Admin, Operator, Viewer]
-      description: Local MVP role context. Admin may manage secrets, GitLab profiles, and destructive/archive actions; Operator may perform operational workflow/file/VCS actions; Viewer is read-only. Omitted locally is treated as Viewer; invalid roles have no permissions.
+      description: Local MVP role context. Admin may manage secrets, GitLab profiles, model/agent/skill configuration, and destructive/archive actions; Operator may run workflows, claim/callback runtime tasks, and perform operational file/VCS actions; Viewer is read-only. Omitted locally is treated as Viewer; invalid roles have no permissions.
     GitLabWebhookToken:
       name: X-Gitlab-Token
       in: header
@@ -2783,6 +2881,83 @@ components:
         updated_at:
           type: string
           format: date-time
+    WorkflowRuntimeTask:
+      type: object
+      required: [id, workflow_run_id, workflow_step_run_id, workflow_id, workflow_version_id, node_id, agent_id, status, attempt, max_attempts, attempt_token, input_summary, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        workflow_run_id:
+          type: string
+        workflow_step_run_id:
+          type: string
+        workflow_id:
+          type: string
+        workflow_version_id:
+          type: string
+        node_id:
+          type: string
+        agent_id:
+          type: string
+        skill_id:
+          type: string
+        model_provider_id:
+          type: string
+          description: Model provider reference ID only; credentials and model keys are never included.
+        status:
+          enum: [queued, running, completed, failed, cancelled, timed_out]
+        attempt:
+          type: integer
+        max_attempts:
+          type: integer
+        attempt_token:
+          type: string
+          description: Idempotency token for this concrete attempt; callbacks with stale/mismatched tokens are rejected.
+        input_summary:
+          type: object
+          description: Sanitized binding summary with IDs and binding names only, not credential/model key values.
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+        timeout_seconds:
+          type: integer
+        claimed_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    RuntimeTaskClaim:
+      type: object
+      properties:
+        agent_id:
+          type: string
+          description: Optional worker filter; omitted claims the oldest queued task.
+    RuntimeTaskCallback:
+      type: object
+      required: [attempt_token, status]
+      properties:
+        attempt_token:
+          type: string
+        status:
+          enum: [running, completed, failed]
+        output:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+        retry:
+          type: boolean
+          description: On failed callbacks, enqueue another attempt when max_attempts allows.
     WorkflowRun:
       type: object
       required: [id, workflow_id, workflow_version_id, trigger_type, status, steps, created_at, updated_at]
