@@ -35,6 +35,7 @@ from .domain import (
     VCSWebhookEvent,
     WorkflowDefinition,
     WorkflowRun,
+    WorkflowRuntimeTask,
     WorkflowStepRun,
     WorkflowVersion,
     now_utc,
@@ -70,6 +71,7 @@ class MemoryStore:
         self.workflow_versions: dict[str, WorkflowVersion] = {}
         self.workflow_runs: dict[str, WorkflowRun] = {}
         self.workflow_step_runs: dict[str, WorkflowStepRun] = {}
+        self.workflow_runtime_tasks: dict[str, WorkflowRuntimeTask] = {}
         self.test_cases: dict[str, TestCase] = {}
         self.test_suites: dict[str, TestSuite] = {}
         self.test_runs: dict[str, TestRun] = {}
@@ -1176,6 +1178,7 @@ class MemoryStore:
                     step.updated_at = stamp_time
             self._audit(actor_id, "workflow.run.started", "workflow_run", run.id, {"workflow_id": run.workflow_id, "workflow_version_id": run.workflow_version_id})
             self._refresh_workflow_run_status(run)
+            self._dispatch_ready_agent_steps(actor_id, run)
             return self._workflow_run_response(run)
 
     def update_workflow_step_run(self, actor_id: str, run_id: str, step_run_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1204,12 +1207,142 @@ class MemoryStore:
             if "output" in data:
                 if not isinstance(data["output"], dict):
                     raise InvalidInput("workflow step output must be an object")
-                step.output = data["output"]
+                step.output = self._sanitize_runtime_capture(data["output"])
             if "error" in data:
-                step.error = str(data["error"])
+                step.error = self._sanitize_runtime_error(str(data["error"]))
             step.updated_at = stamp_time
+            if step.step_type == "agent" and next_status in {"completed", "failed", "skipped"}:
+                self._close_active_runtime_tasks_for_step(step, next_status, stamp_time)
             self._audit(actor_id, "workflow.step.updated", "workflow_step_run", step.id, {"workflow_run_id": run.id, "step_type": step.step_type, "status": step.status})
             self._refresh_workflow_run_status(run)
+            self._dispatch_ready_agent_steps(actor_id, run)
+            return self._workflow_run_response(run)
+
+    def list_runtime_tasks(self, status: str = "") -> list[dict[str, Any]]:
+        with self._lock:
+            tasks = self.workflow_runtime_tasks.values()
+            if status:
+                tasks = [task for task in tasks if task.status == status]
+            return [self._runtime_task_response(task, include_attempt_token=False) for task in sorted(tasks, key=lambda task: (task.created_at, task.id))]
+
+    def claim_runtime_task(self, actor_id: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        with self._lock:
+            data = data or {}
+            agent_id = str(data.get("agent_id", "")).strip()
+            queued = [task for task in self.workflow_runtime_tasks.values() if task.status == "queued" and (not agent_id or task.agent_id == agent_id)]
+            if not queued:
+                raise NotFound("runtime task not found")
+            task = sorted(queued, key=lambda candidate: (candidate.created_at, candidate.id))[0]
+            run = self._workflow_run(task.workflow_run_id)
+            step = self._workflow_step_run(task.workflow_step_run_id)
+            if run.status != "running" or step.status != "running":
+                raise Conflict("runtime task is not claimable")
+            stamp_time = now_utc()
+            task.status = "running"
+            task.claimed_at = task.claimed_at or stamp_time
+            task.updated_at = stamp_time
+            self._audit(actor_id, "workflow.runtime_task.claimed", "workflow_runtime_task", task.id, {"workflow_run_id": run.id, "workflow_step_run_id": step.id, "status": task.status, "attempt": task.attempt})
+            return self._runtime_task_response(task, include_attempt_token=True)
+
+    def callback_runtime_task(self, actor_id: str, task_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            task = self._runtime_task(task_id)
+            run = self._workflow_run(task.workflow_run_id)
+            step = self._workflow_step_run(task.workflow_step_run_id)
+            self._validate_runtime_callback_token(task, data)
+            next_status = str(data.get("status", "")).strip()
+            if next_status not in {"running", "completed", "failed"}:
+                raise InvalidInput("runtime callback status must be running, completed, or failed")
+            callback_output = self._runtime_callback_output(data)
+            callback_error = self._runtime_callback_error(data)
+            if task.status in {"completed", "failed", "timed_out", "cancelled"}:
+                if self._runtime_callback_is_idempotent(task, next_status, callback_output, callback_error):
+                    return self._workflow_run_response(run)
+                raise Conflict("runtime task cannot transition from current status")
+            if run.status != "running" or step.status != "running":
+                raise Conflict("runtime task workflow run is not active")
+            stamp_time = now_utc()
+            if next_status == "running":
+                if task.status not in {"queued", "running"}:
+                    raise Conflict("runtime task cannot transition from current status")
+                task.status = "running"
+                task.claimed_at = task.claimed_at or stamp_time
+                task.updated_at = stamp_time
+                self._audit(actor_id, "workflow.runtime_task.updated", "workflow_runtime_task", task.id, {"workflow_run_id": run.id, "workflow_step_run_id": step.id, "status": task.status, "attempt": task.attempt})
+                return self._workflow_run_response(run)
+            if task.status not in {"queued", "running"}:
+                raise Conflict("runtime task cannot transition from current status")
+            if callback_output is not None:
+                task.output = callback_output
+            if callback_error is not None:
+                task.error = callback_error
+            task.status = next_status
+            task.completed_at = stamp_time
+            task.updated_at = stamp_time
+            if next_status == "completed":
+                step.status = "completed"
+                step.output = task.output
+                step.completed_at = stamp_time
+                step.updated_at = stamp_time
+            else:
+                should_retry = bool(data.get("retry") is True) and task.attempt < task.max_attempts
+                if should_retry:
+                    step.status = "pending"
+                    step.error = task.error
+                    step.updated_at = stamp_time
+                    self._queue_runtime_task(actor_id, run, step, task.attempt + 1, task.max_attempts, task.timeout_seconds)
+                else:
+                    step.status = "failed"
+                    step.error = task.error
+                    step.completed_at = stamp_time
+                    step.updated_at = stamp_time
+            self._audit(actor_id, "workflow.runtime_task.callback", "workflow_runtime_task", task.id, {"workflow_run_id": run.id, "workflow_step_run_id": step.id, "status": task.status, "attempt": task.attempt})
+            self._refresh_workflow_run_status(run)
+            self._dispatch_ready_agent_steps(actor_id, run)
+            return self._workflow_run_response(run)
+
+    def timeout_runtime_task(self, actor_id: str, task_id: str) -> dict[str, Any]:
+        with self._lock:
+            task = self._runtime_task(task_id)
+            if task.status in {"completed", "failed", "timed_out", "cancelled"}:
+                return self._workflow_run_response(self._workflow_run(task.workflow_run_id))
+            run = self._workflow_run(task.workflow_run_id)
+            step = self._workflow_step_run(task.workflow_step_run_id)
+            if run.status != "running" or step.status != "running":
+                raise Conflict("runtime task workflow run is not active")
+            stamp_time = now_utc()
+            task.status = "timed_out"
+            task.error = task.error or "runtime task timed out"
+            task.completed_at = stamp_time
+            task.updated_at = stamp_time
+            step.status = "failed"
+            step.error = task.error
+            step.completed_at = stamp_time
+            step.updated_at = stamp_time
+            self._audit(actor_id, "workflow.runtime_task.timed_out", "workflow_runtime_task", task.id, {"workflow_run_id": run.id, "workflow_step_run_id": step.id, "status": task.status, "attempt": task.attempt})
+            self._refresh_workflow_run_status(run)
+            return self._workflow_run_response(run)
+
+    def cancel_workflow_run(self, actor_id: str, run_id: str) -> dict[str, Any]:
+        with self._lock:
+            run = self._workflow_run(run_id)
+            if run.status in {"completed", "failed", "cancelled"}:
+                raise Conflict("workflow run cannot be cancelled from current status")
+            stamp_time = now_utc()
+            run.status = "cancelled"
+            run.completed_at = stamp_time
+            run.updated_at = stamp_time
+            for step in self._steps_for_run(run.id):
+                if step.status in {"pending", "running"}:
+                    step.status = "skipped" if step.step_type != "manual" else "failed"
+                    step.completed_at = stamp_time
+                    step.updated_at = stamp_time
+            for task in self.workflow_runtime_tasks.values():
+                if task.workflow_run_id == run.id and task.status in {"queued", "running"}:
+                    task.status = "cancelled"
+                    task.completed_at = stamp_time
+                    task.updated_at = stamp_time
+            self._audit(actor_id, "workflow.run.cancelled", "workflow_run", run.id, {"workflow_id": run.workflow_id, "workflow_version_id": run.workflow_version_id})
             return self._workflow_run_response(run)
 
     def create_test_case(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1542,6 +1675,11 @@ class MemoryStore:
             raise NotFound("workflow step run not found")
         return self.workflow_step_runs[step_run_id]
 
+    def _runtime_task(self, task_id: str) -> WorkflowRuntimeTask:
+        if task_id not in self.workflow_runtime_tasks:
+            raise NotFound("runtime task not found")
+        return self.workflow_runtime_tasks[task_id]
+
     def _test_case(self, case_id: str) -> TestCase:
         if case_id not in self.test_cases:
             raise NotFound("test case not found")
@@ -1604,6 +1742,10 @@ class MemoryStore:
                     raise Conflict("workflow node skill is not allowed by agent")
                 if model_provider_id and model_provider_id != agent.model_provider_id:
                     raise Conflict("workflow node model provider is not allowed by agent")
+            config = node.get("config", {})
+            if node_type == "agent_task" and isinstance(config, dict):
+                self._runtime_max_attempts(config)
+                self._runtime_non_negative_int(config, "timeout_seconds", default=0)
 
     def _workflow_run_response(self, run: WorkflowRun) -> dict[str, Any]:
         response = asdict(run)
@@ -1663,6 +1805,9 @@ class MemoryStore:
         for step_id, step in list(self.workflow_step_runs.items()):
             if step.workflow_id == workflow_id:
                 self.workflow_step_runs.pop(step_id, None)
+        for task_id, task in list(self.workflow_runtime_tasks.items()):
+            if task.workflow_id == workflow_id:
+                self.workflow_runtime_tasks.pop(task_id, None)
         for version_id, version in list(self.workflow_versions.items()):
             if version.workflow_id == workflow_id:
                 self.workflow_versions.pop(version_id, None)
@@ -1675,7 +1820,7 @@ class MemoryStore:
             raise InvalidInput("manual workflow step runs cannot be skipped")
         allowed = {
             "pending": {"running", "completed", "failed", "skipped"},
-            "running": {"completed", "failed", "skipped"},
+            "running": {"running", "completed", "failed", "skipped"},
             "completed": set(),
             "failed": set(),
             "skipped": set(),
@@ -1699,6 +1844,8 @@ class MemoryStore:
                 raise Conflict("predecessor step must be terminal before downstream transition")
 
     def _refresh_workflow_run_status(self, run: WorkflowRun) -> None:
+        if run.status == "cancelled":
+            return
         steps = self._steps_for_run(run.id)
         executable_steps = [step for step in steps if step.step_type != "trigger"]
         if any(step.status == "failed" for step in executable_steps):
@@ -1714,6 +1861,147 @@ class MemoryStore:
         if run.status != "created":
             run.status = "running"
             run.updated_at = now_utc()
+
+    def _dispatch_ready_agent_steps(self, actor_id: str, run: WorkflowRun) -> None:
+        if run.status != "running":
+            return
+        for step in self._steps_for_run(run.id):
+            if step.step_type != "agent" or step.status != "pending":
+                continue
+            try:
+                self._validate_step_predecessors(run, step)
+            except Conflict:
+                continue
+            max_attempts = self._runtime_max_attempts(step.input)
+            timeout_seconds = self._runtime_non_negative_int(step.input, "timeout_seconds", default=0)
+            self._queue_runtime_task(actor_id, run, step, self._next_runtime_attempt(step), max(1, max_attempts), max(0, timeout_seconds))
+
+    def _queue_runtime_task(self, actor_id: str, run: WorkflowRun, step: WorkflowStepRun, attempt: int, max_attempts: int, timeout_seconds: int) -> WorkflowRuntimeTask:
+        if any(task.workflow_step_run_id == step.id and task.status in {"queued", "running"} for task in self.workflow_runtime_tasks.values()):
+            raise Conflict("runtime task is already active for workflow step")
+        stamp_time = now_utc()
+        task = WorkflowRuntimeTask(
+            workflow_run_id=run.id,
+            workflow_step_run_id=step.id,
+            workflow_id=run.workflow_id,
+            workflow_version_id=run.workflow_version_id,
+            node_id=step.node_id,
+            agent_id=step.agent_id,
+            skill_id=step.skill_id,
+            model_provider_id=step.model_provider_id,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            timeout_seconds=timeout_seconds,
+            input_summary=self._runtime_input_summary(step),
+        )
+        task.id = self._id("wrt")
+        task.attempt_token = secrets.token_urlsafe(24)
+        stamp(task)
+        self.workflow_runtime_tasks[task.id] = task
+        step.status = "running"
+        step.started_at = step.started_at or stamp_time
+        step.updated_at = stamp_time
+        self._audit(actor_id, "workflow.runtime_task.dispatched", "workflow_runtime_task", task.id, {"workflow_run_id": run.id, "workflow_step_run_id": step.id, "status": task.status, "attempt": task.attempt})
+        return task
+
+    def _next_runtime_attempt(self, step: WorkflowStepRun) -> int:
+        attempts = [task.attempt for task in self.workflow_runtime_tasks.values() if task.workflow_step_run_id == step.id]
+        return max(attempts, default=0) + 1
+
+    def _runtime_input_summary(self, step: WorkflowStepRun) -> dict[str, Any]:
+        return redact_sensitive_payload(
+            {
+                "node_id": step.node_id,
+                "agent_id": step.agent_id,
+                "skill_id": step.skill_id,
+                "model_provider_ref": step.model_provider_id,
+                "binding_names": sorted(step.input.keys()),
+            }
+        )
+
+    def _validate_runtime_callback_token(self, task: WorkflowRuntimeTask, data: dict[str, Any]) -> None:
+        token = str(data.get("attempt_token", "")).strip()
+        if not token:
+            raise InvalidInput("runtime callback requires attempt_token")
+        if token != task.attempt_token:
+            raise Conflict("runtime callback attempt_token does not match")
+
+    def _runtime_callback_is_idempotent(self, task: WorkflowRuntimeTask, next_status: str, output: dict[str, Any] | None, error: str | None) -> bool:
+        if next_status != task.status:
+            return False
+        if output is not None and output != task.output:
+            return False
+        if error is not None and error != task.error:
+            return False
+        return True
+
+    def _close_active_runtime_tasks_for_step(self, step: WorkflowStepRun, step_status: str, stamp_time: str) -> None:
+        task_status = {"completed": "completed", "failed": "failed", "skipped": "cancelled"}[step_status]
+        for task in self.workflow_runtime_tasks.values():
+            if task.workflow_step_run_id == step.id and task.status in {"queued", "running"}:
+                task.status = task_status
+                task.output = step.output if step_status == "completed" else task.output
+                task.error = step.error if step_status == "failed" else task.error
+                task.completed_at = stamp_time
+                task.updated_at = stamp_time
+
+    def _runtime_task_response(self, task: WorkflowRuntimeTask, *, include_attempt_token: bool) -> dict[str, Any]:
+        response = asdict(task)
+        if not include_attempt_token:
+            response.pop("attempt_token", None)
+        return response
+
+    def _runtime_callback_output(self, data: dict[str, Any]) -> dict[str, Any] | None:
+        if "output" not in data:
+            return None
+        if not isinstance(data["output"], dict):
+            raise InvalidInput("runtime task output must be an object")
+        return self._sanitize_runtime_capture(data["output"])
+
+    def _runtime_callback_error(self, data: dict[str, Any]) -> str | None:
+        if "error" not in data:
+            return None
+        return self._sanitize_runtime_error(str(data["error"]))
+
+    def _sanitize_runtime_capture(self, value: Any) -> Any:
+        redacted = redact_sensitive_payload(value)
+        if isinstance(redacted, dict):
+            return {str(key): self._sanitize_runtime_capture(item) for key, item in redacted.items()}
+        if isinstance(redacted, list):
+            return [self._sanitize_runtime_capture(item) for item in redacted]
+        if isinstance(redacted, str) and self._looks_token_like(redacted):
+            return "[REDACTED]"
+        return redacted
+
+    def _sanitize_runtime_error(self, value: str) -> str:
+        return "[REDACTED]" if self._looks_token_like(value) else value
+
+    def _looks_token_like(self, value: str) -> bool:
+        lowered = value.lower()
+        return any(marker in lowered for marker in ("token", "secret", "password", "api_key", "apikey", "key=", "key:"))
+
+    def _runtime_max_attempts(self, data: dict[str, Any]) -> int:
+        if "max_attempts" in data:
+            return self._runtime_positive_int(data, "max_attempts")
+        retries = self._runtime_non_negative_int(data, "retries", default=0)
+        return retries + 1
+
+    def _runtime_positive_int(self, data: dict[str, Any], key: str) -> int:
+        value = self._runtime_non_negative_int(data, key, default=1)
+        if value <= 0:
+            raise InvalidInput(f"{key} must be a positive integer")
+        return value
+
+    def _runtime_non_negative_int(self, data: dict[str, Any], key: str, *, default: int) -> int:
+        if key not in data or data[key] is None or data[key] == "":
+            return default
+        try:
+            value = int(data[key])
+        except (TypeError, ValueError) as exc:
+            raise InvalidInput(f"{key} must be an integer") from exc
+        if value < 0:
+            raise InvalidInput(f"{key} must not be negative")
+        return value
 
     def _id(self, prefix: str) -> str:
         self._ids += 1

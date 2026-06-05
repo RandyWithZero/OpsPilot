@@ -29,6 +29,7 @@ from .domain import (
     VCSWebhookEvent,
     WorkflowDefinition,
     WorkflowRun,
+    WorkflowRuntimeTask,
     WorkflowStepRun,
     WorkflowVersion,
 )
@@ -57,6 +58,7 @@ ENTITY_MODELS: list[tuple[str, str, type[Any]]] = [
     ("workflow_versions", "workflow_versions", WorkflowVersion),
     ("workflow_runs", "workflow_runs", WorkflowRun),
     ("workflow_step_runs", "workflow_step_runs", WorkflowStepRun),
+    ("workflow_runtime_tasks", "workflow_runtime_tasks", WorkflowRuntimeTask),
     ("test_cases", "test_cases", TestCase),
     ("test_suites", "test_suites", TestSuite),
     ("test_runs", "test_runs", TestRun),
@@ -128,6 +130,10 @@ MUTATING_METHODS = {
     "create_workflow_run",
     "start_workflow_run",
     "update_workflow_step_run",
+    "claim_runtime_task",
+    "callback_runtime_task",
+    "timeout_runtime_task",
+    "cancel_workflow_run",
     "create_test_case",
     "create_test_suite",
     "create_test_run",
@@ -244,6 +250,7 @@ class MySQLStore(MemoryStore):
             "test_suite_cases",
             "test_suites",
             "test_cases",
+            "workflow_runtime_tasks",
             "workflow_step_runs",
             "workflow_runs",
             "workflow_versions",
@@ -303,6 +310,8 @@ class MySQLStore(MemoryStore):
             self._insert_payload(cursor, "workflow_runs", ["id", "workflow_id", "workflow_version_id", "trigger_type", "status", "created_at", "updated_at"], run)
         for step in self.workflow_step_runs.values():
             self._insert_payload(cursor, "workflow_step_runs", ["id", "workflow_run_id", "workflow_id", "workflow_version_id", "node_id", "step_type", "sequence", "status", "predecessor_node_ids", "created_at", "updated_at"], step)
+        for task in self.workflow_runtime_tasks.values():
+            self._insert_payload(cursor, "workflow_runtime_tasks", ["id", "workflow_run_id", "workflow_step_run_id", "workflow_id", "workflow_version_id", "node_id", "agent_id", "skill_id", "model_provider_id", "status", "attempt", "max_attempts", "attempt_token", "created_at", "updated_at"], task)
         for operation in self.vcs_operations.values():
             self._insert_payload(cursor, "vcs_operations", ["id", "provider", "profile_id", "repository_id", "operation_type", "status", "created_at", "updated_at"], operation)
         for event in self.vcs_webhook_events.values():

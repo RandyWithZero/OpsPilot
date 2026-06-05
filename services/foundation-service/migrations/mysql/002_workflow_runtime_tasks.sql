@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS workflow_runtime_tasks (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  workflow_run_id VARCHAR(64) NOT NULL,
+  workflow_step_run_id VARCHAR(64) NOT NULL,
+  workflow_id VARCHAR(64) NOT NULL,
+  workflow_version_id VARCHAR(64) NOT NULL,
+  node_id VARCHAR(128) NOT NULL,
+  agent_id VARCHAR(64) NOT NULL,
+  skill_id VARCHAR(64) NOT NULL DEFAULT '',
+  model_provider_id VARCHAR(64) NOT NULL DEFAULT '',
+  status VARCHAR(32) NOT NULL,
+  attempt INT UNSIGNED NOT NULL,
+  max_attempts INT UNSIGNED NOT NULL,
+  attempt_token VARCHAR(128) NOT NULL,
+  payload JSON NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
+  KEY ix_workflow_runtime_tasks_status (status, created_at),
+  KEY ix_workflow_runtime_tasks_step (workflow_step_run_id, attempt),
+  CONSTRAINT fk_workflow_runtime_tasks_run FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  CONSTRAINT fk_workflow_runtime_tasks_step FOREIGN KEY (workflow_step_run_id) REFERENCES workflow_step_runs(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

@@ -36,6 +36,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/model-providers": self.store.list_model_providers,
             "/v1/workflows": self.store.list_workflows,
             "/v1/workflow-runs": self.store.list_workflow_runs,
+            "/v1/runtime/tasks": self.store.list_runtime_tasks,
             "/v1/test-cases": self.store.list_test_cases,
             "/v1/test-suites": self.store.list_test_suites,
             "/v1/test-runs": self.store.list_test_runs,
@@ -60,6 +61,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if path == "/v1/files":
             self._call(lambda: self.store.list_file_objects(self._file_access_filters(actor, file_query)))
+            return
+        if path == "/v1/runtime/tasks":
+            self._call(lambda: self.store.list_runtime_tasks(first(query, "status")))
             return
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "download":
             self._call(lambda: self.store.download_file_object(actor_id, parts[2], self._file_access_filters(actor, file_query)))
@@ -162,6 +166,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if path == "/v1/quality-gates":
             self._call(lambda: self.store.create_quality_gate(actor_id, body), HTTPStatus.CREATED)
             return
+        if path == "/v1/runtime/tasks/claim":
+            self._call(lambda: self.store.claim_runtime_task(actor_id, body))
+            return
 
         parts = [part for part in path.split("/") if part]
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "upload-grants":
@@ -211,6 +218,15 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 4 and parts[:2] == ["v1", "workflow-runs"] and parts[3] == "start":
             self._call(lambda: self.store.start_workflow_run(actor_id, parts[2]))
+            return
+        if len(parts) == 4 and parts[:2] == ["v1", "workflow-runs"] and parts[3] == "cancel":
+            self._call(lambda: self.store.cancel_workflow_run(actor_id, parts[2]))
+            return
+        if len(parts) == 5 and parts[:3] == ["v1", "runtime", "tasks"] and parts[4] == "callback":
+            self._call(lambda: self.store.callback_runtime_task(actor_id, parts[3], body))
+            return
+        if len(parts) == 5 and parts[:3] == ["v1", "runtime", "tasks"] and parts[4] == "timeout":
+            self._call(lambda: self.store.timeout_runtime_task(actor_id, parts[3]))
             return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)

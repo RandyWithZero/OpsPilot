@@ -426,6 +426,43 @@ class WorkflowStepRun:
 
 
 @dataclass
+class WorkflowRuntimeTask:
+    workflow_run_id: str
+    workflow_step_run_id: str
+    workflow_id: str
+    workflow_version_id: str
+    node_id: str
+    agent_id: str
+    skill_id: str = ""
+    model_provider_id: str = ""
+    status: str = "queued"
+    attempt: int = 1
+    max_attempts: int = 1
+    attempt_token: str = ""
+    input_summary: dict[str, Any] = field(default_factory=dict)
+    output: dict[str, Any] = field(default_factory=dict)
+    error: str = ""
+    timeout_seconds: int = 0
+    id: str = ""
+    claimed_at: str = ""
+    completed_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.workflow_run_id or not self.workflow_step_run_id or not self.workflow_id or not self.workflow_version_id or not self.node_id:
+            raise InvalidInput("runtime tasks require workflow run, step run, workflow, version, and node_id")
+        if not self.agent_id:
+            raise InvalidInput("runtime tasks require agent_id")
+        if self.status not in {"queued", "running", "completed", "failed", "cancelled", "timed_out"}:
+            raise InvalidInput("runtime task status must be queued, running, completed, failed, cancelled, or timed_out")
+        if int(self.attempt) <= 0 or int(self.max_attempts) <= 0:
+            raise InvalidInput("runtime task attempts must be positive")
+        if int(self.timeout_seconds) < 0:
+            raise InvalidInput("runtime task timeout_seconds must not be negative")
+
+
+@dataclass
 class TestCase:
     project_id: str
     name: str

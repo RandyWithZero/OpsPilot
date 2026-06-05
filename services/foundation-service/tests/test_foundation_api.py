@@ -452,6 +452,10 @@ class FoundationSliceTest(unittest.TestCase):
         self.assert_allowed("Operator", "POST", "/v1/vcs/operations")
         self.assert_allowed("Operator", "POST", "/v1/workflows/wfl_1/runs")
         self.assert_allowed("Operator", "POST", "/v1/workflow-runs/wfr_1/start")
+        self.assert_allowed("Operator", "POST", "/v1/workflow-runs/wfr_1/cancel")
+        self.assert_allowed("Operator", "POST", "/v1/runtime/tasks/claim")
+        self.assert_allowed("Operator", "POST", "/v1/runtime/tasks/wrt_1/callback")
+        self.assert_allowed("Operator", "POST", "/v1/runtime/tasks/wrt_1/timeout")
         self.assert_allowed("Operator", "PATCH", "/v1/workflow-runs/wfr_1/steps/wfs_1", {"status": "completed"})
         self.assert_allowed("Operator", "PATCH", "/v1/workflows/wfl_1/versions/wfv_1", {"status": "published"})
         self.assert_denied("Operator", "POST", "/v1/credentials")
@@ -576,6 +580,34 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertEqual(run["id"], reloaded_run["id"])
         self.assertEqual(steps_by_node["manual"]["predecessor_node_ids"], ["trigger"])
         self.assertEqual(steps_by_node["result"]["predecessor_node_ids"], ["manual"])
+
+    def test_runtime_task_snapshot_survives_reload(self) -> None:
+        credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key", "secret": "sk-secret"})
+        provider = self.store.create_model_provider("usr_test_actor", {"provider": "openai", "name": "Provider", "credential_ref_id": credential["id"]})
+        skill = self.store.create_skill("usr_test_actor", {"name": "Deploy", "version": "1.0.0", "runtime": "python"})
+        agent = self.store.create_agent("usr_test_actor", {"name": "Deploy Agent", "kind": "automation", "skill_ids": [skill["id"]], "model_provider_id": provider["id"]})
+        workflow = self.store.create_workflow("usr_test_actor", {"name": "Runtime workflow"})
+        self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "trigger", "type": "trigger"},
+                    {"id": "agent", "type": "agent_task", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"]},
+                ],
+                "edges": [{"from_node_id": "trigger", "to_node_id": "agent"}],
+            },
+        )
+        self.store.create_workflow_run("usr_test_actor", workflow["id"], {"start": True})
+        task = self.store.list_runtime_tasks()[0]
+
+        reloaded = self.reload_store()
+        reloaded_task = reloaded.list_runtime_tasks()[0]
+
+        self.assertEqual(reloaded_task["id"], task["id"])
+        self.assertNotIn("attempt_token", reloaded_task)
+        self.assertEqual(reloaded.list_workflow_runs(workflow["id"])[0]["steps"][1]["status"], "running")
 
     def test_failed_gitlab_merge_request_operation_survives_reload(self) -> None:
         user, project = self.create_owned_project()
@@ -1385,6 +1417,187 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertIn("workflow.run.started", audit)
         self.assertIn("workflow.step.updated", audit)
         self.assertNotIn("sk-secret", audit)
+
+    def test_runtime_dispatch_claim_callback_and_retry_boundaries(self) -> None:
+        credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key", "secret": "sk-runtime-secret"})
+        provider = self.store.create_model_provider("usr_test_actor", {"provider": "openai", "name": "Provider", "credential_ref_id": credential["id"]})
+        skill = self.store.create_skill("usr_test_actor", {"name": "Deploy", "version": "1.0.0", "runtime": "python"})
+        agent = self.store.create_agent("usr_test_actor", {"name": "Deploy Agent", "kind": "automation", "skill_ids": [skill["id"]], "model_provider_id": provider["id"]})
+        workflow = self.store.create_workflow("usr_test_actor", {"name": "Runtime workflow"})
+        self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "start", "type": "trigger", "name": "Start"},
+                    {"id": "deploy", "type": "agent_task", "name": "Deploy", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"], "config": {"max_attempts": 2, "timeout_seconds": 30, "api_key": "must-not-leak"}},
+                    {"id": "approve", "type": "approval", "name": "Approve"},
+                    {"id": "done", "type": "result", "name": "Done"},
+                ],
+                "edges": [
+                    {"from_node_id": "start", "to_node_id": "deploy"},
+                    {"from_node_id": "deploy", "to_node_id": "approve"},
+                    {"from_node_id": "approve", "to_node_id": "done"},
+                ],
+            },
+        )
+        run = self.store.create_workflow_run("usr_test_actor", workflow["id"], {"start": True})
+        first_task = self.store.list_runtime_tasks()[0]
+
+        self.assertEqual(run["status"], "running")
+        self.assertEqual(first_task["status"], "queued")
+        self.assertNotIn("attempt_token", first_task)
+        self.assertEqual(first_task["agent_id"], agent["id"])
+        self.assertEqual(first_task["skill_id"], skill["id"])
+        self.assertEqual(first_task["model_provider_id"], provider["id"])
+        self.assertEqual(first_task["input_summary"]["binding_names"], ["api_key", "max_attempts", "timeout_seconds"])
+        self.assertNotIn("must-not-leak", json.dumps(first_task))
+        self.assertNotIn("sk-runtime-secret", json.dumps(first_task))
+
+        claimed = self.store.claim_runtime_task("usr_worker", {"agent_id": agent["id"]})
+        self.assertEqual(claimed["id"], first_task["id"])
+        self.assertEqual(claimed["status"], "running")
+        self.assertIn("attempt_token", claimed)
+
+        with self.assertRaises(Exception) as bad_token:
+            self.store.callback_runtime_task("usr_worker", first_task["id"], {"attempt_token": "wrong", "status": "completed"})
+        self.assertEqual(getattr(bad_token.exception, "code", ""), "conflict")
+
+        retrying = self.store.callback_runtime_task("usr_worker", first_task["id"], {"attempt_token": claimed["attempt_token"], "status": "failed", "error": "transient", "retry": True})
+        self.assertEqual(retrying["status"], "running")
+        tasks = self.store.list_runtime_tasks()
+        self.assertEqual([task["status"] for task in tasks], ["failed", "queued"])
+        self.assertFalse(any("attempt_token" in task for task in tasks))
+        self.assertEqual(tasks[1]["attempt"], 2)
+        second_claim = self.store.claim_runtime_task("usr_worker", {"agent_id": agent["id"]})
+
+        completed = self.store.callback_runtime_task("usr_worker", tasks[1]["id"], {"attempt_token": second_claim["attempt_token"], "status": "completed", "output": {"deployment_id": "dep-1"}})
+        completed_again = self.store.callback_runtime_task("usr_worker", tasks[1]["id"], {"attempt_token": second_claim["attempt_token"], "status": "completed", "output": {"deployment_id": "dep-1"}})
+        agent_step = next(step for step in completed["steps"] if step["node_id"] == "deploy")
+        approval_step = next(step for step in completed["steps"] if step["node_id"] == "approve")
+        done_step = next(step for step in completed["steps"] if step["node_id"] == "done")
+
+        self.assertEqual(completed_again["id"], completed["id"])
+        self.assertEqual(agent_step["status"], "completed")
+        self.assertEqual(agent_step["output"], {"deployment_id": "dep-1"})
+        self.assertEqual(approval_step["status"], "pending")
+        with self.assertRaises(Exception) as approval_gate:
+            self.store.update_workflow_step_run("usr_test_actor", run["id"], done_step["id"], {"status": "completed"})
+        self.assertEqual(getattr(approval_gate.exception, "code", ""), "conflict")
+
+        with self.assertRaises(Exception) as illegal_transition:
+            self.store.callback_runtime_task("usr_worker", tasks[1]["id"], {"attempt_token": second_claim["attempt_token"], "status": "failed", "error": "late failure"})
+        self.assertEqual(getattr(illegal_transition.exception, "code", ""), "conflict")
+
+        audit = json.dumps(self.store.list_audit_events())
+        self.assertIn("workflow.runtime_task.dispatched", audit)
+        self.assertIn("workflow.runtime_task.callback", audit)
+        self.assertNotIn("sk-runtime-secret", audit)
+        self.assertNotIn("must-not-leak", audit)
+
+    def test_runtime_callback_sanitizes_output_error_and_dispatch_options(self) -> None:
+        credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key", "secret": "sk-runtime-secret"})
+        provider = self.store.create_model_provider("usr_test_actor", {"provider": "openai", "name": "Provider", "credential_ref_id": credential["id"]})
+        skill = self.store.create_skill("usr_test_actor", {"name": "Deploy", "version": "1.0.0", "runtime": "python"})
+        agent = self.store.create_agent("usr_test_actor", {"name": "Deploy Agent", "kind": "automation", "skill_ids": [skill["id"]], "model_provider_id": provider["id"]})
+
+        bad_workflow = self.store.create_workflow("usr_test_actor", {"name": "Bad runtime options"})
+        with self.assertRaises(Exception) as bad_attempts:
+            self.store.create_workflow_version(
+                "usr_test_actor",
+                bad_workflow["id"],
+                {
+                    "version": "1",
+                    "nodes": [
+                        {"id": "start", "type": "trigger"},
+                        {"id": "deploy", "type": "agent_task", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"], "config": {"max_attempts": "many"}},
+                    ],
+                    "edges": [{"from_node_id": "start", "to_node_id": "deploy"}],
+                },
+            )
+        self.assertEqual(getattr(bad_attempts.exception, "code", ""), "invalid_input")
+
+        workflow = self.store.create_workflow("usr_test_actor", {"name": "Sanitized runtime callback"})
+        self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "start", "type": "trigger"},
+                    {"id": "deploy", "type": "agent_task", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"], "config": {"retries": "1", "timeout_seconds": "15"}},
+                ],
+                "edges": [{"from_node_id": "start", "to_node_id": "deploy"}],
+            },
+        )
+        run = self.store.create_workflow_run("usr_test_actor", workflow["id"], {"start": True})
+        public_task = self.store.list_runtime_tasks("queued")[0]
+        claimed = self.store.claim_runtime_task("usr_worker", {"agent_id": agent["id"]})
+        self.assertEqual(public_task["max_attempts"], 2)
+        self.assertEqual(public_task["timeout_seconds"], 15)
+
+        completed = self.store.callback_runtime_task(
+            "usr_worker",
+            claimed["id"],
+            {
+                "attempt_token": claimed["attempt_token"],
+                "status": "completed",
+                "output": {"safe": "ok", "api_token": "abc123", "nested": {"message": "secret=abc123"}},
+                "error": "token=abc123",
+            },
+        )
+        task_after_callback = self.store.list_runtime_tasks("completed")[0]
+        step = next(step for step in completed["steps"] if step["node_id"] == "deploy")
+
+        self.assertEqual(step["output"], {"safe": "ok", "api_token": "[REDACTED]", "nested": {"message": "[REDACTED]"}})
+        self.assertEqual(task_after_callback["output"], step["output"])
+        self.assertEqual(task_after_callback["error"], "[REDACTED]")
+        self.assertNotIn("attempt_token", task_after_callback)
+        self.assertNotIn("abc123", json.dumps(completed))
+        self.assertNotIn("abc123", json.dumps(self.store.list_runtime_tasks()))
+
+    def test_runtime_dispatch_waits_for_manual_gate_and_timeout_rolls_up(self) -> None:
+        credential = self.store.create_credential("usr_test_actor", {"provider": "model_provider", "name": "Model Key", "secret": "sk-timeout-secret"})
+        provider = self.store.create_model_provider("usr_test_actor", {"provider": "openai", "name": "Provider", "credential_ref_id": credential["id"]})
+        skill = self.store.create_skill("usr_test_actor", {"name": "Deploy", "version": "1.0.0", "runtime": "python"})
+        agent = self.store.create_agent("usr_test_actor", {"name": "Deploy Agent", "kind": "automation", "skill_ids": [skill["id"]], "model_provider_id": provider["id"]})
+        workflow = self.store.create_workflow("usr_test_actor", {"name": "Gated runtime workflow"})
+        version = self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "start", "type": "trigger"},
+                    {"id": "approve", "type": "approval"},
+                    {"id": "deploy", "type": "agent_task", "agent_id": agent["id"], "skill_id": skill["id"], "model_provider_id": provider["id"]},
+                ],
+                "edges": [
+                    {"from_node_id": "start", "to_node_id": "approve"},
+                    {"from_node_id": "approve", "to_node_id": "deploy"},
+                ],
+            },
+        )
+        run = self.store.create_workflow_run("usr_test_actor", workflow["id"], {"start": True})
+        self.assertEqual(self.store.list_runtime_tasks(), [])
+
+        self.store.update_workflow_version("usr_test_actor", workflow["id"], version["id"], {"edges": [{"from_node_id": "start", "to_node_id": "deploy"}]})
+        self.assertEqual(self.store.list_workflow_runs(workflow["id"])[0]["steps"][2]["predecessor_node_ids"], ["approve"])
+        self.assertEqual(self.store.list_runtime_tasks(), [])
+
+        approval_step = next(step for step in run["steps"] if step["node_id"] == "approve")
+        after_approval = self.store.update_workflow_step_run("usr_test_actor", run["id"], approval_step["id"], {"status": "completed"})
+        task = self.store.list_runtime_tasks()[0]
+        self.assertEqual(next(step for step in after_approval["steps"] if step["node_id"] == "deploy")["status"], "running")
+
+        timed_out = self.store.timeout_runtime_task("system", task["id"])
+        self.assertEqual(timed_out["status"], "failed")
+        self.assertEqual(self.store.list_runtime_tasks()[0]["status"], "timed_out")
+
+        cancellable = self.store.create_workflow_run("usr_test_actor", workflow["id"], {"start": True})
+        cancelled = self.store.cancel_workflow_run("usr_test_actor", cancellable["id"])
+        self.assertEqual(cancelled["status"], "cancelled")
 
     def test_test_report_quality_gate_slice_validates_project_boundaries(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})
