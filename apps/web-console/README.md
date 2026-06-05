@@ -5,7 +5,7 @@ Static first slice for the authenticated operations console. It covers the dense
 - authenticated shell with IAM login, bearer token API calls, refresh-token session renewal, primary navigation, global search, project switcher placeholder, refresh, and sign-out
 - dashboard setup progress, inventory counts, readiness exceptions, and audit activity
 - identity, project, asset, and environment inventory tables with search, filters, detail panels, and create dialogs
-- API integration through same-origin `/v1/*`, `/healthz`, and `/readyz` foundation routes plus explicit local mock / development-header fallback for offline checks
+- API integration through same-origin `/v1/*`, `/healthz`, and `/readyz` routes. In Compose, Nginx proxies those routes to `foundation:8080` inside the Docker network so the browser does not call `localhost` or a public IP for backend traffic; explicit local mock / development-header fallback remains available for offline checks.
 
 Run locally:
 
