@@ -1,4 +1,4 @@
-const API_BASE = localStorage.getItem("opspilot_api_base") || "http://localhost:8080";
+const API_BASE = localStorage.getItem("opspilot_api_base") || "";
 const DEFAULT_ACTOR_ID = "web-console";
 const DEV_HEADERS_STORAGE_KEY = "opspilot_auth_dev_headers";
 const navItems = [
@@ -284,6 +284,7 @@ async function signIn(event) {
   event.preventDefault();
   clearLoginError();
   const email = $("#login-email").value.trim();
+  const password = $("#login-password").value;
   const role = normalizeConsoleRole($("#login-role").value || roleFromEmail(email));
   setDevHeadersMode($("#login-dev-mode").checked);
   if (isDevHeadersMode()) {
@@ -292,7 +293,7 @@ async function signIn(event) {
     return;
   }
   try {
-    const issued = await authRequest("/v1/auth/login", { email, actor_id: email || DEFAULT_ACTOR_ID, role });
+    const issued = await authRequest("/v1/auth/login", { email, actor_id: email || DEFAULT_ACTOR_ID, role, password });
     setSession({ user: email, role, actorId: email || DEFAULT_ACTOR_ID, tokenPayload: issued });
     showApp();
   } catch (error) {
