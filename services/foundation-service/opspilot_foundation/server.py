@@ -27,8 +27,6 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/healthz": self.store.health,
             "/v1/users": self.store.list_users,
             "/v1/projects": self.store.list_projects,
-            "/v1/assets": self.store.list_assets,
-            "/v1/environments": self.store.list_environments,
             "/v1/credentials": self.store.list_credentials,
             "/v1/gitlab/profiles": self.store.list_gitlab_profiles,
             "/v1/vcs/operations": self.store.list_vcs_operations,
@@ -54,6 +52,12 @@ class FoundationHandler(BaseHTTPRequestHandler):
         actor_id = actor.actor_id
         file_query = self._query_filters(parsed.query)
         parts = [part for part in path.split("/") if part]
+        if path == "/v1/assets":
+            self._call(lambda: self.store.list_assets(self._query_filters(parsed.query)))
+            return
+        if path == "/v1/environments":
+            self._call(lambda: self.store.list_environments(self._query_filters(parsed.query)))
+            return
         if path == "/v1/files":
             self._call(lambda: self.store.list_file_objects(self._file_access_filters(actor, file_query)))
             return
@@ -181,6 +185,15 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if len(parts) == 4 and parts[:2] == ["v1", "projects"] and parts[3] == "repositories":
             self._call(lambda: self.store.link_project_repository(actor_id, parts[2], body))
             return
+        if len(parts) == 5 and parts[:2] == ["v1", "environments"] and parts[3] == "assets":
+            self._call(lambda: self.store.link_environment_asset(actor_id, parts[2], parts[4]))
+            return
+        if len(parts) == 5 and parts[:2] == ["v1", "environments"] and parts[3] == "members":
+            self._call(lambda: self.store.link_environment_member(actor_id, parts[2], parts[4]))
+            return
+        if len(parts) == 5 and parts[:2] == ["v1", "environments"] and parts[3] == "files":
+            self._call(lambda: self.store.link_environment_file(actor_id, parts[2], parts[4]))
+            return
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "versions":
             self._call(lambda: self.store.create_workflow_version(actor_id, parts[2], body), HTTPStatus.CREATED)
             return
@@ -307,6 +320,15 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 6 and parts[:2] == ["v1", "projects"] and parts[3] == "repositories":
             self._call(lambda: self.store.unlink_project_repository(actor_id, parts[2], parts[4], parts[5]))
+            return
+        if len(parts) == 5 and parts[:2] == ["v1", "environments"] and parts[3] == "assets":
+            self._call(lambda: self.store.unlink_environment_asset(actor_id, parts[2], parts[4]))
+            return
+        if len(parts) == 5 and parts[:2] == ["v1", "environments"] and parts[3] == "members":
+            self._call(lambda: self.store.unlink_environment_member(actor_id, parts[2], parts[4]))
+            return
+        if len(parts) == 5 and parts[:2] == ["v1", "environments"] and parts[3] == "files":
+            self._call(lambda: self.store.unlink_environment_file(actor_id, parts[2], parts[4]))
             return
 
         self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)

@@ -293,6 +293,35 @@ paths:
   /v1/assets:
     get:
       summary: List assets
+      parameters:
+        - name: project_id
+          in: query
+          schema:
+            type: string
+        - name: environment_id
+          in: query
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: parent_id
+          in: query
+          schema:
+            type: string
+        - name: capability
+          in: query
+          schema:
+            type: string
+        - name: tag
+          in: query
+          schema:
+            type: string
       responses:
         "200":
           description: Assets
@@ -360,6 +389,27 @@ paths:
   /v1/environments:
     get:
       summary: List environments
+      parameters:
+        - name: project_id
+          in: query
+          schema:
+            type: string
+        - name: type
+          in: query
+          schema:
+            enum: [DEV, QA, QE]
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: asset_id
+          in: query
+          schema:
+            type: string
+        - name: member_id
+          in: query
+          schema:
+            type: string
       responses:
         "200":
           description: Environments
@@ -424,6 +474,144 @@ paths:
       responses:
         "200":
           description: Deleted environment
+  /v1/environments/{environmentID}/assets/{assetID}:
+    post:
+      summary: Bind a project-owned asset to an environment
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: assetID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      summary: Unbind an asset from an environment
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: assetID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+  /v1/environments/{environmentID}/members/{userID}:
+    post:
+      summary: Bind a project member to an environment
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: userID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+    delete:
+      summary: Unbind a non-owner member from an environment
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: userID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+  /v1/environments/{environmentID}/files/{fileID}:
+    post:
+      summary: Bind a file reference to an environment
+      description: The environment stores only file_ids. Storage keys remain internal to the file service. The actor must belong to the environment project and own the file. Files already bound to this environment are accepted; unbound files are claimed atomically; files bound to another resource are rejected.
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: fileID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+    delete:
+      summary: Unbind a file reference from an environment
+      parameters:
+        - $ref: "#/components/parameters/ActorID"
+        - $ref: "#/components/parameters/ActorRole"
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: fileID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
   /v1/files:
     get:
       summary: List file metadata objects
@@ -1805,6 +1993,15 @@ components:
           type: array
           items:
             type: string
+        tags:
+          type: array
+          items:
+            type: string
+        file_ids:
+          type: array
+          description: File-service references attached to this asset. Internal storage keys are never exposed.
+          items:
+            type: string
         properties:
           type: object
           additionalProperties: true
@@ -1856,6 +2053,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Endpoint"
+        file_ids:
+          type: array
+          description: File-service references attached to this environment. Internal storage keys are never exposed.
+          items:
+            type: string
     Environment:
       allOf:
         - $ref: "#/components/schemas/EnvironmentCreate"

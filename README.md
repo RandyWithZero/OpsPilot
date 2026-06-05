@@ -8,8 +8,8 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 
 - identity users and scoped roles
 - projects and project membership
-- assets with categories, capabilities, and parent asset references
-- DEV/QA/QE environments with project, member, asset, and endpoint bindings
+- assets with categories, capabilities, tags, file references, and cycle-safe parent asset references
+- DEV/QA/QE environments with project, member, project-owned asset, endpoint, and file-reference bindings
 - file metadata and local file-service MVP upload/download/list/delete APIs
 - credential references with redacted secret handling
 - GitLab API profiles, repository discovery sync/search/pagination, and project-to-repository bindings
@@ -126,7 +126,13 @@ The storage adapter is selected with `OPSPILOT_OBJECT_STORAGE_ADAPTER`:
 - `local` (default): creates the local object root automatically.
 - `s3` or `minio`: validates `OPSPILOT_S3_BUCKET` and captures endpoint/region/auto-bucket settings (`OPSPILOT_S3_ENDPOINT_URL`, `OPSPILOT_S3_REGION`, `OPSPILOT_S3_AUTO_CREATE_BUCKET`) as the extension boundary for a future concrete S3 client.
 
-The API never returns internal storage keys. Upload/download grants and upload sessions expose opaque `opspilot://file-capabilities/...` URLs generated at the storage boundary. Business modules should keep only the returned file `id` or reference fields (`owner_id`, `resource_type`, `resource_id`, `module`).
+The API never returns internal storage keys. Upload/download grants and upload sessions expose opaque `opspilot://file-capabilities/...` URLs generated at the storage boundary. Business modules should keep only the returned file `id` or reference fields (`owner_id`, `resource_type`, `resource_id`, `module`). Asset and environment topology records attach files through `file_ids` only.
+
+### Asset And Environment Topology
+
+Assets are addressable by `category`, `status`, `parent_id`, `capability`, `tag`, `project_id`, and `environment_id` filters on `GET /v1/assets`. Parent-child assembly rejects self-parenting and indirect cycles, so component assets such as GPUs can be mounted under workstations without creating ambiguous topology graphs.
+
+Environments are project-owned DEV/QA/QE scopes. `GET /v1/environments` supports `project_id`, `type`, `status`, `asset_id`, and `member_id` filters. Environment members must already belong to the project, and environment assets must first be bound to that project through `/v1/projects/{projectID}/assets/{assetID}`. Environment asset/member/file bindings can then be operated through nested `/v1/environments/{environmentID}/...` routes. Environment file binding requires the actor to belong to the project and own the file; exact environment-scoped files are accepted, unbound files are claimed atomically, and files bound to other resources are rejected. Deleting an asset or file removes its references from projects/environments; retiring, archiving, or deletion-marking an asset also clears project/environment asset references.
 
 Local MVP uploads accept base64 JSON content up to `OPSPILOT_MAX_FILE_UPLOAD_BYTES` bytes after decode (default 5 MiB). HTTP request bodies are capped by `OPSPILOT_MAX_REQUEST_BODY_BYTES` (default 8 MiB). Non-admin HTTP callers are scoped to their `X-Actor-ID` as `owner_id`; admin callers may filter across owners.
 
