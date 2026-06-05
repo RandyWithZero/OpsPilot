@@ -749,7 +749,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
             },
         )
         report = self.store.create_report(user["id"], {"project_id": project["id"], "title": "Report", "test_run_id": test_run["id"], "file_ids": [file_object["id"]]})
-        self.store.create_quality_gate("usr_test_actor", {"project_id": project["id"], "name": "Gate", "last_report_id": report["id"]})
+        self.store.create_quality_gate(user["id"], {"project_id": project["id"], "name": "Gate", "last_report_id": report["id"]})
 
         self.store.delete_project("usr_test_actor", project["id"])
         reloaded = self.reload_store()
@@ -1892,7 +1892,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         )
         suite = self.store.create_test_suite(user["id"], {"project_id": project["id"], "name": "Smoke", "case_ids": [test_case["id"], test_case["id"]]})
         run = self.store.create_test_run(user["id"], {"project_id": project["id"], "suite_id": suite["id"], "environment_id": environment["id"]})
-        updated_run = self.store.update_test_run("usr_test_actor", run["id"], {"status": "passed", "results": [{"case_id": test_case["id"], "status": "passed"}]})
+        updated_run = self.store.update_test_run(user["id"], run["id"], {"status": "passed", "results": [{"case_id": test_case["id"], "status": "passed"}]})
         artifact = self.store.upload_file_object(
             "usr_test_actor",
             {
@@ -1910,7 +1910,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
             {"project_id": project["id"], "title": "QA Smoke Report", "test_run_id": run["id"], "file_ids": [artifact["id"]], "summary": {"passed": 1}},
         )
         gate = self.store.create_quality_gate(
-            "usr_test_actor",
+            user["id"],
             {"project_id": project["id"], "name": "Smoke Gate", "last_report_id": report["id"], "status": "passed", "conditions": [{"metric": "failed", "equals": 0}]},
         )
 
@@ -2116,6 +2116,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         blocked_project = self.store.create_project("usr_test_actor", {"key": "WEB", "name": "Web Console", "owner_id": user["id"]})
         blocked_case = self.store.create_test_case(user["id"], {"project_id": blocked_project["id"], "name": "Blocked smoke"})
         blocked_suite = self.store.create_test_suite(user["id"], {"project_id": blocked_project["id"], "name": "Blocked suite", "case_ids": [blocked_case["id"]]})
+        blocked_run = self.store.create_test_run(user["id"], {"project_id": blocked_project["id"], "suite_id": blocked_suite["id"]})
         with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
             service = self.store.create_service_identity(user["id"], {"name": "ci-test-resource-writer", "role": "Operator", "project_ids": [allowed_project["id"]]})
 
@@ -2125,13 +2126,21 @@ class MySQLStorePersistenceTest(unittest.TestCase):
             self.store.create_test_suite(service["id"], {"project_id": blocked_project["id"], "name": "Cross-project suite", "case_ids": [blocked_case["id"]]})
         with self.assertRaises(Exception) as run_denied:
             self.store.create_test_run(service["id"], {"project_id": blocked_project["id"], "suite_id": blocked_suite["id"]})
+        with self.assertRaises(Exception) as update_run_denied:
+            self.store.update_test_run(service["id"], blocked_run["id"], {"status": "passed", "results": [{"case_id": blocked_case["id"], "status": "passed"}]})
+        with self.assertRaises(Exception) as gate_denied:
+            self.store.create_quality_gate(service["id"], {"project_id": blocked_project["id"], "name": "Cross-project gate", "status": "passed"})
 
         self.assertEqual(getattr(case_denied.exception, "code", ""), "permission_denied")
         self.assertEqual(getattr(suite_denied.exception, "code", ""), "permission_denied")
         self.assertEqual(getattr(run_denied.exception, "code", ""), "permission_denied")
+        self.assertEqual(getattr(update_run_denied.exception, "code", ""), "permission_denied")
+        self.assertEqual(getattr(gate_denied.exception, "code", ""), "permission_denied")
         self.assertEqual([case["name"] for case in self.store.list_test_cases()], ["Blocked smoke"])
         self.assertEqual([suite["name"] for suite in self.store.list_test_suites()], ["Blocked suite"])
-        self.assertEqual(self.store.list_test_runs(), [])
+        self.assertEqual(self.store.list_test_runs()[0]["status"], "queued")
+        self.assertEqual(self.store.list_test_runs()[0]["results"], [])
+        self.assertEqual(self.store.list_quality_gates(), [])
 
     def test_artifact_ingest_invalid_later_artifact_leaves_no_partial_file_state(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})

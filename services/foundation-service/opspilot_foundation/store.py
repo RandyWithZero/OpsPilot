@@ -1595,6 +1595,8 @@ class MemoryStore:
     def update_test_run(self, actor_id: str, run_id: str, data: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             run = self._test_run(run_id)
+            project = self._project(run.project_id)
+            self._require_project_actor(actor_id, project)
             for key in ("status", "results"):
                 if key in data:
                     setattr(run, key, data[key])
@@ -1709,7 +1711,8 @@ class MemoryStore:
         gate = QualityGate(**pick(data, QualityGate))
         gate.validate()
         with self._lock:
-            self._project(gate.project_id)
+            project = self._project(gate.project_id)
+            self._require_project_actor(actor_id, project)
             if gate.last_report_id:
                 report = self._report(gate.last_report_id)
                 if report.project_id != gate.project_id:
