@@ -1,5 +1,6 @@
 const API_BASE = localStorage.getItem("opspilot_api_base") || "http://localhost:8080";
 const DEFAULT_ACTOR_ID = "web-console";
+const DEV_HEADERS_STORAGE_KEY = "opspilot_auth_dev_headers";
 const navItems = [
   ["dashboard", "工作台"],
   ["bigscreen", "Dashboard 大屏"],
@@ -73,10 +74,16 @@ const state = {
   filters: {},
   detail: null,
   apiOnline: false,
+  authMode: localStorage.getItem(DEV_HEADERS_STORAGE_KEY) === "1" ? "dev_headers" : "bearer",
+  authError: "",
   user: sessionStorage.getItem("opspilot_user") || "",
   role: normalizeConsoleRole(sessionStorage.getItem("opspilot_role") || "Admin"),
   actorId: sessionStorage.getItem("opspilot_actor_id") || DEFAULT_ACTOR_ID,
   accessToken: sessionStorage.getItem("opspilot_access_token") || "",
+  accessTokenExpiresAt: sessionStorage.getItem("opspilot_access_token_expires_at") || "",
+  refreshToken: sessionStorage.getItem("opspilot_refresh_token") || "",
+  refreshTokenExpiresAt: sessionStorage.getItem("opspilot_refresh_token_expires_at") || "",
+  sessionId: sessionStorage.getItem("opspilot_session_id") || "",
   users: [],
   projects: [],
   assets: [],
@@ -267,31 +274,58 @@ document.addEventListener("DOMContentLoaded", () => {
     state.query = event.target.value.trim().toLowerCase();
     render();
   });
+  $("#login-dev-mode").checked = isDevHeadersMode();
+  $("#login-dev-mode").addEventListener("change", () => setDevHeadersMode($("#login-dev-mode").checked));
   renderNav();
-  if (state.user) showApp();
+  if (state.user && (state.accessToken || isDevHeadersMode())) restoreSession();
 });
 
 async function signIn(event) {
   event.preventDefault();
-  state.user = $("#login-email").value.trim();
-  state.role = roleFromEmail(state.user);
-  state.actorId = state.user || DEFAULT_ACTOR_ID;
-  sessionStorage.setItem("opspilot_user", state.user);
-  sessionStorage.setItem("opspilot_role", state.role);
-  sessionStorage.setItem("opspilot_actor_id", state.actorId);
+  clearLoginError();
+  const email = $("#login-email").value.trim();
+  const role = normalizeConsoleRole($("#login-role").value || roleFromEmail(email));
+  setDevHeadersMode($("#login-dev-mode").checked);
+  if (isDevHeadersMode()) {
+    setSession({ user: email, role, actorId: email || DEFAULT_ACTOR_ID });
+    showApp();
+    return;
+  }
+  try {
+    const issued = await authRequest("/v1/auth/login", { email, actor_id: email || DEFAULT_ACTOR_ID, role });
+    setSession({ user: email, role, actorId: email || DEFAULT_ACTOR_ID, tokenPayload: issued });
+    showApp();
+  } catch (error) {
+    showLoginError(authMessage(error, "登录失败。请确认 IAM 服务可用，或显式启用本地模拟 / 开发头模式。"));
+  }
+}
+
+async function restoreSession() {
+  if (!isDevHeadersMode()) {
+    try {
+      await ensureAccessToken();
+    } catch (error) {
+      clearSession();
+      showLoginError(authMessage(error, "会话已失效，请重新登录。"));
+      return;
+    }
+  }
   showApp();
 }
 
-function signOut() {
-  sessionStorage.removeItem("opspilot_user");
-  sessionStorage.removeItem("opspilot_role");
-  sessionStorage.removeItem("opspilot_actor_id");
-  state.user = "";
+async function signOut() {
+  const refreshToken = state.refreshToken;
+  const sessionId = state.sessionId;
+  if (state.accessToken && !isDevHeadersMode()) {
+    await authRequest("/v1/auth/logout", { refresh_token: refreshToken, session_id: sessionId }, { auth: true }).catch(() => {});
+  }
+  clearSession();
   $("#app").classList.add("hidden");
   $("#login").classList.remove("hidden");
 }
 
 function showApp() {
+  state.authError = "";
   $("#login").classList.add("hidden");
   $("#app").classList.remove("hidden");
   syncActorControls();
@@ -315,6 +349,97 @@ function updateActorContext({ role = state.role, actorId = state.actorId } = {})
 function syncActorControls() {
   $("#actor-role").value = normalizeConsoleRole(state.role);
   $("#actor-id").value = state.actorId || DEFAULT_ACTOR_ID;
+  $(".actor-context").classList.toggle("hidden", !isDevHeadersMode());
+  $("#session-summary").innerHTML = `${escapeHtml(state.user || state.actorId || "未登录")} <span class="role-badge">${displayRole(state.role)}</span>`;
+}
+
+function isDevHeadersMode() {
+  return state.authMode === "dev_headers";
+}
+
+function setDevHeadersMode(enabled) {
+  state.authMode = enabled ? "dev_headers" : "bearer";
+  localStorage.setItem(DEV_HEADERS_STORAGE_KEY, enabled ? "1" : "0");
+  const checkbox = $("#login-dev-mode");
+  if (checkbox) checkbox.checked = enabled;
+  if (enabled) {
+    state.accessToken = "";
+    state.refreshToken = "";
+    state.sessionId = "";
+    state.accessTokenExpiresAt = "";
+    state.refreshTokenExpiresAt = "";
+    sessionStorage.removeItem("opspilot_access_token");
+    sessionStorage.removeItem("opspilot_access_token_expires_at");
+    sessionStorage.removeItem("opspilot_refresh_token");
+    sessionStorage.removeItem("opspilot_refresh_token_expires_at");
+    sessionStorage.removeItem("opspilot_session_id");
+  }
+}
+
+function setSession({ user, role, actorId, tokenPayload = {} }) {
+  const claims = tokenPayload.access_token ? decodeAccessToken(tokenPayload.access_token) : {};
+  state.user = user || claims.email || actorId || DEFAULT_ACTOR_ID;
+  state.role = normalizeConsoleRole(claims.role || role);
+  state.actorId = claims.sub || actorId || state.user || DEFAULT_ACTOR_ID;
+  state.accessToken = tokenPayload.access_token || "";
+  state.accessTokenExpiresAt = tokenPayload.access_token_expires_at || "";
+  state.refreshToken = tokenPayload.refresh_token || "";
+  state.refreshTokenExpiresAt = tokenPayload.refresh_token_expires_at || "";
+  state.sessionId = tokenPayload.session_id || claims.session_id || "";
+  sessionStorage.setItem("opspilot_user", state.user);
+  sessionStorage.setItem("opspilot_role", state.role);
+  sessionStorage.setItem("opspilot_actor_id", state.actorId);
+  setSessionStorage("opspilot_access_token", state.accessToken);
+  setSessionStorage("opspilot_access_token_expires_at", state.accessTokenExpiresAt);
+  setSessionStorage("opspilot_refresh_token", state.refreshToken);
+  setSessionStorage("opspilot_refresh_token_expires_at", state.refreshTokenExpiresAt);
+  setSessionStorage("opspilot_session_id", state.sessionId);
+}
+
+function setSessionStorage(key, value) {
+  if (value) sessionStorage.setItem(key, value);
+  else sessionStorage.removeItem(key);
+}
+
+function clearSession() {
+  for (const key of ["opspilot_user", "opspilot_role", "opspilot_actor_id", "opspilot_access_token", "opspilot_access_token_expires_at", "opspilot_refresh_token", "opspilot_refresh_token_expires_at", "opspilot_session_id"]) {
+    sessionStorage.removeItem(key);
+  }
+  state.user = "";
+  state.role = "Viewer";
+  state.actorId = DEFAULT_ACTOR_ID;
+  state.accessToken = "";
+  state.accessTokenExpiresAt = "";
+  state.refreshToken = "";
+  state.refreshTokenExpiresAt = "";
+  state.sessionId = "";
+}
+
+function decodeAccessToken(token) {
+  try {
+    const parts = String(token || "").split(".");
+    if (parts.length < 4) return {};
+    const payload = parts[2].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payload.padEnd(Math.ceil(payload.length / 4) * 4, "=");
+    const decoded = typeof atob === "function" ? atob(padded) : typeof Buffer !== "undefined" ? Buffer.from(padded, "base64").toString("utf8") : "";
+    return JSON.parse(decoded);
+  } catch {
+    return {};
+  }
+}
+
+function clearLoginError() {
+  const node = $("#login-error");
+  node.textContent = "";
+  node.classList.add("hidden");
+}
+
+function showLoginError(message) {
+  $("#app").classList.add("hidden");
+  $("#login").classList.remove("hidden");
+  const node = $("#login-error");
+  node.textContent = message;
+  node.classList.remove("hidden");
 }
 
 async function loadData(forceToast = false) {
@@ -379,6 +504,19 @@ async function loadData(forceToast = false) {
     state.auditEvents = auditEvents;
     if (forceToast) toast("基础服务数据已刷新。");
   } catch (error) {
+    if (error.status === 401) {
+      state.apiOnline = false;
+      clearSession();
+      showLoginError(authMessage(error, "会话已失效，请重新登录。"));
+      return;
+    }
+    if (error.status === 403) {
+      state.apiOnline = true;
+      state.authError = "权限不足：当前账号无法读取该控制台所需的基础数据。";
+      render();
+      if (forceToast) toast(state.authError);
+      return;
+    }
     state.apiOnline = false;
     state.users = clone(seed.users);
     state.projects = clone(seed.projects);
@@ -412,32 +550,96 @@ async function loadData(forceToast = false) {
 }
 
 async function apiGet(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, { headers: actorHeaders() });
+  await ensureAccessToken();
+  let response = await fetch(`${API_BASE}${path}`, { headers: actorHeaders() });
+  if (response.status === 401 && await refreshAccessToken()) {
+    response = await fetch(`${API_BASE}${path}`, { headers: actorHeaders() });
+  }
   if (!response.ok) {
     const data = await response.json().catch(() => ({ error: "request_failed" }));
     if (options.permissionFallback !== undefined && response.status === 403 && data.error === "permission_denied") return options.permissionFallback;
-    throw new Error(data.error || path);
+    throw apiError(response, data, path);
   }
   return response.json();
 }
 
 async function apiRequest(method, path, payload) {
+  await ensureAccessToken();
   const options = {
     method,
     headers: { "Content-Type": "application/json", ...actorHeaders() },
   };
   if (payload !== undefined) options.body = JSON.stringify(payload);
-  const response = await fetch(`${API_BASE}${path}`, options);
+  let response = await fetch(`${API_BASE}${path}`, options);
+  if (response.status === 401 && await refreshAccessToken()) {
+    options.headers = { "Content-Type": "application/json", ...actorHeaders() };
+    response = await fetch(`${API_BASE}${path}`, options);
+  }
   if (!response.ok) {
     const data = await response.json().catch(() => ({ error: "request_failed" }));
-    throw new Error(data.error || "request_failed");
+    throw apiError(response, data, "request_failed");
   }
   return response.json();
 }
 
 function actorHeaders() {
-  if (state.accessToken) return { Authorization: `Bearer ${state.accessToken}` };
+  if (state.accessToken && !isDevHeadersMode()) return { Authorization: `Bearer ${state.accessToken}` };
   return { "X-Actor-ID": state.actorId || DEFAULT_ACTOR_ID, "X-Actor-Role": normalizeConsoleRole(state.role) };
+}
+
+async function ensureAccessToken() {
+  if (isDevHeadersMode()) return true;
+  if (!state.accessToken) throw apiError({ status: 401 }, { error: "authentication_required" }, "authentication_required");
+  if (!tokenExpiresSoon(state.accessTokenExpiresAt)) return true;
+  if (await refreshAccessToken()) return true;
+  throw apiError({ status: 401 }, { error: "authentication_required" }, "authentication_required");
+}
+
+async function refreshAccessToken() {
+  if (isDevHeadersMode() || !state.refreshToken || tokenExpiresSoon(state.refreshTokenExpiresAt, 0)) return false;
+  try {
+    const refreshed = await authRequest("/v1/auth/refresh", { refresh_token: state.refreshToken });
+    setSession({ user: state.user, role: state.role, actorId: state.actorId, tokenPayload: refreshed });
+    syncActorControls();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function authRequest(path, payload, options = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (options.auth && state.accessToken && !isDevHeadersMode()) headers.Authorization = `Bearer ${state.accessToken}`;
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload || {}),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({ error: "request_failed" }));
+    throw apiError(response, data, path);
+  }
+  return response.json();
+}
+
+function tokenExpiresSoon(value, skewSeconds = 60) {
+  if (!value) return false;
+  const expiresAt = Date.parse(value);
+  if (!Number.isFinite(expiresAt)) return false;
+  return expiresAt <= Date.now() + skewSeconds * 1000;
+}
+
+function apiError(response, data = {}, fallback = "request_failed") {
+  const error = new Error(data.error || fallback);
+  error.status = Number(response.status || 0);
+  error.code = data.error || fallback;
+  return error;
+}
+
+function authMessage(error, fallback) {
+  if (error.status === 401 || error.code === "authentication_required") return "认证失败或会话过期，请重新登录。";
+  if (error.status === 403 || error.code === "permission_denied") return "权限不足：当前账号不能执行该操作。";
+  return fallback;
 }
 
 function renderNav() {
@@ -467,9 +669,14 @@ function render() {
   document.body.classList.toggle("builder-mode", state.route === "workflows" && Boolean(state.workflowBuilder));
   $("#api-state").innerHTML = `${state.apiOnline ? "基础服务在线" : "本地模拟模式"} <span class="role-badge">${displayRole(state.role)}</span>`;
   $(".status-dot").classList.toggle("live", state.apiOnline);
+  syncActorControls();
   $("#project-switcher").innerHTML = `<option>全部项目</option>${state.projects.map((p) => `<option>${escapeHtml(p.key)} · ${escapeHtml(p.name)}</option>`).join("")}`;
   renderNav();
   document.querySelectorAll("#nav button").forEach((button) => button.classList.toggle("active", button.dataset.route === state.route));
+  if (state.authError) {
+    content.innerHTML = `<section class="permission-denied panel"><strong>${escapeHtml(state.authError)}</strong><span>请重新登录，或让管理员调整 IAM 权限后再试。</span></section>`;
+    return;
+  }
   if (state.route === "dashboard") renderDashboard();
   if (state.route === "bigscreen") renderBigscreen();
   if (state.route === "tasks") renderTasks();
@@ -3735,6 +3942,11 @@ function toast(message) {
 }
 
 function showError(message) {
+  if (message === "authentication_required") {
+    clearSession();
+    showLoginError("会话已失效，请重新登录。");
+    return;
+  }
   if (message === "permission_denied") {
     toast(`权限不足：${displayRole(state.role)}不能执行该操作。`);
     return;

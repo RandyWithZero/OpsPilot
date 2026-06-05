@@ -24,11 +24,13 @@ const document = {
   addEventListener() {},
 };
 
+const localStore = new Map();
+const sessionStore = new Map();
 const context = vm.createContext({
   console,
   document,
-  localStorage: { getItem() { return null; } },
-  sessionStorage: { getItem() { return ""; }, setItem() {}, removeItem() {} },
+  localStorage: { getItem(key) { return localStore.get(key) || null; }, setItem(key, value) { localStore.set(key, String(value)); } },
+  sessionStorage: { getItem(key) { return sessionStore.get(key) || ""; }, setItem(key, value) { sessionStore.set(key, String(value)); }, removeItem(key) { sessionStore.delete(key); } },
   fetch() { throw new Error("fetch should not run in credential sanitization check"); },
   setTimeout,
   clearTimeout,

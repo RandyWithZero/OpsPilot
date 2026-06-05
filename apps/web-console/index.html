@@ -23,6 +23,7 @@
         <form id="login-form" class="form-stack">
           <h2>欢迎登录</h2>
           <p class="muted">使用企业账号进入运营控制台</p>
+          <div id="login-error" class="auth-error hidden" role="alert"></div>
           <label>
             账号 / 邮箱
             <input id="login-email" type="email" value="admin@opspilot.cn" required />
@@ -31,8 +32,20 @@
             密码
             <input id="login-password" type="password" placeholder="请输入密码" />
           </label>
+          <label>
+            登录角色
+            <select id="login-role">
+              <option>Admin</option>
+              <option>Operator</option>
+              <option>Viewer</option>
+            </select>
+          </label>
+          <label class="check-line">
+            <input id="login-dev-mode" type="checkbox" />
+            <span>本地模拟 / 开发头模式</span>
+          </label>
           <button type="submit">登录控制台</button>
-          <small class="login-helper">支持企业 SSO、MFA 与审计登录</small>
+          <small class="login-helper">默认使用 IAM Bearer 会话；本地模拟仅用于离线检查。</small>
         </form>
       </section>
     </div>
@@ -57,7 +70,8 @@
             <input id="global-search" type="search" placeholder="搜索项目、资产、环境、流程单号" />
           </div>
           <select id="project-switcher" aria-label="项目切换"></select>
-          <div class="actor-context" aria-label="本地调试身份">
+          <div id="session-summary" class="session-summary" aria-label="当前会话"></div>
+          <div class="actor-context hidden" aria-label="本地调试身份">
             <label>
               角色
               <select id="actor-role">

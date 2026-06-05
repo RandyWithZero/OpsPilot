@@ -60,11 +60,13 @@ const document = {
   addEventListener() {},
 };
 
+const localStore = new Map();
+const sessionStore = new Map();
 const context = vm.createContext({
   console,
   document,
-  localStorage: { getItem() { return null; } },
-  sessionStorage: { getItem() { return ""; }, setItem() {}, removeItem() {} },
+  localStorage: { getItem(key) { return localStore.get(key) || null; }, setItem(key, value) { localStore.set(key, String(value)); } },
+  sessionStorage: { getItem(key) { return sessionStore.get(key) || ""; }, setItem(key, value) { sessionStore.set(key, String(value)); }, removeItem(key) { sessionStore.delete(key); } },
   fetch() { throw new Error("fetch should not run in integration route check"); },
   setTimeout,
   clearTimeout,
@@ -72,6 +74,7 @@ const context = vm.createContext({
   Intl,
   URL,
   FormData,
+  Buffer,
 });
 
 vm.runInContext(fs.readFileSync("apps/web-console/app.js", "utf8"), context, { filename: "app.js" });
@@ -110,10 +113,88 @@ const result = vm.runInContext(`
     detail: null,
   });
 
+  function makeToken(claims) {
+    const json = JSON.stringify({ sub: "usr_admin", role: "Admin", session_id: "ses_test", exp: Math.floor(Date.now() / 1000) + 600, ...claims });
+    return "opspilot.v1." + Buffer.from(json, "utf8").toString("base64url") + ".sig";
+  }
+
+  const issuedToken = makeToken({ sub: "usr_admin", role: "Admin", session_id: "ses_login" });
+  const refreshedToken = makeToken({ sub: "usr_admin", role: "Admin", session_id: "ses_login", exp: Math.floor(Date.now() / 1000) + 1200 });
+  let authCalls = [];
+  fetch = async (path, init = {}) => {
+    authCalls.push({ path, init });
+    if (String(path).endsWith("/v1/auth/login")) return { ok: true, status: 201, json: async () => ({ access_token: issuedToken, access_token_expires_at: new Date(Date.now() + 120000).toISOString(), refresh_token: "refresh-login", refresh_token_expires_at: new Date(Date.now() + 3600000).toISOString(), token_type: "Bearer", session_id: "ses_login" }) };
+    if (String(path).endsWith("/v1/auth/refresh")) return { ok: true, status: 200, json: async () => ({ access_token: refreshedToken, access_token_expires_at: new Date(Date.now() + 1200000).toISOString(), refresh_token: "refresh-rotated", refresh_token_expires_at: new Date(Date.now() + 3600000).toISOString(), token_type: "Bearer", session_id: "ses_login" }) };
+    if (String(path).endsWith("/v1/auth/logout")) return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    return { ok: true, status: 200, json: async () => [] };
+  };
+  document.querySelector("#login-email").value = "admin@opspilot.cn";
+  document.querySelector("#login-role").value = "Viewer";
+  document.querySelector("#login-dev-mode").checked = false;
+  await signIn({ preventDefault() {} });
+  if (state.authMode !== "bearer" || state.role !== "Admin" || state.actorId !== "usr_admin" || state.accessToken !== issuedToken) throw new Error("login did not derive session from bearer token");
+  if (!authCalls[0].init.body.includes('"role":"Viewer"') || authCalls[0].init.body.includes("refresh-login")) throw new Error("login request did not preserve role input or leaked token material");
+
+  let capturedRequest = null;
+  fetch = async (path, init = {}) => {
+    capturedRequest = { path, init };
+    return { ok: true, status: 200, json: async () => [] };
+  };
+  await apiGet("/v1/projects");
+  if (capturedRequest.init.headers.Authorization !== "Bearer " + issuedToken) throw new Error("apiGet did not send bearer Authorization header");
+  if (capturedRequest.init.headers["X-Actor-ID"] || capturedRequest.init.headers["X-Actor-Role"]) throw new Error("bearer apiGet also sent deprecated actor headers");
+
+  state.accessTokenExpiresAt = new Date(Date.now() - 1000).toISOString();
+  authCalls = [];
+  fetch = async (path, init = {}) => {
+    authCalls.push({ path, init });
+    if (String(path).endsWith("/v1/auth/refresh")) return { ok: true, status: 200, json: async () => ({ access_token: refreshedToken, access_token_expires_at: new Date(Date.now() + 1200000).toISOString(), refresh_token: "refresh-rotated", refresh_token_expires_at: new Date(Date.now() + 3600000).toISOString(), token_type: "Bearer", session_id: "ses_login" }) };
+    return { ok: true, status: 200, json: async () => [] };
+  };
+  await apiGet("/v1/projects");
+  if (state.accessToken !== refreshedToken || state.refreshToken !== "refresh-rotated") throw new Error("refresh did not rotate access and refresh tokens");
+  if (authCalls.at(-1).init.headers.Authorization !== "Bearer " + refreshedToken) throw new Error("apiGet did not retry with refreshed bearer token");
+
+  await signOut();
+  if (state.accessToken || state.refreshToken || state.user) throw new Error("logout did not clear session tokens");
+  Object.assign(state, {
+    apiOnline: false,
+    users: clone(seed.users),
+    projects: clone(seed.projects),
+    assets: clone(seed.assets),
+    environments: clone(seed.environments),
+    gitlabProfiles: clone(seed.gitlabProfiles),
+    gitlabRepositories: clone(seed.gitlabRepositories),
+    vcsOperations: clone(seed.vcsOperations),
+    vcsWebhooks: clone(seed.vcsWebhooks),
+    files: clone(seed.files),
+    fileContexts: clone(seed.fileContexts),
+    fileGrants: {},
+    uploadSessions: [],
+    testCases: clone(seed.testCases),
+    testSuites: clone(seed.testSuites),
+    testRuns: clone(seed.testRuns),
+    reports: clone(seed.reports),
+    qualityGates: clone(seed.qualityGates),
+    agents: clone(seed.agents),
+    skills: clone(seed.skills),
+    credentials: clone(seed.credentials).map((credential) => sanitizeCredential(credential)),
+    modelProviders: clone(seed.modelProviders),
+    workflows: clone(seed.workflows),
+    workflowVersions: clone(seed.workflowVersions),
+    workflowRuns: clone(seed.workflowRuns),
+    runtimeTasks: clone(seed.runtimeTasks),
+    auditEvents: clone(seed.auditEvents),
+    filters: {},
+    detail: null,
+    authError: "",
+  });
+
   state.role = "Admin";
   state.actorId = "admin-console";
+  state.authMode = "dev_headers";
   if (!canRoute("credentials") || !can("create", { type: "identity" }) || !can("delete", { type: "projects" })) throw new Error("Admin role did not receive high-risk permissions");
-  let capturedRequest = null;
+  capturedRequest = null;
   fetch = async (path, init = {}) => {
     capturedRequest = { path, init };
     return { ok: true, status: 200, json: async () => ({ ok: true }) };
