@@ -106,6 +106,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "runs":
             self._call(lambda: self.store.list_workflow_runs(parts[2]))
             return
+        if path == "/readyz":
+            self._readyz()
+            return
         if path in routes:
             self._call(routes[path])
             return
@@ -419,6 +422,14 @@ class FoundationHandler(BaseHTTPRequestHandler):
             self._json({"error": "invalid_json"}, HTTPStatus.BAD_REQUEST)
         except DomainError as exc:
             self._json({"error": exc.code}, exc.status)
+        except (TypeError, ValueError):
+            self._json({"error": "invalid_input"}, HTTPStatus.BAD_REQUEST)
+
+    def _readyz(self) -> None:
+        try:
+            payload = self.store.diagnostics()
+            status = HTTPStatus.OK if payload.get("status") == "ok" else HTTPStatus.SERVICE_UNAVAILABLE
+            self._json(payload, status)
         except (TypeError, ValueError):
             self._json({"error": "invalid_input"}, HTTPStatus.BAD_REQUEST)
 

@@ -196,9 +196,13 @@ class MySQLStore(MemoryStore):
             try:
                 applied = self._applied_migrations()
                 expected = [path.name for path in sorted(MIGRATIONS_DIR.glob("*.sql"))]
-                store["migration_status"] = "ok" if set(expected).issubset(applied) else "pending"
+                migrations_current = set(expected).issubset(applied)
+                store["migration_status"] = "ok" if migrations_current else "pending"
                 store["applied_migrations"] = len(applied)
                 store["expected_migrations"] = len(expected)
+                if not migrations_current:
+                    store["status"] = "degraded"
+                    data["status"] = "degraded"
             except Exception:
                 store["status"] = "error"
                 store["migration_status"] = "unknown"

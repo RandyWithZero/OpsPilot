@@ -507,6 +507,36 @@ class FoundationSliceTest(unittest.TestCase):
         top_level_degraded["status"] = "degraded"
         self.assertFalse(is_ready(top_level_degraded))
 
+    def test_degraded_readiness_returns_service_unavailable(self) -> None:
+        class FailingStorage:
+            provider = "local"
+
+            def ensure_bucket(self) -> None:
+                raise RuntimeError("storage unavailable")
+
+        temp_dir = tempfile.TemporaryDirectory()
+        original_store = FoundationHandler.store
+        FoundationHandler.store = MemoryStore(storage=LocalFileStorage(temp_dir.name))
+        FoundationHandler.store.storage = FailingStorage()  # type: ignore[assignment]
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(base_url + "/readyz", timeout=5)
+            self.assertEqual(raised.exception.code, 503)
+            response = json.loads(raised.exception.read().decode("utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            FoundationHandler.store = original_store
+            temp_dir.cleanup()
+
+        self.assertEqual(response["status"], "degraded")
+        self.assertEqual(response["dependencies"]["storage"]["status"], "error")
+
     def test_local_rbac_permission_matrix_for_high_risk_apis(self) -> None:
         self.assertEqual(actor_from_headers({}).role, "Viewer")
         self.assertEqual(actor_from_headers({"X-Actor-ID": "usr_operator", "X-Actor-Role": "operator"}).actor_id, "usr_operator")
@@ -695,6 +725,19 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertGreaterEqual(diagnostics["dependencies"]["store"]["applied_migrations"], 1)
         self.assertNotIn("opspilot:opspilot", serialized)
         self.assertNotIn("127.0.0.1", serialized)
+
+    def test_mysql_readiness_degrades_when_migrations_are_pending(self) -> None:
+        self.database.tables["foundation_schema_migrations"] = self.database.tables["foundation_schema_migrations"][:-1]
+
+        diagnostics = self.store.diagnostics()
+
+        self.assertEqual(diagnostics["status"], "degraded")
+        self.assertEqual(diagnostics["dependencies"]["store"]["status"], "degraded")
+        self.assertEqual(diagnostics["dependencies"]["store"]["migration_status"], "pending")
+        self.assertLess(
+            diagnostics["dependencies"]["store"]["applied_migrations"],
+            diagnostics["dependencies"]["store"]["expected_migrations"],
+        )
 
     def test_cross_table_references_still_validate_before_persist(self) -> None:
         with self.assertRaises(Exception) as raised:
