@@ -6,12 +6,15 @@ import os
 import secrets
 import base64
 from dataclasses import asdict
+from datetime import datetime, timezone
 from threading import RLock
 from typing import Any, TypeVar
 
+from .auth import ActorContext, AuthenticationRequired, PermissionDenied, hash_token, issue_access_token, new_refresh_token, normalize_role, refresh_expires_at
 from .domain import (
     Agent,
     Asset,
+    AuthSession,
     AuditEvent,
     Conflict,
     CredentialReference,
@@ -25,6 +28,7 @@ from .domain import (
     QualityGate,
     Report,
     RepositoryBinding,
+    ServiceIdentity,
     Skill,
     TestCase,
     TestRun,
@@ -43,7 +47,6 @@ from .domain import (
     sanitize_public_url,
 )
 from .storage import ObjectStorage, storage_from_env
-from .auth import PermissionDenied
 from .vcs import GitLabAPIClient, GitLabClient, LocalGitLabClient
 
 T = TypeVar("T")
@@ -55,6 +58,8 @@ class MemoryStore:
         self._lock = RLock()
         self._ids = 0
         self.users: dict[str, User] = {}
+        self.auth_sessions: dict[str, AuthSession] = {}
+        self.service_identities: dict[str, ServiceIdentity] = {}
         self.projects: dict[str, Project] = {}
         self.assets: dict[str, Asset] = {}
         self.environments: dict[str, Environment] = {}
@@ -86,6 +91,117 @@ class MemoryStore:
     def health(self) -> dict[str, str]:
         return {"status": "ok"}
 
+    def issue_dev_session(self, data: dict[str, Any]) -> dict[str, Any]:
+        role = normalize_role(data.get("role"))
+        if not role:
+            raise InvalidInput("role is invalid")
+        actor_id = str(data.get("actor_id", "") or "").strip()
+        email = str(data.get("email", "") or "").strip().lower()
+        with self._lock:
+            user = self.users.get(actor_id) if actor_id else None
+            if user is None and email:
+                user = next((candidate for candidate in self.users.values() if candidate.email.lower() == email), None)
+            if user is None:
+                if not actor_id:
+                    actor_id = self._id("usr")
+                user = User(email=email or f"{actor_id}@local.opspilot", name=str(data.get("name", "") or actor_id), roles=[{"scope": "platform", "name": role}], id=actor_id)
+                stamp(user)
+                self.users[user.id] = user
+                self._audit(user.id, "identity.user.created", "user", user.id, {"email": user.email, "source": "dev_auth_issuer"})
+            return self._create_session(user.id, role)
+
+    def refresh_session(self, data: dict[str, Any]) -> dict[str, Any]:
+        token_hash = hash_token(str(data.get("refresh_token", "") or ""))
+        if not token_hash:
+            raise AuthenticationRequired("refresh token is required")
+        with self._lock:
+            session = next((candidate for candidate in self.auth_sessions.values() if candidate.refresh_token_hash == token_hash), None)
+            if session is None or session.status != "active" or _is_past(session.expires_at):
+                raise AuthenticationRequired("refresh token is invalid")
+            if session.user_id not in self.users:
+                raise AuthenticationRequired("session user no longer exists")
+            session.expires_at = refresh_expires_at()
+            session.updated_at = now_utc()
+            refresh_token = new_refresh_token()
+            session.refresh_token_hash = hash_token(refresh_token)
+            access_token, access_expires_at = issue_access_token(ActorContext(actor_id=session.user_id, role=session.role, session_id=session.id))
+            self._audit(session.user_id, "auth.session.refreshed", "auth_session", session.id, {"subject_type": "user"})
+            return {"access_token": access_token, "access_token_expires_at": access_expires_at, "refresh_token": refresh_token, "refresh_token_expires_at": session.expires_at, "token_type": "Bearer"}
+
+    def logout_session(self, actor_id: str, data: dict[str, Any]) -> dict[str, str]:
+        session_id = str(data.get("session_id", "") or "").strip()
+        refresh_token = str(data.get("refresh_token", "") or "")
+        refresh_hash = hash_token(refresh_token) if refresh_token else ""
+        with self._lock:
+            for session in self.auth_sessions.values():
+                if (session_id and session.id == session_id) or (refresh_hash and session.refresh_token_hash == refresh_hash):
+                    session.status = "revoked"
+                    session.revoked_at = now_utc()
+                    session.updated_at = session.revoked_at
+                    self._audit(actor_id, "auth.session.revoked", "auth_session", session.id, {"subject_type": "user"})
+                    return {"status": "revoked"}
+        return {"status": "not_found"}
+
+    def create_service_identity(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        role = normalize_role(data.get("role"))
+        if not role:
+            raise InvalidInput("role is invalid")
+        service_token = new_refresh_token()
+        identity = ServiceIdentity(name=str(data.get("name", "") or "").strip(), role=role, token_hash=hash_token(service_token))
+        identity.validate()
+        with self._lock:
+            if any(existing.name.lower() == identity.name.lower() for existing in self.service_identities.values()):
+                raise Conflict("service identity name already exists")
+            identity.id = self._id("svc")
+            stamp(identity)
+            self.service_identities[identity.id] = identity
+            access_token, access_expires_at = issue_access_token(ActorContext(actor_id=identity.id, role=identity.role, subject_type="service", session_id=identity.id), int(data.get("access_token_ttl_seconds", 3600)))
+            self._audit(actor_id, "auth.service_identity.created", "service_identity", identity.id, {"name": identity.name, "role": identity.role})
+            return {**self._public_service_identity(identity), "service_token": service_token, "access_token": access_token, "access_token_expires_at": access_expires_at, "token_type": "Bearer"}
+
+    def list_service_identities(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [self._public_service_identity(identity) for identity in self.service_identities.values()]
+
+    def issue_service_identity_token(self, actor_id: str, service_identity_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        service_token_hash = hash_token(str(data.get("service_token", "") or ""))
+        with self._lock:
+            identity = self.service_identities.get(service_identity_id)
+            if identity is None:
+                raise NotFound("service identity not found")
+            if identity.status != "active" or identity.token_hash != service_token_hash:
+                raise AuthenticationRequired("service identity token is invalid")
+            access_token, access_expires_at = issue_access_token(ActorContext(actor_id=identity.id, role=identity.role, subject_type="service", session_id=identity.id), int(data.get("access_token_ttl_seconds", 3600)))
+            self._audit(actor_id, "auth.service_identity.token_issued", "service_identity", identity.id, {"subject_type": "service"})
+            return {"access_token": access_token, "access_token_expires_at": access_expires_at, "token_type": "Bearer"}
+
+    def revoke_service_identity(self, actor_id: str, service_identity_id: str) -> dict[str, str]:
+        with self._lock:
+            identity = self.service_identities.get(service_identity_id)
+            if identity is None:
+                raise NotFound("service identity not found")
+            identity.status = "revoked"
+            identity.revoked_at = now_utc()
+            identity.updated_at = identity.revoked_at
+            self._audit(actor_id, "auth.service_identity.revoked", "service_identity", identity.id, {"name": identity.name})
+            return {"status": "revoked"}
+
+    def validate_actor_session(self, actor: ActorContext) -> ActorContext:
+        with self._lock:
+            if actor.subject_type == "service":
+                identity = self.service_identities.get(actor.actor_id)
+                if identity is None or identity.status != "active":
+                    raise AuthenticationRequired("service identity is not active")
+                return ActorContext(actor_id=identity.id, role=identity.role, subject_type="service", session_id=identity.id)
+            session = self.auth_sessions.get(actor.session_id)
+            if session is None or session.status != "active" or _is_past(session.expires_at):
+                raise AuthenticationRequired("session is not active")
+            if session.user_id != actor.actor_id:
+                raise AuthenticationRequired("session subject mismatch")
+            if session.user_id not in self.users:
+                raise AuthenticationRequired("session user no longer exists")
+            return ActorContext(actor_id=session.user_id, role=session.role, subject_type="user", session_id=session.id)
+
     def create_user(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
         user = User(**pick(data, User))
         user.validate()
@@ -97,6 +213,21 @@ class MemoryStore:
             self.users[user.id] = user
             self._audit(actor_id, "identity.user.created", "user", user.id, {"email": user.email})
             return asdict(user)
+
+    def _create_session(self, user_id: str, role: str) -> dict[str, Any]:
+        refresh_token = new_refresh_token()
+        session = AuthSession(user_id=user_id, role=role, refresh_token_hash=hash_token(refresh_token), expires_at=refresh_expires_at())
+        session.id = self._id("ses")
+        stamp(session)
+        self.auth_sessions[session.id] = session
+        access_token, access_expires_at = issue_access_token(ActorContext(actor_id=user_id, role=role, session_id=session.id))
+        self._audit(user_id, "auth.session.created", "auth_session", session.id, {"subject_type": "user", "role": role})
+        return {"access_token": access_token, "access_token_expires_at": access_expires_at, "refresh_token": refresh_token, "refresh_token_expires_at": session.expires_at, "session_id": session.id, "token_type": "Bearer"}
+
+    def _public_service_identity(self, identity: ServiceIdentity) -> dict[str, Any]:
+        data = asdict(identity)
+        data.pop("token_hash", None)
+        return data
 
     def list_users(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -122,6 +253,11 @@ class MemoryStore:
             user = self.users.pop(user_id, None)
             if user is None:
                 raise NotFound("user not found")
+            for session in self.auth_sessions.values():
+                if session.user_id == user_id:
+                    session.status = "revoked"
+                    session.revoked_at = now_utc()
+                    session.updated_at = session.revoked_at
             for project in self.projects.values():
                 project.member_ids = [member_id for member_id in project.member_ids if member_id != user_id]
                 if project.owner_id == user_id:
@@ -2089,6 +2225,16 @@ def stamp(entity: Any) -> None:
 def pick(data: dict[str, Any], model: type[T]) -> dict[str, Any]:
     fields = set(model.__dataclass_fields__.keys())  # type: ignore[attr-defined]
     return {key: value for key, value in data.items() if key in fields}
+
+
+def _is_past(value: str) -> bool:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed <= datetime.now(timezone.utc)
 
 
 class LocalSecretStore:

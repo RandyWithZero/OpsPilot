@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -8,6 +9,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from contextlib import contextmanager
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -21,6 +23,7 @@ from opspilot_foundation.auth import (  # noqa: E402
     ActorContext,
     PermissionDenied,
     actor_from_headers,
+    issue_access_token,
     permission_for_request,
     require_permission,
 )
@@ -66,6 +69,21 @@ class FakeGitLabClient:
 
     def get_merge_request(self, base_url, token, repository_id, merge_request_iid):
         return dict(self.merge_requests[(repository_id, str(merge_request_iid))])
+
+
+@contextmanager
+def temporary_env(**values: str):
+    previous = {key: os.environ.get(key) for key in values}
+    try:
+        for key, value in values.items():
+            os.environ[key] = value
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 class FakeMySQLDatabase:
@@ -426,7 +444,7 @@ class FoundationSliceTest(unittest.TestCase):
 
         self.assertIn(("Access-Control-Allow-Origin", "*"), headers)
         self.assertIn(("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS"), headers)
-        self.assertIn(("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID,X-Actor-Role,X-Gitlab-Token"), headers)
+        self.assertIn(("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Actor-ID,X-Actor-Role,X-Gitlab-Token"), headers)
 
     def test_local_rbac_permission_matrix_for_high_risk_apis(self) -> None:
         self.assertEqual(actor_from_headers({}).role, "Viewer")
@@ -472,6 +490,37 @@ class FoundationSliceTest(unittest.TestCase):
         self.assert_allowed("Admin", "POST", "/v1/credentials")
         self.assert_allowed("Admin", "PATCH", "/v1/gitlab/profiles/glp_1")
         self.assert_allowed("Admin", "DELETE", "/v1/projects/prj_1")
+
+    def test_auth_sessions_issue_refresh_and_revoke_without_exposing_hashes(self) -> None:
+        with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1"):
+            issued = self.store.issue_dev_session({"actor_id": "usr_admin", "role": "Admin"})
+            self.assertEqual(issued["token_type"], "Bearer")
+            self.assertIn("access_token", issued)
+            self.assertIn("refresh_token", issued)
+
+            refreshed = self.store.refresh_session({"refresh_token": issued["refresh_token"]})
+            self.assertIn("access_token", refreshed)
+            with self.assertRaises(Exception) as stale:
+                self.store.refresh_session({"refresh_token": issued["refresh_token"]})
+            self.assertEqual(getattr(stale.exception, "code", ""), "authentication_required")
+
+            self.store.logout_session("usr_admin", {"refresh_token": refreshed["refresh_token"]})
+            with self.assertRaises(Exception) as revoked:
+                self.store.refresh_session({"refresh_token": refreshed["refresh_token"]})
+            self.assertEqual(getattr(revoked.exception, "code", ""), "authentication_required")
+            self.assertNotIn("refresh_token_hash", json.dumps(refreshed))
+
+    def test_service_identity_issues_worker_bearer_token_without_listing_secret_material(self) -> None:
+        with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1"):
+            identity = self.store.create_service_identity("usr_admin", {"name": "runtime-worker", "role": "Operator"})
+            self.assertIn("service_token", identity)
+            self.assertIn("access_token", identity)
+            self.assertNotIn("token_hash", identity)
+            listed = self.store.list_service_identities()[0]
+            self.assertEqual(listed["name"], "runtime-worker")
+            self.assertNotIn("token_hash", listed)
+            token = self.store.issue_service_identity_token("usr_admin", identity["id"], {"service_token": identity["service_token"]})
+            self.assertIn("access_token", token)
 
     def assert_allowed(self, role: str, method: str, path: str, body: dict | None = None) -> None:
         require_permission(ActorContext(actor_id="usr_test_actor", role=role), permission_for_request(method, path, body))
@@ -563,6 +612,17 @@ class MySQLStorePersistenceTest(unittest.TestCase):
 
         reloaded.delete_user("usr_test_actor", user["id"])
         self.assertEqual(self.reload_store().list_users(), [])
+
+    def test_auth_sessions_and_service_identities_survive_mysql_reload(self) -> None:
+        with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1"):
+            session = self.store.issue_dev_session({"actor_id": "usr_worker_admin", "role": "Admin"})
+            identity = self.store.create_service_identity("usr_worker_admin", {"name": "runtime-worker", "role": "Operator"})
+
+        reloaded = self.reload_store()
+
+        self.assertIn(session["session_id"], reloaded.auth_sessions)
+        self.assertEqual(reloaded.list_service_identities()[0]["id"], identity["id"])
+        self.assertNotIn("token_hash", reloaded.list_service_identities()[0])
 
     def test_cross_table_references_still_validate_before_persist(self) -> None:
         with self.assertRaises(Exception) as raised:
@@ -828,12 +888,16 @@ class MySQLStorePersistenceTest(unittest.TestCase):
     def test_file_http_routes_enforce_server_owner_scope(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
         original_store = FoundationHandler.store
-        server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
         FoundationHandler.store = MemoryStore(storage=LocalFileStorage(temp_dir.name))
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        base_url = f"http://127.0.0.1:{server.server_port}"
-        try:
+        with temporary_env(OPSPILOT_AUTH_DEV_ISSUER="1", OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+            owner_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_owner", "role": "Operator"})
+            other_session = FoundationHandler.store.issue_dev_session({"actor_id": "usr_other", "role": "Operator"})
+            owner_headers = {"Authorization": f"Bearer {owner_session['access_token']}"}
+            other_headers = {"Authorization": f"Bearer {other_session['access_token']}"}
+            server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
             created = self.http_json(
                 base_url,
                 "POST",
@@ -844,7 +908,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
                     "content_type": "text/plain",
                     "content_base64": base64.b64encode(b"private").decode("ascii"),
                 },
-                {"X-Actor-ID": "usr_owner", "X-Actor-Role": "operator"},
+                owner_headers,
                 expected_status=201,
             )
 
@@ -852,7 +916,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
                 base_url,
                 "GET",
                 f"/v1/files/{created['id']}/download",
-                headers={"X-Actor-ID": "usr_other", "X-Actor-Role": "operator"},
+                headers=other_headers,
                 expected_status=404,
             )
             self.assertEqual(other_download["error"], "not_found")
@@ -861,7 +925,7 @@ class MySQLStorePersistenceTest(unittest.TestCase):
                 base_url,
                 "GET",
                 "/v1/files?owner_id=usr_owner",
-                headers={"X-Actor-ID": "usr_other", "X-Actor-Role": "operator"},
+                headers=other_headers,
                 expected_status=403,
             )
             self.assertEqual(spoofed_list["error"], "permission_denied")
@@ -870,9 +934,44 @@ class MySQLStorePersistenceTest(unittest.TestCase):
                 base_url,
                 "GET",
                 f"/v1/files/{created['id']}/download",
-                headers={"X-Actor-ID": "usr_owner", "X-Actor-Role": "operator"},
+                headers=owner_headers,
             )
             self.assertEqual(base64.b64decode(owner_download["content_base64"]), b"private")
+            server.shutdown()
+            thread.join(timeout=2)
+            server.server_close()
+            FoundationHandler.store = original_store
+            temp_dir.cleanup()
+
+    def test_http_auth_requires_bearer_and_gates_dev_headers(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        original_store = FoundationHandler.store
+        FoundationHandler.store = MemoryStore(storage=LocalFileStorage(temp_dir.name))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FoundationHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            missing = self.http_json(base_url, "GET", "/v1/projects", expected_status=401)
+            self.assertEqual(missing["error"], "authentication_required")
+
+            ignored_dev_headers = self.http_json(
+                base_url,
+                "GET",
+                "/v1/projects",
+                headers={"X-Actor-ID": "usr_owner", "X-Actor-Role": "Admin"},
+                expected_status=401,
+            )
+            self.assertEqual(ignored_dev_headers["error"], "authentication_required")
+
+            with temporary_env(OPSPILOT_AUTH_DEV_HEADERS="1"):
+                allowed = self.http_json(base_url, "GET", "/v1/projects", headers={"X-Actor-ID": "usr_owner", "X-Actor-Role": "Viewer"})
+            self.assertEqual(allowed, [])
+
+            with temporary_env(OPSPILOT_AUTH_TOKEN_SECRET="test-secret"):
+                expired_token, _ = issue_access_token(ActorContext(actor_id="usr_owner", role="Viewer", session_id="ses_expired"), -1)
+                expired = self.http_json(base_url, "GET", "/v1/projects", headers={"Authorization": f"Bearer {expired_token}"}, expected_status=401)
+            self.assertEqual(expired["error"], "authentication_required")
         finally:
             server.shutdown()
             thread.join(timeout=2)

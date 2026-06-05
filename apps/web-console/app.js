@@ -76,6 +76,7 @@ const state = {
   user: sessionStorage.getItem("opspilot_user") || "",
   role: normalizeConsoleRole(sessionStorage.getItem("opspilot_role") || "Admin"),
   actorId: sessionStorage.getItem("opspilot_actor_id") || DEFAULT_ACTOR_ID,
+  accessToken: sessionStorage.getItem("opspilot_access_token") || "",
   users: [],
   projects: [],
   assets: [],
@@ -435,6 +436,7 @@ async function apiRequest(method, path, payload) {
 }
 
 function actorHeaders() {
+  if (state.accessToken) return { Authorization: `Bearer ${state.accessToken}` };
   return { "X-Actor-ID": state.actorId || DEFAULT_ACTOR_ID, "X-Actor-Role": normalizeConsoleRole(state.role) };
 }
 

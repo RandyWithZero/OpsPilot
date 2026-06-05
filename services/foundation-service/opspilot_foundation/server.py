@@ -7,7 +7,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
-from .auth import ROLE_ADMIN, ActorContext, PermissionDenied, actor_from_headers, permission_for_request, require_permission
+from .auth import (
+    ROLE_ADMIN,
+    ActorContext,
+    AuthenticationRequired,
+    PermissionDenied,
+    actor_from_bearer_token,
+    actor_from_headers,
+    bearer_token_from_headers,
+    dev_headers_enabled,
+    dev_issuer_enabled,
+    permission_for_request,
+    require_permission,
+)
 from .domain import DomainError
 from .store import foundation_store_from_env
 
@@ -43,10 +55,13 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/reports": self.store.list_reports,
             "/v1/quality-gates": self.store.list_quality_gates,
             "/v1/audit-events": self.store.list_audit_events,
+            "/v1/service-identities": self.store.list_service_identities,
         }
         parsed = urlparse(self.path)
         path = parsed.path
-        actor = actor_from_headers(self.headers)
+        actor = self._actor(path)
+        if actor is None:
+            return
         if not self._authorize(actor, "GET", path):
             return
         query = parse_qs(parsed.query)
@@ -102,7 +117,18 @@ class FoundationHandler(BaseHTTPRequestHandler):
         except BadJSON:
             self._json({"error": "invalid_json"}, HTTPStatus.BAD_REQUEST)
             return
-        actor = actor_from_headers(self.headers)
+        if path in {"/v1/auth/login", "/v1/auth/dev-token"}:
+            if not dev_issuer_enabled():
+                self._json({"error": "authentication_required"}, HTTPStatus.UNAUTHORIZED)
+                return
+            self._call(lambda: self.store.issue_dev_session(body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/auth/refresh":
+            self._call(lambda: self.store.refresh_session(body))
+            return
+        actor = self._actor(path)
+        if actor is None:
+            return
         if not self._authorize(actor, "POST", path, body):
             return
         actor_id = actor.actor_id
@@ -169,8 +195,17 @@ class FoundationHandler(BaseHTTPRequestHandler):
         if path == "/v1/runtime/tasks/claim":
             self._call(lambda: self.store.claim_runtime_task(actor_id, body))
             return
+        if path == "/v1/auth/logout":
+            self._call(lambda: self.store.logout_session(actor_id, {**body, "session_id": actor.session_id}))
+            return
+        if path == "/v1/service-identities":
+            self._call(lambda: self.store.create_service_identity(actor_id, body), HTTPStatus.CREATED)
+            return
 
         parts = [part for part in path.split("/") if part]
+        if len(parts) == 4 and parts[:2] == ["v1", "service-identities"] and parts[3] == "token":
+            self._call(lambda: self.store.issue_service_identity_token(actor_id, parts[2], body))
+            return
         if len(parts) == 4 and parts[:2] == ["v1", "files"] and parts[3] == "upload-grants":
             self._call(lambda: self.store.create_upload_grant(actor_id, parts[2], self._file_access_filters(actor, {})), HTTPStatus.CREATED)
             return
@@ -239,7 +274,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
             self._json({"error": "invalid_json"}, HTTPStatus.BAD_REQUEST)
             return
         parts = [part for part in path.split("/") if part]
-        actor = actor_from_headers(self.headers)
+        actor = self._actor(path)
+        if actor is None:
+            return
         if not self._authorize(actor, "PATCH", path, body):
             return
         actor_id = actor.actor_id
@@ -288,7 +325,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         path = urlparse(self.path).path
-        actor = actor_from_headers(self.headers)
+        actor = self._actor(path)
+        if actor is None:
+            return
         if not self._authorize(actor, "DELETE", path):
             return
         actor_id = actor.actor_id
@@ -327,6 +366,9 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 3 and parts[:2] == ["v1", "workflows"]:
             self._call(lambda: self.store.delete_workflow(actor_id, parts[2]))
+            return
+        if len(parts) == 3 and parts[:2] == ["v1", "service-identities"]:
+            self._call(lambda: self.store.revoke_service_identity(actor_id, parts[2]))
             return
         if len(parts) == 5 and parts[:2] == ["v1", "projects"] and parts[3] == "assets":
             self._call(lambda: self.store.unlink_project_asset(actor_id, parts[2], parts[4]))
@@ -384,6 +426,18 @@ class FoundationHandler(BaseHTTPRequestHandler):
             self._json({"error": exc.code}, exc.status)
             return False
 
+    def _actor(self, path: str) -> ActorContext | None:
+        if path == "/healthz":
+            return ActorContext(actor_id="system", role=ROLE_ADMIN)
+        try:
+            if dev_headers_enabled() and (self.headers.get("X-Actor-ID") or self.headers.get("X-Actor-Role")):
+                return actor_from_headers(self.headers)
+            return self.store.validate_actor_session(actor_from_bearer_token(bearer_token_from_headers(self.headers)))
+        except (AuthenticationRequired, RuntimeError) as exc:
+            code = exc.code if isinstance(exc, AuthenticationRequired) else "authentication_required"
+            self._json({"error": code}, HTTPStatus.UNAUTHORIZED)
+            return None
+
     def _json(self, payload: Any, status: int | HTTPStatus) -> None:
         data = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         self.send_response(int(status))
@@ -396,7 +450,7 @@ class FoundationHandler(BaseHTTPRequestHandler):
     def _cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type,X-Actor-ID,X-Actor-Role,X-Gitlab-Token")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Actor-ID,X-Actor-Role,X-Gitlab-Token")
 
     def _query_filters(self, query: str) -> dict[str, str]:
         filters: dict[str, str] = {}

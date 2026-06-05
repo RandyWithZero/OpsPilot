@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlparse
 from .domain import (
     Agent,
     Asset,
+    AuthSession,
     AuditEvent,
     CredentialReference,
     Environment,
@@ -19,6 +20,7 @@ from .domain import (
     Project,
     QualityGate,
     Report,
+    ServiceIdentity,
     Skill,
     TestCase,
     TestRun,
@@ -42,6 +44,8 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations" / "mysql"
 
 ENTITY_MODELS: list[tuple[str, str, type[Any]]] = [
     ("users", "users", User),
+    ("auth_sessions", "auth_sessions", AuthSession),
+    ("service_identities", "service_identities", ServiceIdentity),
     ("projects", "projects", Project),
     ("assets", "assets", Asset),
     ("environments", "environments", Environment),
@@ -69,6 +73,12 @@ ENTITY_MODELS: list[tuple[str, str, type[Any]]] = [
 
 MUTATING_METHODS = {
     "create_user",
+    "issue_dev_session",
+    "refresh_session",
+    "logout_session",
+    "create_service_identity",
+    "issue_service_identity_token",
+    "revoke_service_identity",
     "update_user",
     "delete_user",
     "create_project",
@@ -274,6 +284,8 @@ class MySQLStore(MemoryStore):
             "environments",
             "assets",
             "project_members",
+            "service_identities",
+            "auth_sessions",
             "projects",
             "users",
         ]:
@@ -282,6 +294,10 @@ class MySQLStore(MemoryStore):
     def _insert_entities(self, cursor: Any) -> None:
         for user in self.users.values():
             self._insert_payload(cursor, "users", ["id", "email", "name", "status", "roles", "created_at", "updated_at"], user)
+        for session in self.auth_sessions.values():
+            self._insert_payload(cursor, "auth_sessions", ["id", "user_id", "role", "status", "expires_at", "created_at", "updated_at"], session)
+        for identity in self.service_identities.values():
+            self._insert_payload(cursor, "service_identities", ["id", "name", "role", "status", "created_at", "updated_at"], identity)
         for project in self.projects.values():
             self._insert_payload(cursor, "projects", ["id", ("project_key", "key"), "name", "owner_id", "status", "created_at", "updated_at"], project)
         for asset in self.assets.values():

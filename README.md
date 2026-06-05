@@ -57,6 +57,35 @@ docker compose -f infra/docker-compose/docker-compose.yml up -d
 
 The current service uses in-memory persistence by default so the backend slice is immediately testable without third-party dependencies. By default, GitLab calls use the local adapter for deterministic development and tests. Set `OPSPILOT_GITLAB_LIVE=1` before `make run-foundation` to use the standard-library GitLab HTTP adapter; token material still stays behind credential references and is not returned in responses or audit events.
 
+### IAM/Auth Boundary
+
+Protected foundation routes require an `Authorization: Bearer ...` access token. Access tokens are short-lived and backed by persistent user sessions or service identities; refresh tokens/session records and service identity token hashes are stored by the foundation store and survive MySQL-backed service restarts. Missing, malformed, expired, or revoked tokens return `401 authentication_required`; authenticated callers with insufficient Admin/Operator/Viewer permissions return `403 permission_denied`.
+
+For local development, enable the replaceable token issuer explicitly:
+
+```sh
+OPSPILOT_AUTH_DEV_ISSUER=1 OPSPILOT_AUTH_TOKEN_SECRET='local-dev-secret' make run-foundation
+```
+
+Then issue a local Admin session:
+
+```sh
+curl -X POST http://localhost:8080/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"actor_id":"usr_000001","role":"Admin","email":"admin@local.opspilot","name":"Local Admin"}'
+```
+
+Use the returned `access_token` on protected calls:
+
+```sh
+curl http://localhost:8080/v1/projects \
+  -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN"
+```
+
+Refresh and logout use `/v1/auth/refresh` and `/v1/auth/logout`. Runtime workers and future model/artifact services should use service identities rather than human sessions: Admins create `/v1/service-identities`, store the one-time `service_token` securely, and exchange it at `/v1/service-identities/{serviceIdentityID}/token` for short-lived worker access tokens.
+
+The old `X-Actor-ID` / `X-Actor-Role` headers are deprecated compatibility headers. They are ignored unless `OPSPILOT_AUTH_DEV_HEADERS=1` is set, and must not be treated as a production contract.
+
 ### MySQL Persistence
 
 Set `OPSPILOT_FOUNDATION_MYSQL_DSN` to enable the MySQL-backed foundation store. When the variable is absent or empty, the service falls back to the in-memory store.
@@ -89,29 +118,30 @@ GitLab MVP flow:
 
 ```sh
 curl -X POST http://localhost:8080/v1/credentials \
-  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Admin' \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN" \
   -d '{"provider":"gitlab","name":"GitLab Ops","secret":"glpat-..."}'
 
 curl -X POST http://localhost:8080/v1/gitlab/profiles \
-  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Admin' \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN" \
   -d '{"name":"Primary GitLab","base_url":"https://gitlab.example.com","credential_ref_id":"cred_000001","webhook_secret":"gitlab-webhook-secret"}'
 
 curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/sync \
-  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN" \
   -d '{"search":"platform","page":1,"per_page":20}'
 
-curl 'http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories?search=platform&page=1&per_page=20'
+curl 'http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories?search=platform&page=1&per_page=20' \
+  -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN"
 
 curl -X POST http://localhost:8080/v1/projects/prj_000010/repositories \
-  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN" \
   -d '{"provider":"gitlab","profile_id":"glp_000003","repository_id":"100"}'
 
 curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/100/branches \
-  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN" \
   -d '{"project_id":"prj_000010","branch":"feature/opspilot","ref":"main"}'
 
 curl -X POST http://localhost:8080/v1/gitlab/profiles/glp_000003/repositories/100/merge-requests \
-  -H 'Content-Type: application/json' -H 'X-Actor-ID: usr_000001' -H 'X-Actor-Role: Operator' \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $OPSPILOT_ACCESS_TOKEN" \
   -d '{"project_id":"prj_000010","source_branch":"feature/opspilot","target_branch":"main","title":"OpsPilot change"}'
 ```
 
@@ -134,6 +164,6 @@ Assets are addressable by `category`, `status`, `parent_id`, `capability`, `tag`
 
 Environments are project-owned DEV/QA/QE scopes. `GET /v1/environments` supports `project_id`, `type`, `status`, `asset_id`, and `member_id` filters. Environment members must already belong to the project, and environment assets must first be bound to that project through `/v1/projects/{projectID}/assets/{assetID}`. Environment asset/member/file bindings can then be operated through nested `/v1/environments/{environmentID}/...` routes. Environment file binding requires the actor to belong to the project and own the file; exact environment-scoped files are accepted, unbound files are claimed atomically, and files bound to other resources are rejected. Deleting an asset or file removes its references from projects/environments; retiring, archiving, or deletion-marking an asset also clears project/environment asset references.
 
-Local MVP uploads accept base64 JSON content up to `OPSPILOT_MAX_FILE_UPLOAD_BYTES` bytes after decode (default 5 MiB). HTTP request bodies are capped by `OPSPILOT_MAX_REQUEST_BODY_BYTES` (default 8 MiB). Non-admin HTTP callers are scoped to their `X-Actor-ID` as `owner_id`; admin callers may filter across owners.
+Local MVP uploads accept base64 JSON content up to `OPSPILOT_MAX_FILE_UPLOAD_BYTES` bytes after decode (default 5 MiB). HTTP request bodies are capped by `OPSPILOT_MAX_REQUEST_BODY_BYTES` (default 8 MiB). Non-admin HTTP callers are scoped to the authenticated actor ID as `owner_id`; admin callers may filter across owners.
 
 MySQL migrations and the concrete persistence adapter live behind the existing repository boundary; HTTP handlers continue to call the store-facing API and do not depend on MySQL driver details.
