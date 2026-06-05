@@ -1,4 +1,4 @@
-const API_BASE = localStorage.getItem("opspilot_api_base") || "/api";
+const API_BASE = localStorage.getItem("opspilot_api_base") || "";
 const DEFAULT_ACTOR_ID = "web-console";
 const DEV_HEADERS_STORAGE_KEY = "opspilot_auth_dev_headers";
 const navItems = [
