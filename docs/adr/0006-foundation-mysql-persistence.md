@@ -16,7 +16,7 @@ The adapter preserves the existing store-facing API:
 
 - HTTP handlers keep calling store methods and do not import MySQL driver details.
 - Domain validation, credential redaction, file access filters, workflow predecessor snapshots, and audit event creation stay in the existing store behavior.
-- The MySQL adapter hydrates state on startup, delegates domain mutations to the store boundary, and persists the resulting snapshot to normalized InnoDB tables.
+- The MySQL adapter hydrates state on startup, delegates domain mutations to the store boundary, and persists the resulting snapshot to normalized InnoDB tables. Mutating calls persist in exception paths as well so failed VCS operations and their audit records are durable.
 
 The first migration creates concrete tables for users/roles, projects/members/repository bindings, assets, environments, files/upload sessions, credential refs and secret boundary records, GitLab profiles/repositories/VCS operations/webhooks, agents/skills/model providers, workflows/versions/runs/step runs, tests/reports/quality gates, and audit events. JSON payload columns preserve the public contract while indexed relational columns provide stable query and foreign-reference boundaries for later adapters.
 
@@ -26,4 +26,5 @@ The first migration creates concrete tables for users/roles, projects/members/re
 - MySQL startup applies migrations automatically before loading state.
 - Docker Compose uses a named MySQL volume so persisted records can be read after service or container restart.
 - Secret material is stored only in the `secret_refs` boundary table and never in audit payloads or normal API responses.
+- Destructive project and workflow deletes intentionally cascade their in-memory children before persistence. The MySQL foreign-key actions mirror this for project children, workflow versions/runs/steps, and test-suite/test-run links.
 - A later performance pass can replace snapshot persistence with per-aggregate upserts without changing handlers or OpenAPI.

@@ -173,8 +173,27 @@ class MemoryStore:
             project = self.projects.pop(project_id, None)
             if project is None:
                 raise NotFound("project not found")
-            for environment_id in list(project.environment_ids):
-                self.environments.pop(environment_id, None)
+            for environment_id, environment in list(self.environments.items()):
+                if environment.project_id == project_id:
+                    self.environments.pop(environment_id, None)
+            for workflow_id, workflow in list(self.workflows.items()):
+                if workflow.project_id == project_id:
+                    self._delete_workflow_cascade(workflow_id)
+            for run_id, run in list(self.test_runs.items()):
+                if run.project_id == project_id:
+                    self.test_runs.pop(run_id, None)
+            for suite_id, suite in list(self.test_suites.items()):
+                if suite.project_id == project_id:
+                    self.test_suites.pop(suite_id, None)
+            for case_id, test_case in list(self.test_cases.items()):
+                if test_case.project_id == project_id:
+                    self.test_cases.pop(case_id, None)
+            for report_id, report in list(self.reports.items()):
+                if report.project_id == project_id:
+                    self.reports.pop(report_id, None)
+            for gate_id, gate in list(self.quality_gates.items()):
+                if gate.project_id == project_id:
+                    self.quality_gates.pop(gate_id, None)
             self._audit(actor_id, "project.deleted", "project", project_id, {"key": project.key})
             return {"status": "deleted"}
 
@@ -968,12 +987,9 @@ class MemoryStore:
 
     def delete_workflow(self, actor_id: str, workflow_id: str) -> dict[str, str]:
         with self._lock:
-            workflow = self.workflows.pop(workflow_id, None)
+            workflow = self._delete_workflow_cascade(workflow_id)
             if workflow is None:
                 raise NotFound("workflow not found")
-            for version_id, version in list(self.workflow_versions.items()):
-                if version.workflow_id == workflow_id:
-                    self.workflow_versions.pop(version_id, None)
             self._audit(actor_id, "workflow.deleted", "workflow", workflow_id, {"name": workflow.name})
             return {"status": "deleted"}
 
@@ -1446,6 +1462,21 @@ class MemoryStore:
         if node_type in {"approval", "manual", "manual_task"}:
             return "manual"
         return "result"
+
+    def _delete_workflow_cascade(self, workflow_id: str) -> WorkflowDefinition | None:
+        workflow = self.workflows.pop(workflow_id, None)
+        if workflow is None:
+            return None
+        for run_id, run in list(self.workflow_runs.items()):
+            if run.workflow_id == workflow_id:
+                self.workflow_runs.pop(run_id, None)
+        for step_id, step in list(self.workflow_step_runs.items()):
+            if step.workflow_id == workflow_id:
+                self.workflow_step_runs.pop(step_id, None)
+        for version_id, version in list(self.workflow_versions.items()):
+            if version.workflow_id == workflow_id:
+                self.workflow_versions.pop(version_id, None)
+        return workflow
 
     def _validate_step_transition(self, step: WorkflowStepRun, next_status: str) -> None:
         if next_status not in {"running", "completed", "failed", "skipped"}:

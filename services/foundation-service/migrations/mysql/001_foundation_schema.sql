@@ -246,7 +246,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   updated_at VARCHAR(64) NOT NULL,
   KEY ix_workflow_runs_workflow (workflow_id, status, created_at),
   CONSTRAINT fk_workflow_runs_workflow FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
-  CONSTRAINT fk_workflow_runs_version FOREIGN KEY (workflow_version_id) REFERENCES workflow_versions(id)
+  CONSTRAINT fk_workflow_runs_version FOREIGN KEY (workflow_version_id) REFERENCES workflow_versions(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS workflow_step_runs (
@@ -324,7 +324,7 @@ CREATE TABLE IF NOT EXISTS test_suite_cases (
   case_id VARCHAR(64) NOT NULL,
   PRIMARY KEY (suite_id, case_id),
   CONSTRAINT fk_test_suite_cases_suite FOREIGN KEY (suite_id) REFERENCES test_suites(id) ON DELETE CASCADE,
-  CONSTRAINT fk_test_suite_cases_case FOREIGN KEY (case_id) REFERENCES test_cases(id)
+  CONSTRAINT fk_test_suite_cases_case FOREIGN KEY (case_id) REFERENCES test_cases(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS test_runs (
@@ -338,7 +338,7 @@ CREATE TABLE IF NOT EXISTS test_runs (
   updated_at VARCHAR(64) NOT NULL,
   KEY ix_test_runs_project (project_id, status, created_at),
   CONSTRAINT fk_test_runs_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-  CONSTRAINT fk_test_runs_suite FOREIGN KEY (suite_id) REFERENCES test_suites(id)
+  CONSTRAINT fk_test_runs_suite FOREIGN KEY (suite_id) REFERENCES test_suites(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS reports (

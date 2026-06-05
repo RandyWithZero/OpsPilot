@@ -149,7 +149,11 @@ class MySQLStore(MemoryStore):
         attr = super().__getattribute__(name)
         if name in MUTATING_METHODS and callable(attr):
             def persisted(*args: Any, **kwargs: Any) -> Any:
-                result = attr(*args, **kwargs)
+                try:
+                    result = attr(*args, **kwargs)
+                except Exception:
+                    self._persist_snapshot()
+                    raise
                 self._persist_snapshot()
                 return result
             return persisted

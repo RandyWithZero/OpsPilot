@@ -316,9 +316,11 @@ class MySQLStorePersistenceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.storage_dir = tempfile.TemporaryDirectory()
         self.database = FakeMySQLDatabase()
+        self.gitlab_client = FakeGitLabClient()
         self.store = MySQLStore(
             "mysql://opspilot:opspilot@127.0.0.1:3306/opspilot_foundation",
             storage=LocalFileStorage(self.storage_dir.name),
+            gitlab_client=self.gitlab_client,
             connection_factory=self.database.connect,
         )
 
@@ -329,8 +331,35 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         return MySQLStore(
             "mysql://opspilot:opspilot@127.0.0.1:3306/opspilot_foundation",
             storage=LocalFileStorage(self.storage_dir.name),
+            gitlab_client=self.gitlab_client,
             connection_factory=self.database.connect,
         )
+
+    def create_owned_project(self) -> tuple[dict, dict]:
+        user = self.store.create_user("usr_test_actor", {"email": "owner@example.com", "name": "Owner"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops", "owner_id": user["id"]})
+        return user, project
+
+    def create_workflow_with_run(self, project_id: str = "") -> tuple[dict, dict]:
+        workflow = self.store.create_workflow("usr_test_actor", {"name": f"Deploy {project_id}", "project_id": project_id})
+        self.store.create_workflow_version(
+            "usr_test_actor",
+            workflow["id"],
+            {
+                "version": "1",
+                "nodes": [
+                    {"id": "trigger", "type": "trigger", "name": "Start"},
+                    {"id": "manual", "type": "manual", "name": "Approve"},
+                    {"id": "result", "type": "result", "name": "Finish"},
+                ],
+                "edges": [
+                    {"from_node_id": "trigger", "to_node_id": "manual"},
+                    {"from_node_id": "manual", "to_node_id": "result"},
+                ],
+            },
+        )
+        run = self.store.create_workflow_run("usr_test_actor", workflow["id"], {})
+        return workflow, run
 
     def test_create_update_delete_round_trips_through_mysql_snapshot(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "owner@example.com", "name": "Owner"})
@@ -350,33 +379,91 @@ class MySQLStorePersistenceTest(unittest.TestCase):
         self.assertEqual(self.database.tables.get("projects", []), [])
 
     def test_workflow_run_predecessor_snapshot_survives_reload(self) -> None:
-        user = self.store.create_user("usr_test_actor", {"email": "owner@example.com", "name": "Owner"})
-        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops", "owner_id": user["id"]})
-        workflow = self.store.create_workflow("usr_test_actor", {"name": "Deploy", "project_id": project["id"]})
-        self.store.create_workflow_version(
-            "usr_test_actor",
-            workflow["id"],
-            {
-                "version": "1",
-                "nodes": [
-                    {"id": "trigger", "type": "trigger", "name": "Start"},
-                    {"id": "manual", "type": "manual", "name": "Approve"},
-                    {"id": "result", "type": "result", "name": "Finish"},
-                ],
-                "edges": [
-                    {"from_node_id": "trigger", "to_node_id": "manual"},
-                    {"from_node_id": "manual", "to_node_id": "result"},
-                ],
-            },
-        )
-
-        run = self.store.create_workflow_run("usr_test_actor", workflow["id"], {})
+        _, project = self.create_owned_project()
+        workflow, run = self.create_workflow_with_run(project["id"])
         reloaded_run = self.reload_store().list_workflow_runs(workflow["id"])[0]
         steps_by_node = {step["node_id"]: step for step in reloaded_run["steps"]}
 
         self.assertEqual(run["id"], reloaded_run["id"])
         self.assertEqual(steps_by_node["manual"]["predecessor_node_ids"], ["trigger"])
         self.assertEqual(steps_by_node["result"]["predecessor_node_ids"], ["manual"])
+
+    def test_failed_gitlab_merge_request_operation_survives_reload(self) -> None:
+        user, project = self.create_owned_project()
+        credential = self.store.create_credential(user["id"], {"provider": "gitlab", "name": "GitLab", "secret": "glpat-secret"})
+        profile = self.store.create_gitlab_profile(user["id"], {"name": "Primary GitLab", "base_url": "https://gitlab.example.com", "credential_ref_id": credential["id"]})
+        self.store.sync_gitlab_repositories(user["id"], profile["id"], search="platform")
+        self.store.link_project_repository(user["id"], project["id"], {"provider": "gitlab", "profile_id": profile["id"], "repository_id": "100"})
+        self.gitlab_client.fail_next_merge_request = True
+
+        with self.assertRaises(Exception) as raised:
+            self.store.create_gitlab_merge_request(
+                user["id"],
+                profile["id"],
+                "100",
+                {"project_id": project["id"], "source_branch": "feature/fail", "target_branch": "main", "title": "Failing MR"},
+            )
+
+        self.assertEqual(getattr(raised.exception, "code", ""), "invalid_input")
+        reloaded = self.reload_store()
+        operations = reloaded.list_vcs_operations()
+        audit_actions = [event["action"] for event in reloaded.list_audit_events()]
+
+        self.assertEqual(len(operations), 1)
+        self.assertEqual(operations[0]["status"], "failed")
+        self.assertEqual(operations[0]["operation_type"], "open_merge_request")
+        self.assertEqual(operations[0]["result"], {"error": "invalid_input"})
+        self.assertIn("gitlab.merge_request.failed", audit_actions)
+
+    def test_project_delete_cascades_mysql_child_rows_before_reload(self) -> None:
+        user, project = self.create_owned_project()
+        asset = self.store.create_asset("usr_test_actor", {"category": "vm", "name": "runner"})
+        self.store.create_environment("usr_test_actor", {"project_id": project["id"], "name": "QA", "type": "QA", "owner_id": user["id"], "asset_ids": [asset["id"]]})
+        self.create_workflow_with_run(project["id"])
+        case = self.store.create_test_case("usr_test_actor", {"project_id": project["id"], "name": "Smoke"})
+        suite = self.store.create_test_suite("usr_test_actor", {"project_id": project["id"], "name": "Release", "case_ids": [case["id"]]})
+        test_run = self.store.create_test_run("usr_test_actor", {"project_id": project["id"], "suite_id": suite["id"]})
+        file_object = self.store.upload_file_object(
+            user["id"],
+            {
+                "owner_id": user["id"],
+                "resource_type": "test_run",
+                "resource_id": test_run["id"],
+                "module": "reports",
+                "filename": "report.txt",
+                "content_type": "text/plain",
+                "content_base64": base64.b64encode(b"ok").decode("ascii"),
+            },
+        )
+        report = self.store.create_report(user["id"], {"project_id": project["id"], "title": "Report", "test_run_id": test_run["id"], "file_ids": [file_object["id"]]})
+        self.store.create_quality_gate("usr_test_actor", {"project_id": project["id"], "name": "Gate", "last_report_id": report["id"]})
+
+        self.store.delete_project("usr_test_actor", project["id"])
+        reloaded = self.reload_store()
+
+        self.assertEqual(reloaded.list_projects(), [])
+        self.assertEqual(reloaded.list_environments(), [])
+        self.assertEqual(reloaded.list_workflows(), [])
+        self.assertEqual(reloaded.list_workflow_runs(), [])
+        self.assertEqual(reloaded.list_test_cases(), [])
+        self.assertEqual(reloaded.list_test_suites(), [])
+        self.assertEqual(reloaded.list_test_runs(), [])
+        self.assertEqual(reloaded.list_reports(), [])
+        self.assertEqual(reloaded.list_quality_gates(), [])
+        self.assertTrue(any(event["action"] == "project.deleted" for event in reloaded.list_audit_events()))
+
+    def test_workflow_delete_cascades_versions_runs_and_steps_before_reload(self) -> None:
+        _, project = self.create_owned_project()
+        workflow, _ = self.create_workflow_with_run(project["id"])
+
+        self.store.delete_workflow("usr_test_actor", workflow["id"])
+        reloaded = self.reload_store()
+
+        self.assertEqual(reloaded.list_workflows(), [])
+        self.assertEqual(reloaded.workflow_versions, {})
+        self.assertEqual(reloaded.list_workflow_runs(), [])
+        self.assertEqual(reloaded.workflow_step_runs, {})
+        self.assertTrue(any(event["action"] == "workflow.deleted" for event in reloaded.list_audit_events()))
 
     def test_file_grants_credentials_and_audit_events_are_persisted_safely(self) -> None:
         file_object = self.store.create_file_object(
