@@ -2,16 +2,149 @@ openapi: 3.1.0
 info:
   title: OpsPilot Foundation Service API
   version: 0.3.0
-  description: Foundation APIs for identity, projects, inventory, files, credential references, GitLab profiles, VCS operations, test/report records, and audit events. Local MVP RBAC uses X-Actor-ID plus X-Actor-Role headers; supported roles are Admin, Operator, and Viewer.
+  description: Foundation APIs for identity, projects, inventory, files, credential references, GitLab profiles, VCS operations, test/report records, and audit events. Protected routes require Authorization Bearer access tokens. Admin, Operator, and Viewer permissions are resolved by the IAM boundary; X-Actor-ID and X-Actor-Role are deprecated development-only compatibility headers.
 servers:
   - url: http://localhost:8080
+security:
+  - BearerAuth: []
 paths:
   /healthz:
     get:
       summary: Health check
+      security: []
       responses:
         "200":
           description: Service is healthy.
+  /v1/auth/login:
+    post:
+      summary: Issue a local development user session
+      security: []
+      description: Development token issuer enabled only when OPSPILOT_AUTH_DEV_ISSUER=1. Production deployments should replace this issuer while preserving the response contract.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DevLoginRequest"
+      responses:
+        "201":
+          description: Issued session tokens
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokenResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+  /v1/auth/refresh:
+    post:
+      summary: Rotate refresh token and issue a new access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Refreshed session tokens
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokenResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+  /v1/auth/logout:
+    post:
+      summary: Revoke the current user session
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogoutRequest"
+      responses:
+        "200":
+          description: Session revocation status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+  /v1/service-identities:
+    get:
+      summary: List service identities
+      responses:
+        "200":
+          description: Service identities without token material
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ServiceIdentity"
+    post:
+      summary: Create a service identity and issue its initial worker token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServiceIdentityCreate"
+      responses:
+        "201":
+          description: Created service identity with one-time token material
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceIdentityIssued"
+        "403":
+          $ref: "#/components/responses/PermissionDenied"
+  /v1/service-identities/{serviceIdentityID}/token:
+    post:
+      summary: Issue a short-lived access token for a service identity
+      security: []
+      description: Authenticates with the service identity's one-time `service_token` in the request body. This worker/service token exchange does not require a human Admin bearer session.
+      parameters:
+        - name: serviceIdentityID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServiceTokenRequest"
+      responses:
+        "200":
+          description: Issued service bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessTokenResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+  /v1/service-identities/{serviceIdentityID}:
+    delete:
+      summary: Revoke a service identity
+      parameters:
+        - name: serviceIdentityID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Revoked service identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "403":
+          $ref: "#/components/responses/PermissionDenied"
   /v1/users:
     get:
       summary: List identity users
@@ -615,7 +748,7 @@ paths:
   /v1/files:
     get:
       summary: List file metadata objects
-      description: Non-admin callers are server-scoped to owner_id = X-Actor-ID. Admin callers may filter across owners.
+      description: Non-admin callers are server-scoped to the authenticated actor ID as owner_id. Admin callers may filter across owners.
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -689,7 +822,7 @@ paths:
   /v1/files/{fileID}:
     delete:
       summary: Soft-delete a file object and remove its stored object when present
-      description: Non-admin callers are server-scoped to owner_id = X-Actor-ID. Admin callers may filter across owners.
+      description: Non-admin callers are server-scoped to the authenticated actor ID as owner_id. Admin callers may filter across owners.
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -798,7 +931,7 @@ paths:
   /v1/files/{fileID}/download:
     get:
       summary: Download a file through a controlled response
-      description: Non-admin callers are server-scoped to owner_id = X-Actor-ID. Admin callers may filter across owners.
+      description: Non-admin callers are server-scoped to the authenticated actor ID as owner_id. Admin callers may filter across owners.
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"
@@ -1936,22 +2069,29 @@ paths:
                 items:
                   $ref: "#/components/schemas/AuditEvent"
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: OpsPilot-HMAC
   parameters:
     ActorID:
       name: X-Actor-ID
       in: header
       required: false
+      deprecated: true
       schema:
         type: string
-      description: Actor ID recorded on audit events. Auth middleware will replace this development header.
+      description: Deprecated development-only actor ID. Ignored unless OPSPILOT_AUTH_DEV_HEADERS=1; production callers must use Authorization Bearer tokens.
     ActorRole:
       name: X-Actor-Role
       in: header
       required: false
+      deprecated: true
       schema:
         type: string
         enum: [Admin, Operator, Viewer]
-      description: Local MVP role context. Admin may manage secrets, GitLab profiles, model/agent/skill configuration, and destructive/archive actions; Operator may run workflows, claim/callback runtime tasks, and perform operational file/VCS actions; Viewer is read-only. Omitted locally is treated as Viewer; invalid roles have no permissions.
+      description: Deprecated development-only role context. Ignored unless OPSPILOT_AUTH_DEV_HEADERS=1. Admin may manage secrets, GitLab profiles, model/agent/skill configuration, and destructive/archive actions; Operator may run workflows, claim/callback runtime tasks, and perform operational file/VCS actions; Viewer is read-only.
     GitLabWebhookToken:
       name: X-Gitlab-Token
       in: header
@@ -1960,6 +2100,12 @@ components:
         type: string
       description: GitLab webhook secret token. Prefer this header over a request-body token; it is validated against the profile webhook secret, not the outbound GitLab API credential.
   responses:
+    AuthenticationRequired:
+      description: Missing, invalid, expired, or revoked bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     Conflict:
       description: Resource conflicts with an existing value.
       content:
@@ -1989,6 +2135,117 @@ components:
         name:
           type: string
           examples: [Admin, Operator, Viewer]
+    DevLoginRequest:
+      type: object
+      required: [role]
+      properties:
+        actor_id:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/RoleName"
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+    LogoutRequest:
+      type: object
+      properties:
+        refresh_token:
+          type: string
+        session_id:
+          type: string
+    AccessTokenResponse:
+      type: object
+      required: [access_token, access_token_expires_at, token_type]
+      properties:
+        access_token:
+          type: string
+        access_token_expires_at:
+          type: string
+          format: date-time
+        token_type:
+          type: string
+          const: Bearer
+    AuthTokenResponse:
+      allOf:
+        - $ref: "#/components/schemas/AccessTokenResponse"
+        - type: object
+          required: [refresh_token, refresh_token_expires_at]
+          properties:
+            refresh_token:
+              type: string
+            refresh_token_expires_at:
+              type: string
+              format: date-time
+            session_id:
+              type: string
+    ServiceIdentityCreate:
+      type: object
+      required: [name, role]
+      properties:
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/RoleName"
+        access_token_ttl_seconds:
+          type: integer
+          minimum: 1
+    ServiceIdentity:
+      type: object
+      required: [id, name, role, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/RoleName"
+        status:
+          enum: [active, revoked]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+    ServiceIdentityIssued:
+      allOf:
+        - $ref: "#/components/schemas/ServiceIdentity"
+        - $ref: "#/components/schemas/AccessTokenResponse"
+        - type: object
+          required: [service_token]
+          properties:
+            service_token:
+              type: string
+              description: One-time service secret. Store securely; list responses never return it.
+    ServiceTokenRequest:
+      type: object
+      required: [service_token]
+      properties:
+        service_token:
+          type: string
+        access_token_ttl_seconds:
+          type: integer
+          minimum: 1
+    StatusResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+    RoleName:
+      type: string
+      enum: [Admin, Operator, Viewer]
     UserCreate:
       type: object
       required: [email, name]

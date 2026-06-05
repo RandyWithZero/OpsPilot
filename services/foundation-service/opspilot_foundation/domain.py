@@ -52,6 +52,43 @@ class User:
 
 
 @dataclass
+class AuthSession:
+    user_id: str
+    role: str
+    refresh_token_hash: str
+    expires_at: str
+    id: str = ""
+    status: str = "active"
+    created_at: str = ""
+    updated_at: str = ""
+    revoked_at: str = ""
+
+    def validate(self) -> None:
+        if not self.user_id or not self.role or not self.refresh_token_hash or not self.expires_at:
+            raise InvalidInput("auth sessions require user, role, refresh hash, and expiration")
+        if self.status not in {"active", "revoked"}:
+            raise InvalidInput("auth session status must be active or revoked")
+
+
+@dataclass
+class ServiceIdentity:
+    name: str
+    role: str
+    token_hash: str
+    id: str = ""
+    status: str = "active"
+    created_at: str = ""
+    updated_at: str = ""
+    revoked_at: str = ""
+
+    def validate(self) -> None:
+        if not self.name or not self.role or not self.token_hash:
+            raise InvalidInput("service identities require name, role, and token hash")
+        if self.status not in {"active", "revoked"}:
+            raise InvalidInput("service identity status must be active or revoked")
+
+
+@dataclass
 class Project:
     key: str
     name: str
