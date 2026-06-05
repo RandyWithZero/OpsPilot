@@ -569,7 +569,7 @@ paths:
   /v1/environments/{environmentID}/files/{fileID}:
     post:
       summary: Bind a file reference to an environment
-      description: The environment stores only file_ids. Storage keys remain internal to the file service.
+      description: The environment stores only file_ids. Storage keys remain internal to the file service. The actor must belong to the environment project and own the file. Files already bound to this environment are accepted; unbound files are claimed atomically; files bound to another resource are rejected.
       parameters:
         - $ref: "#/components/parameters/ActorID"
         - $ref: "#/components/parameters/ActorRole"

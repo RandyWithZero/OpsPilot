@@ -262,7 +262,9 @@ class MemoryStore:
     def link_environment_file(self, actor_id: str, environment_id: str, file_id: str) -> dict[str, Any]:
         with self._lock:
             environment = self._environment(environment_id)
-            self._validate_topology_file("environment", environment.id, file_id)
+            project = self._project(environment.project_id)
+            self._require_project_actor(actor_id, project)
+            self._claim_or_validate_environment_file(actor_id, environment, file_id)
             environment.file_ids = unique([*environment.file_ids, file_id])
             environment.updated_at = now_utc()
             self._audit(actor_id, "environment.file.linked", "environment", environment.id, {"file_id": file_id})
@@ -400,8 +402,8 @@ class MemoryStore:
                 self._validate_environment_member(project, member_id)
             for asset_id in environment.asset_ids:
                 self._validate_environment_asset(project, asset_id)
-            self._validate_environment_files(environment)
             environment.id = self._id("env")
+            self._validate_environment_files(actor_id, environment)
             environment.member_ids = unique([*environment.member_ids, environment.owner_id])
             environment.asset_ids = unique(environment.asset_ids)
             environment.file_ids = unique(environment.file_ids)
@@ -432,7 +434,8 @@ class MemoryStore:
                 self._validate_environment_member(project, member_id)
             for asset_id in environment.asset_ids:
                 self._validate_environment_asset(project, asset_id)
-            self._validate_environment_files(environment)
+            if "file_ids" in data:
+                self._validate_environment_files(actor_id, environment)
             environment.member_ids = unique([*environment.member_ids, environment.owner_id])
             environment.asset_ids = unique(environment.asset_ids)
             environment.file_ids = unique(environment.file_ids)
@@ -1365,10 +1368,29 @@ class MemoryStore:
         for file_id in asset.file_ids:
             self._validate_topology_file("asset", asset.id, file_id)
 
-    def _validate_environment_files(self, environment: Environment) -> None:
+    def _validate_environment_files(self, actor_id: str, environment: Environment) -> None:
         environment.file_ids = unique(environment.file_ids)
         for file_id in environment.file_ids:
-            self._validate_topology_file("environment", environment.id, file_id)
+            self._claim_or_validate_environment_file(actor_id, environment, file_id)
+
+    def _claim_or_validate_environment_file(self, actor_id: str, environment: Environment, file_id: str) -> None:
+        project = self._project(environment.project_id)
+        self._require_project_actor(actor_id, project)
+        file_object = self._file(file_id)
+        if file_object.status == "deleted":
+            raise Conflict("file is deleted")
+        if file_object.owner_id != actor_id:
+            raise PermissionDenied("actor cannot bind a file owned by another user")
+        if file_object.resource_type == "environment" and file_object.resource_id == environment.id:
+            return
+        if not file_object.resource_type and not file_object.resource_id:
+            file_object.resource_type = "environment"
+            file_object.resource_id = environment.id
+            file_object.module = file_object.module or "attachments"
+            file_object.updated_at = now_utc()
+            self._audit(actor_id, "environment.file.claimed", "file", file_object.id, {"environment_id": environment.id})
+            return
+        raise Conflict("file resource is outside the environment scope")
 
     def _validate_environment_member(self, project: Project, user_id: str) -> None:
         if not user_id or user_id not in self.users:

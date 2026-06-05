@@ -290,7 +290,7 @@ class FoundationSliceTest(unittest.TestCase):
                 "module": "attachments",
             },
         )
-        linked_file = self.store.link_environment_file("usr_test_actor", environment["id"], file_object["id"])
+        linked_file = self.store.link_environment_file(owner["id"], environment["id"], file_object["id"])
 
         self.assertEqual(linked_asset["asset_ids"], [project_asset["id"]])
         self.assertEqual(linked_member["member_ids"], [owner["id"], member["id"]])
@@ -306,6 +306,108 @@ class FoundationSliceTest(unittest.TestCase):
         self.assertIn("environment.asset.linked", actions)
         self.assertIn("environment.member.linked", actions)
         self.assertIn("environment.file.linked", actions)
+
+    def test_environment_file_binding_claims_owned_files_and_rejects_unauthorized_refs(self) -> None:
+        owner = self.store.create_user("usr_test_actor", {"email": "owner@example.com", "name": "Owner"})
+        member = self.store.create_user("usr_test_actor", {"email": "member@example.com", "name": "Member"})
+        outsider = self.store.create_user("usr_test_actor", {"email": "outsider@example.com", "name": "Outsider"})
+        project = self.store.create_project(
+            "usr_test_actor",
+            {"key": "OPS", "name": "Ops", "owner_id": owner["id"], "member_ids": [member["id"]]},
+        )
+        environment = self.store.create_environment(
+            "usr_test_actor",
+            {"project_id": project["id"], "name": "QA", "type": "QA", "owner_id": owner["id"]},
+        )
+        owned_unbound = self.store.create_file_object(
+            owner["id"],
+            {"filename": "owned.txt", "content_type": "text/plain", "size_bytes": 1, "owner_id": owner["id"]},
+        )
+        claimed = self.store.link_environment_file(owner["id"], environment["id"], owned_unbound["id"])
+        claimed_file = self.store.list_file_objects({"owner_id": owner["id"]})[0]
+
+        self.assertEqual(claimed["file_ids"], [owned_unbound["id"]])
+        self.assertEqual(claimed_file["resource_type"], "environment")
+        self.assertEqual(claimed_file["resource_id"], environment["id"])
+
+        cross_owner = self.store.create_file_object(
+            outsider["id"],
+            {"filename": "outside.txt", "content_type": "text/plain", "size_bytes": 1, "owner_id": outsider["id"]},
+        )
+        with self.assertRaises(Exception) as owner_error:
+            self.store.link_environment_file(owner["id"], environment["id"], cross_owner["id"])
+        self.assertEqual(getattr(owner_error.exception, "code", ""), "permission_denied")
+
+        wrong_resource = self.store.create_file_object(
+            owner["id"],
+            {
+                "filename": "wrong.txt",
+                "content_type": "text/plain",
+                "size_bytes": 1,
+                "owner_id": owner["id"],
+                "resource_type": "asset",
+                "resource_id": "ast_other",
+            },
+        )
+        with self.assertRaises(Exception) as resource_error:
+            self.store.link_environment_file(owner["id"], environment["id"], wrong_resource["id"])
+        self.assertEqual(getattr(resource_error.exception, "code", ""), "conflict")
+
+        listed = self.store.list_environments({"project_id": project["id"]})[0]
+        self.assertEqual(listed["file_ids"], [owned_unbound["id"]])
+        self.assertNotIn(cross_owner["id"], listed["file_ids"])
+        self.assertNotIn(wrong_resource["id"], listed["file_ids"])
+        actions = [event["action"] for event in self.store.list_audit_events()]
+        self.assertIn("environment.file.claimed", actions)
+
+    def test_environment_binding_missing_refs_do_not_half_write(self) -> None:
+        owner = self.store.create_user("usr_test_actor", {"email": "owner@example.com", "name": "Owner"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops", "owner_id": owner["id"]})
+        environment = self.store.create_environment(
+            "usr_test_actor",
+            {"project_id": project["id"], "name": "QA", "type": "QA", "owner_id": owner["id"]},
+        )
+
+        with self.assertRaises(Exception) as member_error:
+            self.store.link_environment_member("usr_test_actor", environment["id"], "usr_missing")
+        with self.assertRaises(Exception) as asset_error:
+            self.store.link_environment_asset("usr_test_actor", environment["id"], "ast_missing")
+
+        self.assertEqual(getattr(member_error.exception, "code", ""), "not_found")
+        self.assertEqual(getattr(asset_error.exception, "code", ""), "not_found")
+        unchanged = self.store.list_environments()[0]
+        self.assertEqual(unchanged["member_ids"], [owner["id"]])
+        self.assertEqual(unchanged["asset_ids"], [])
+
+    def test_archiving_or_retiring_assets_cleans_project_environment_refs_and_audits(self) -> None:
+        owner = self.store.create_user("usr_test_actor", {"email": "owner@example.com", "name": "Owner"})
+        project = self.store.create_project("usr_test_actor", {"key": "OPS", "name": "Ops", "owner_id": owner["id"]})
+        retired = self.store.create_asset("usr_test_actor", {"category": "server", "name": "retire-me"})
+        archived = self.store.create_asset("usr_test_actor", {"category": "server", "name": "archive-me"})
+        deleted = self.store.create_asset("usr_test_actor", {"category": "server", "name": "delete-me"})
+        for asset in (retired, archived, deleted):
+            self.store.link_project_asset("usr_test_actor", project["id"], asset["id"])
+        environment = self.store.create_environment(
+            "usr_test_actor",
+            {
+                "project_id": project["id"],
+                "name": "QA",
+                "type": "QA",
+                "owner_id": owner["id"],
+                "asset_ids": [retired["id"], archived["id"], deleted["id"]],
+            },
+        )
+
+        self.store.update_asset("usr_test_actor", retired["id"], {"status": "retired"})
+        self.store.update_asset("usr_test_actor", archived["id"], {"status": "archived"})
+        self.store.update_asset("usr_test_actor", deleted["id"], {"status": "deleted"})
+
+        self.assertEqual(self.store.list_projects()[0]["asset_ids"], [])
+        self.assertEqual(self.store.list_environments({"asset_id": retired["id"]}), [])
+        self.assertEqual(self.store.list_environments()[0]["id"], environment["id"])
+        self.assertEqual(self.store.list_environments()[0]["asset_ids"], [])
+        asset_updates = [event for event in self.store.list_audit_events() if event["action"] == "asset.updated"]
+        self.assertGreaterEqual(len(asset_updates), 3)
 
     def test_json_contract_uses_snake_case(self) -> None:
         user = self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})

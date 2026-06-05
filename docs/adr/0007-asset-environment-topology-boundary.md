@@ -14,7 +14,7 @@ Assets are global inventory records with category, status, capabilities, tags, p
 
 Projects own the set of assets that can be used by their environments. An environment can bind only members already present in its project and assets already bound to its project. Cross-project environment asset/member references are rejected.
 
-Files remain owned by the file-service boundary. Assets and environments store only `file_ids`; storage keys and capability URLs never appear in topology records. Deleting a file removes its topology references, and deleting or retiring an asset removes project/environment asset references.
+Files remain owned by the file-service boundary. Assets and environments store only `file_ids`; storage keys and capability URLs never appear in topology records. Environment file binding requires a project member actor who also owns the file. The binding accepts files already scoped to the same environment, atomically claims unbound files by setting their resource reference to the environment, and rejects files scoped to any other resource. Deleting a file removes its topology references, and deleting, retiring, archiving, or deletion-marking an asset removes project/environment asset references.
 
 ## Consequences
 
