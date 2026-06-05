@@ -129,11 +129,12 @@ const result = vm.runInContext(`
     return { ok: true, status: 200, json: async () => [] };
   };
   document.querySelector("#login-email").value = "admin@opspilot.cn";
+  document.querySelector("#login-password").value = "test-password";
   document.querySelector("#login-role").value = "Viewer";
   document.querySelector("#login-dev-mode").checked = false;
   await signIn({ preventDefault() {} });
   if (state.authMode !== "bearer" || state.role !== "Admin" || state.actorId !== "usr_admin" || state.accessToken !== issuedToken) throw new Error("login did not derive session from bearer token");
-  if (!authCalls[0].init.body.includes('"role":"Viewer"') || authCalls[0].init.body.includes("refresh-login")) throw new Error("login request did not preserve role input or leaked token material");
+  if (!authCalls[0].init.body.includes('"role":"Viewer"') || !authCalls[0].init.body.includes('"password":"test-password"') || authCalls[0].init.body.includes("refresh-login")) throw new Error("login request did not preserve credential input or leaked token material");
 
   let capturedRequest = null;
   fetch = async (path, init = {}) => {

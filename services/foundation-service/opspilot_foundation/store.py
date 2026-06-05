@@ -156,6 +156,10 @@ class MemoryStore:
         role = normalize_role(data.get("role"))
         if not role:
             raise InvalidInput("role is invalid")
+        password = str(data.get("password", "") or "")
+        expected_password = os.environ.get("OPSPILOT_AUTH_DEV_PASSWORD", "")
+        if not expected_password or not password.strip() or not hmac.compare_digest(password, expected_password):
+            raise AuthenticationRequired("login credentials are invalid")
         actor_id = str(data.get("actor_id", "") or "").strip()
         email = str(data.get("email", "") or "").strip().lower()
         with self._lock:

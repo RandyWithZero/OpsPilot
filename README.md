@@ -49,7 +49,7 @@ Run the first web-console slice in another terminal:
 make run-web-console
 ```
 
-Open `http://localhost:5173`. The console calls the foundation API at `http://localhost:8080` and falls back to local mock inventory only when the API is unavailable.
+Open `http://localhost:5173`. Deployed/test console builds call the foundation API through the same-origin `/api` gateway path and fall back to local mock inventory only when the API is unavailable. For local development without a gateway, set `localStorage.setItem("opspilot_api_base", "http://localhost:8080")` in the browser.
 
 Optional local infrastructure placeholders are in `infra/docker-compose/docker-compose.yml`:
 
@@ -91,7 +91,7 @@ Protected foundation routes require an `Authorization: Bearer ...` access token.
 For local development, enable the replaceable token issuer explicitly:
 
 ```sh
-OPSPILOT_AUTH_DEV_ISSUER=1 OPSPILOT_AUTH_TOKEN_SECRET='local-dev-secret' make run-foundation
+OPSPILOT_AUTH_DEV_ISSUER=1 OPSPILOT_AUTH_TOKEN_SECRET='local-dev-secret' OPSPILOT_AUTH_DEV_PASSWORD='replace-with-local-password' make run-foundation
 ```
 
 Then issue a local Admin session:
@@ -99,7 +99,7 @@ Then issue a local Admin session:
 ```sh
 curl -X POST http://localhost:8080/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"actor_id":"usr_000001","role":"Admin","email":"admin@local.opspilot","name":"Local Admin"}'
+  -d '{"actor_id":"usr_000001","role":"Admin","email":"admin@local.opspilot","name":"Local Admin","password":"replace-with-local-password"}'
 ```
 
 Use the returned `access_token` on protected calls:

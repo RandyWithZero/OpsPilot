@@ -4,7 +4,7 @@ info:
   version: 0.3.0
   description: Foundation APIs for identity, projects, inventory, files, credential references, GitLab profiles, VCS operations, test/report records, and audit events. Protected routes require Authorization Bearer access tokens. Admin, Operator, and Viewer permissions are resolved by the IAM boundary; X-Actor-ID and X-Actor-Role are deprecated development-only compatibility headers.
 servers:
-  - url: http://localhost:8080
+  - url: /api
 security:
   - BearerAuth: []
 paths:
@@ -63,7 +63,7 @@ paths:
     post:
       summary: Issue a local development user session
       security: []
-      description: Development token issuer enabled only when OPSPILOT_AUTH_DEV_ISSUER=1. Production deployments should replace this issuer while preserving the response contract.
+      description: Development token issuer enabled only when OPSPILOT_AUTH_DEV_ISSUER=1. The request must include a non-empty password matching OPSPILOT_AUTH_DEV_PASSWORD. Production deployments should replace this issuer while preserving the response contract.
       requestBody:
         required: true
         content:
@@ -2206,13 +2206,17 @@ components:
           examples: [Admin, Operator, Viewer]
     DevLoginRequest:
       type: object
-      required: [role]
+      required: [password, role]
       properties:
         actor_id:
           type: string
         email:
           type: string
           format: email
+        password:
+          type: string
+          format: password
+          minLength: 1
         name:
           type: string
         role:
