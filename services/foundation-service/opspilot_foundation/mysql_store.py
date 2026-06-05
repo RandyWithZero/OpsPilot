@@ -149,6 +149,7 @@ MUTATING_METHODS = {
     "create_test_run",
     "update_test_run",
     "create_report",
+    "ingest_test_run_artifacts",
     "create_quality_gate",
 }
 
