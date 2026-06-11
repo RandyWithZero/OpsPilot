@@ -79,6 +79,8 @@ make compose-web-smoke
 
 `make compose-test-up` publishes the browser entrypoint at `http://localhost:15173` and keeps foundation traffic behind the Nginx gateway for browser/API calls. The console, `/v1/*`, `/healthz`, and `/readyz` are all served from that same origin; the Nginx container forwards API traffic to `foundation:8080` over the internal Compose network. `make compose-web-smoke` checks the static console shell, health/readiness, failed empty-password login, successful password login, and an authenticated core API call through the web gateway.
 
+The shared test target uses `infra/docker-compose/docker-compose.shared-test.yml` to remove direct host port publishing for foundation, MySQL, and MinIO. Only the web gateway is published to the host for browser access.
+
 Rollback the test stack with:
 
 ```sh
