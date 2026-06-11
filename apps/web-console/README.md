@@ -14,7 +14,14 @@ make run-foundation
 make run-web-console
 ```
 
-Open `http://localhost:5173`.
+Open `http://localhost:5173`. This direct static-server path is for local UI iteration. To exercise the shared test-environment route where the browser and API use one origin, run:
+
+```sh
+make compose-test-up
+make compose-web-smoke
+```
+
+Open `http://localhost:15173`; `/v1/*`, `/healthz`, and `/readyz` are proxied by Nginx to `foundation:8080` inside the Compose network. The shared test override publishes only the web gateway port; foundation, MySQL, and MinIO stay internal to Compose.
 
 Auth notes:
 

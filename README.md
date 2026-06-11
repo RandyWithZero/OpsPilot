@@ -49,7 +49,7 @@ Run the first web-console slice in another terminal:
 make run-web-console
 ```
 
-Open `http://localhost:5173`. The console calls the foundation API at `http://localhost:8080` and falls back to local mock inventory only when the API is unavailable.
+Open `http://localhost:5173`. This direct static-server path is for local UI work only; set `localStorage.opspilot_api_base` if you intentionally want to point it at a separate local foundation service.
 
 Optional local infrastructure placeholders are in `infra/docker-compose/docker-compose.yml`:
 
@@ -68,6 +68,24 @@ make compose-down
 ```
 
 `make compose-up` builds and starts the MySQL, MinIO, and foundation-service stack. `make compose-smoke` runs a one-shot smoke container that waits for `/readyz`, issues a local Admin session, creates a project, uploads/downloads a file, ingests a JUnit report, creates a service identity, claims/completes a runtime task, and verifies readiness/run payloads do not include raw credential, model key, worker attempt token, or workflow secret material.
+
+For the shared test-environment shape, start the web gateway and verify the browser-facing same-origin route:
+
+```sh
+make compose-test-up
+curl http://localhost:15173/readyz
+make compose-web-smoke
+```
+
+`make compose-test-up` publishes the browser entrypoint at `http://localhost:15173` and keeps foundation traffic behind the Nginx gateway for browser/API calls. The console, `/v1/*`, `/healthz`, and `/readyz` are all served from that same origin; the Nginx container forwards API traffic to `foundation:8080` over the internal Compose network. `make compose-web-smoke` checks the static console shell, health/readiness, failed empty-password login, successful password login, and an authenticated core API call through the web gateway.
+
+The shared test target uses `infra/docker-compose/docker-compose.shared-test.yml` to remove direct host port publishing for foundation, MySQL, and MinIO. Only the web gateway is published to the host for browser access.
+
+Rollback the test stack with:
+
+```sh
+make compose-down
+```
 
 Additional Compose profiles are available when needed:
 

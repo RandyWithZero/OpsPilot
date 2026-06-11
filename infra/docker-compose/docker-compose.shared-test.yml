@@ -1,0 +1,9 @@
+services:
+  mysql:
+    ports: !reset []
+
+  minio:
+    ports: !reset []
+
+  foundation:
+    ports: !reset []

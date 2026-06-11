@@ -123,6 +123,20 @@ services:
       foundation:
         condition: service_healthy
 
+  web-gateway-smoke:
+    image: python:3.12-slim
+    profiles: ["smoke"]
+    working_dir: /workspace
+    command: python scripts/web_gateway_smoke.py
+    environment:
+      OPSPILOT_SMOKE_WEB_URL: http://web-console:5173
+      OPSPILOT_AUTH_DEV_PASSWORD: ${OPSPILOT_AUTH_DEV_PASSWORD:-local-dev-password}
+    volumes:
+      - ../../:/workspace:ro
+    depends_on:
+      web-console:
+        condition: service_started
+
 volumes:
   mysql_data:
   minio_data:
