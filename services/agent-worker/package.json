@@ -1,0 +1,14 @@
+{
+  "name": "@opspilot/agent-worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "python3 -m opspilot_agent_worker",
+    "build": "python3 -m compileall -q opspilot_agent_worker",
+    "lint": "python3 -m compileall -q opspilot_agent_worker",
+    "typecheck": "python3 -m compileall -q opspilot_agent_worker",
+    "test": "python3 -m compileall -q opspilot_agent_worker",
+    "test:integration": "echo 'No integration tests for agent-worker yet'",
+    "test:e2e": "echo 'No e2e tests for agent-worker'"
+  }
+}

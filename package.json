@@ -1,0 +1,35 @@
+{
+  "name": "opspilot",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20.11.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "turbo dev --cache-dir .turbo/cache",
+    "build": "turbo build --cache-dir .turbo/cache",
+    "lint": "turbo lint --cache-dir .turbo/cache",
+    "typecheck": "turbo typecheck --cache-dir .turbo/cache",
+    "test": "turbo test --cache-dir .turbo/cache",
+    "test:integration": "turbo test:integration --cache-dir .turbo/cache",
+    "test:e2e": "turbo test:e2e --cache-dir .turbo/cache",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:migrate": "pnpm --filter @opspilot/foundation-service db:migrate",
+    "db:seed": "pnpm --filter @opspilot/foundation-service db:seed",
+    "compose:up": "docker compose up -d",
+    "compose:down": "docker compose down --remove-orphans",
+    "release:check": "make release-check"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "eslint": "^9.18.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0"
+  }
+}

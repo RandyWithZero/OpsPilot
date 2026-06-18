@@ -1,0 +1,16 @@
+node_modules
+dist
+build
+.next
+coverage
+playwright-report
+test-results
+*.log
+services/foundation-service/migrations/mysql/*.sql
+apps/web-console/app.js
+apps/web-console/check-*.js
+apps/web-console/index.html
+apps/web-console/styles.css
+infra/docker-compose/*.yml
+packages/contracts/openapi/*.yaml
+pnpm-lock.yaml

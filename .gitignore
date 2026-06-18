@@ -5,3 +5,8 @@ __pycache__/
 venv/
 .env
 .codegraph/
+node_modules/
+.turbo/
+.corepack/
+.pnpm-home/
+.pnpm-store/

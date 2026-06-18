@@ -1,0 +1,16 @@
+{
+  "name": "@opspilot/foundation-service",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "python3 -m opspilot_foundation.server",
+    "build": "python3 -m compileall -q opspilot_foundation",
+    "lint": "python3 -m compileall -q opspilot_foundation",
+    "typecheck": "python3 -m compileall -q opspilot_foundation",
+    "test": "python3 -m unittest discover -s tests",
+    "test:integration": "python3 -m unittest discover -s tests",
+    "test:e2e": "echo 'No e2e tests for foundation-service'",
+    "db:migrate": "echo 'Migrations run at service startup for the configured store adapter'",
+    "db:seed": "echo 'No seed task defined yet'"
+  }
+}

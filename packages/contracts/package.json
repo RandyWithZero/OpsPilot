@@ -1,0 +1,13 @@
+{
+  "name": "@opspilot/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "echo 'OpenAPI contracts are source artifacts'",
+    "lint": "test -f openapi/foundation-service.yaml",
+    "typecheck": "test -f openapi/foundation-service.yaml",
+    "test": "test -f openapi/foundation-service.yaml",
+    "test:integration": "echo 'No integration tests for contracts yet'",
+    "test:e2e": "echo 'No e2e tests for contracts'"
+  }
+}

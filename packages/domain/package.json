@@ -1,0 +1,19 @@
+{
+  "name": "@opspilot/domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test",
+    "test:integration": "node --test --test-name-pattern integration",
+    "test:e2e": "echo 'No e2e tests for @opspilot/domain'"
+  },
+  "devDependencies": {
+    "@opspilot/config": "workspace:*"
+  }
+}

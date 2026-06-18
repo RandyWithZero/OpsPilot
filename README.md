@@ -2,6 +2,50 @@
 
 AI operations platform monorepo.
 
+## Monorepo Tooling
+
+OpsPilot uses pnpm workspaces with Turborepo as the root task runner. Existing Python services and the static web console remain in place, while future TypeScript apps and shared packages should extend the presets in `packages/config`.
+
+Workspace shape:
+
+```text
+apps/                  # browser-facing apps
+services/              # backend and worker runtimes
+packages/              # shared contracts, config, domain, AI utilities
+infra/                 # compose and operational assets
+docs/adr/              # architecture decisions
+docs/conventions/      # agent, testing, and security conventions
+```
+
+Bootstrap a local workspace:
+
+```sh
+corepack enable
+pnpm install
+cp .env.example .env
+docker compose up -d
+```
+
+Run the standard root checks:
+
+```sh
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+Use the existing release/readiness path for the current OpsPilot service stack:
+
+```sh
+make release-check
+make compose-up
+make compose-smoke
+make compose-down
+```
+
+Root `docker-compose.yml` provides common local development services: Postgres, Redis, and Mailpit. The existing `infra/docker-compose/docker-compose.yml` stack remains the current service-specific MySQL, MinIO, web gateway, worker, and smoke-test path.
+
 ## Backend Foundation
 
 The first backend slice lives in `services/foundation-service`. It is a Python standard-library service with a local, in-memory implementation for:

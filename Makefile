@@ -1,7 +1,7 @@
 COMPOSE_FILE = infra/docker-compose/docker-compose.yml
 COMPOSE_SHARED_TEST_FILE = infra/docker-compose/docker-compose.shared-test.yml
 
-.PHONY: test release-check compose-up compose-test-up compose-smoke compose-web-smoke compose-down run-foundation run-foundation-minio run-agent-worker run-web-console
+.PHONY: test release-check compose-up compose-test-up compose-smoke compose-web-smoke compose-down run-foundation run-foundation-minio run-agent-worker run-web-console pnpm-install pnpm-lint pnpm-typecheck pnpm-build pnpm-test
 
 test:
 	python3 -m unittest discover -s services/foundation-service/tests
@@ -39,3 +39,19 @@ run-agent-worker:
 
 run-web-console:
 	cd apps/web-console && python3 -m http.server 5173
+
+pnpm-install:
+	corepack enable
+	pnpm install
+
+pnpm-lint:
+	pnpm lint
+
+pnpm-typecheck:
+	pnpm typecheck
+
+pnpm-build:
+	pnpm build
+
+pnpm-test:
+	pnpm test

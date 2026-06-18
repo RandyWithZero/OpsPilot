@@ -1,0 +1,14 @@
+{
+  "name": "@opspilot/web-console",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "python3 -m http.server 5173",
+    "build": "cd ../.. && node apps/web-console/check-live-empty.js && node apps/web-console/check-credential-sanitization.js && node apps/web-console/check-integration-routes.js",
+    "lint": "cd ../.. && node apps/web-console/check-live-empty.js && node apps/web-console/check-credential-sanitization.js && node apps/web-console/check-integration-routes.js",
+    "typecheck": "echo 'Static web console has no TypeScript sources yet'",
+    "test": "cd ../.. && node apps/web-console/check-live-empty.js && node apps/web-console/check-credential-sanitization.js && node apps/web-console/check-integration-routes.js",
+    "test:integration": "cd ../.. && node apps/web-console/check-integration-routes.js",
+    "test:e2e": "echo 'Playwright smoke tests will live here when web is migrated to a TS app'"
+  }
+}
