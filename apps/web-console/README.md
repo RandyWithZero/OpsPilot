@@ -38,3 +38,22 @@ node apps/web-console/check-live-empty.js
 node apps/web-console/check-credential-sanitization.js
 node apps/web-console/check-integration-routes.js
 ```
+# OpsPilot Web Console
+
+Static browser console for the foundation service.
+
+## Local Smoke Checks
+
+Run the static checks from the repository root:
+
+```sh
+make test
+```
+
+The scaffold vertical-slice browser path is captured in `playwright-smoke.spec.js`. When `@playwright/test` is available, serve this directory and run:
+
+```sh
+cd apps/web-console
+python3 -m http.server 5173
+PLAYWRIGHT_BASE_URL=http://127.0.0.1:5173 npx playwright test playwright-smoke.spec.js
+```

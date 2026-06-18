@@ -8,6 +8,7 @@ test:
 	node apps/web-console/check-live-empty.js
 	node apps/web-console/check-credential-sanitization.js
 	node apps/web-console/check-integration-routes.js
+	node apps/web-console/check-scaffold-studio.js
 
 release-check: test
 	docker compose -f $(COMPOSE_FILE) config >/dev/null
