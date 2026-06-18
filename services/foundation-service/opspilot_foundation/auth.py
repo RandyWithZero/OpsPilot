@@ -177,7 +177,7 @@ def permission_for_request(method: str, path: str, body: dict[str, Any] | None =
     if method == "POST":
         if path == "/v1/auth/logout":
             return PERMISSION_READ
-        if path == "/v1/credentials" or path == "/v1/gitlab/profiles" or path == "/v1/model-providers" or path == "/v1/users" or path == "/v1/service-identities":
+        if path == "/v1/credentials" or path == "/v1/gitlab/profiles" or path == "/v1/model-providers" or path == "/v1/ai/contracts" or path == "/v1/users" or path == "/v1/service-identities":
             return PERMISSION_ADMIN
         if path == "/v1/agents" or path == "/v1/skills":
             return PERMISSION_ADMIN

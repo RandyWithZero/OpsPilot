@@ -15,6 +15,8 @@ from typing import Any, TypeVar
 from .auth import ActorContext, AuthenticationRequired, PermissionDenied, dev_issuer_password, hash_token, issue_access_token, new_refresh_token, normalize_role, refresh_expires_at
 from .domain import (
     Agent,
+    AIPromptContract,
+    AIRunTrace,
     Asset,
     AuthSession,
     AuditEvent,
@@ -74,6 +76,8 @@ class MemoryStore:
         self.agents: dict[str, Agent] = {}
         self.skills: dict[str, Skill] = {}
         self.model_providers: dict[str, ModelProvider] = {}
+        self.ai_prompt_contracts: dict[str, AIPromptContract] = {}
+        self.ai_run_traces: dict[str, AIRunTrace] = {}
         self.workflows: dict[str, WorkflowDefinition] = {}
         self.workflow_versions: dict[str, WorkflowVersion] = {}
         self.workflow_runs: dict[str, WorkflowRun] = {}
@@ -141,6 +145,8 @@ class MemoryStore:
                     "reports": len(self.reports),
                     "workflow_runs": len(self.workflow_runs),
                     "runtime_tasks": len(self.workflow_runtime_tasks),
+                    "ai_prompt_contracts": len(self.ai_prompt_contracts),
+                    "ai_runs": len(self.ai_run_traces),
                     "audit_events": len(self.audit_events),
                 },
             }
@@ -1262,6 +1268,53 @@ class MemoryStore:
             self._audit(actor_id, "model_provider.deleted", "model_provider", provider_id, {"name": provider.name})
             return {"status": "deleted"}
 
+    def create_ai_prompt_contract(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        contract = AIPromptContract(**pick(data, AIPromptContract))
+        contract.validate()
+        with self._lock:
+            if any(existing.name == contract.name and existing.version == contract.version for existing in self.ai_prompt_contracts.values()):
+                raise Conflict("AI prompt contract version already exists")
+            contract.id = self._id("aic")
+            stamp(contract)
+            self.ai_prompt_contracts[contract.id] = contract
+            self._audit(actor_id, "ai.prompt_contract.created", "ai_prompt_contract", contract.id, {"name": contract.name, "version": contract.version, "tool_count": len(contract.tools)})
+            return asdict(contract)
+
+    def list_ai_prompt_contracts(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(contract) for contract in self.ai_prompt_contracts.values()]
+
+    def get_ai_prompt_contract(self, contract_id: str) -> dict[str, Any]:
+        with self._lock:
+            return asdict(self._ai_prompt_contract(contract_id))
+
+    def create_ai_run_trace(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        run = AIRunTrace(**pick(data, AIRunTrace))
+        with self._lock:
+            contract = self._ai_prompt_contract(run.contract_id)
+            if run.model_provider_id:
+                self._model_provider(run.model_provider_id)
+            run.model = run.model or contract.model
+            run.input = self._sanitize_runtime_capture(run.input)
+            run.output = self._sanitize_runtime_capture(run.output)
+            run.tool_calls = self._sanitize_runtime_capture(run.tool_calls)
+            run.validation_result = self._sanitize_runtime_capture(run.validation_result)
+            run.error = self._sanitize_runtime_error(run.error) if run.error else ""
+            run.validate()
+            run.id = self._id("air")
+            stamp(run)
+            self.ai_run_traces[run.id] = run
+            self._audit(actor_id, "ai.run_trace.created", "ai_run", run.id, {"contract_id": run.contract_id, "status": run.status, "model_provider_id": run.model_provider_id})
+            return asdict(run)
+
+    def list_ai_run_traces(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [asdict(run) for run in self.ai_run_traces.values()]
+
+    def get_ai_run_trace(self, run_id: str) -> dict[str, Any]:
+        with self._lock:
+            return asdict(self._ai_run_trace(run_id))
+
     def create_workflow(self, actor_id: str, data: dict[str, Any]) -> dict[str, Any]:
         workflow = WorkflowDefinition(**pick(data, WorkflowDefinition))
         workflow.validate()
@@ -1993,6 +2046,16 @@ class MemoryStore:
         if provider_id not in self.model_providers:
             raise NotFound("model provider not found")
         return self.model_providers[provider_id]
+
+    def _ai_prompt_contract(self, contract_id: str) -> AIPromptContract:
+        if contract_id not in self.ai_prompt_contracts:
+            raise NotFound("AI prompt contract not found")
+        return self.ai_prompt_contracts[contract_id]
+
+    def _ai_run_trace(self, run_id: str) -> AIRunTrace:
+        if run_id not in self.ai_run_traces:
+            raise NotFound("AI run trace not found")
+        return self.ai_run_traces[run_id]
 
     def _workflow(self, workflow_id: str) -> WorkflowDefinition:
         if workflow_id not in self.workflows:

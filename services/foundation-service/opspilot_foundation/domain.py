@@ -366,6 +366,101 @@ class ModelProvider:
 
 
 @dataclass
+class AIToolContract:
+    name: str
+    input_schema: dict[str, Any] = field(default_factory=dict)
+    output_schema: dict[str, Any] = field(default_factory=dict)
+    description: str = ""
+
+    def validate(self) -> None:
+        self.name = sanitize_token(self.name, "tool name", allow_empty=False)
+        if not isinstance(self.input_schema, dict) or not isinstance(self.output_schema, dict):
+            raise InvalidInput("AI tool schemas must be objects")
+
+
+@dataclass
+class AIPromptContract:
+    name: str
+    version: str
+    input_schema: dict[str, Any]
+    output_schema: dict[str, Any]
+    prompt_template: str
+    description: str = ""
+    model: str = ""
+    timeout_seconds: int = 30
+    retry_policy: dict[str, Any] = field(default_factory=dict)
+    tools: list[dict[str, Any]] = field(default_factory=list)
+    status: str = "active"
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        self.name = sanitize_token(self.name, "AI prompt contract name", allow_empty=False)
+        if not self.version or not self.prompt_template:
+            raise InvalidInput("AI prompt contracts require version and prompt_template")
+        if not isinstance(self.input_schema, dict) or not isinstance(self.output_schema, dict):
+            raise InvalidInput("AI prompt contract schemas must be objects")
+        if int(self.timeout_seconds) <= 0:
+            raise InvalidInput("AI prompt contract timeout_seconds must be positive")
+        if not isinstance(self.retry_policy, dict):
+            raise InvalidInput("AI prompt contract retry_policy must be an object")
+        if self.status not in {"active", "deprecated"}:
+            raise InvalidInput("AI prompt contract status must be active or deprecated")
+        normalized_tools: list[dict[str, Any]] = []
+        for tool in self.tools:
+            if not isinstance(tool, dict):
+                raise InvalidInput("AI prompt contract tools must be objects")
+            contract = AIToolContract(
+                name=str(tool.get("name", "") or ""),
+                description=str(tool.get("description", "") or ""),
+                input_schema=dict(tool.get("input_schema", {})),
+                output_schema=dict(tool.get("output_schema", {})),
+            )
+            contract.validate()
+            normalized_tools.append(
+                {
+                    "name": contract.name,
+                    "description": contract.description,
+                    "input_schema": contract.input_schema,
+                    "output_schema": contract.output_schema,
+                }
+            )
+        self.tools = normalized_tools
+
+
+@dataclass
+class AIRunTrace:
+    contract_id: str
+    input: dict[str, Any]
+    output: dict[str, Any] = field(default_factory=dict)
+    status: str = "queued"
+    model_provider_id: str = ""
+    model: str = ""
+    latency_ms: int = 0
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    validation_result: dict[str, Any] = field(default_factory=dict)
+    error: str = ""
+    id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def validate(self) -> None:
+        if not self.contract_id:
+            raise InvalidInput("AI runs require contract_id")
+        if not isinstance(self.input, dict) or not isinstance(self.output, dict):
+            raise InvalidInput("AI run input and output must be objects")
+        if self.status not in {"queued", "completed", "failed"}:
+            raise InvalidInput("AI run status must be queued, completed, or failed")
+        if int(self.latency_ms) < 0:
+            raise InvalidInput("AI run latency_ms must not be negative")
+        if not isinstance(self.tool_calls, list):
+            raise InvalidInput("AI run tool_calls must be an array")
+        if not isinstance(self.validation_result, dict):
+            raise InvalidInput("AI run validation_result must be an object")
+
+
+@dataclass
 class WorkflowDefinition:
     name: str
     description: str = ""

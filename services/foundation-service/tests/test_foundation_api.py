@@ -33,6 +33,7 @@ from opspilot_foundation.auth import (  # noqa: E402
 )
 from opspilot_agent_worker.api import FoundationAPIClient  # noqa: E402
 from opspilot_agent_worker.worker import AgentWorker, WorkerConfig  # noqa: E402
+from opspilot_agent_worker.skills import ControlledSkillExecutor  # noqa: E402
 
 
 class FakeGitLabClient:
@@ -238,6 +239,78 @@ class FoundationSliceTest(unittest.TestCase):
         events = self.store.list_audit_events()
         self.assertGreaterEqual(len(events), 5)
         self.assertEqual(events[0]["action"], "project.asset.linked")
+
+    def test_ai_prompt_contract_and_run_trace_are_validated_and_redacted(self) -> None:
+        contract = self.store.create_ai_prompt_contract(
+            "usr_test_actor",
+            {
+                "name": "incident_triage",
+                "version": "v1",
+                "description": "Summarize operational incidents.",
+                "model": "gpt-4.1-mini",
+                "input_schema": {
+                    "type": "object",
+                    "required": ["incident_id", "summary"],
+                    "properties": {"incident_id": {"type": "string"}, "summary": {"type": "string"}},
+                },
+                "output_schema": {
+                    "type": "object",
+                    "required": ["risk_level", "recommended_action"],
+                    "properties": {"risk_level": {"type": "string"}, "recommended_action": {"type": "string"}},
+                },
+                "prompt_template": "Classify incident {{ incident_id }} and propose the next action.",
+                "retry_policy": {"max_attempts": 2},
+                "tools": [
+                    {
+                        "name": "incident_lookup",
+                        "description": "Fetch incident context by id.",
+                        "input_schema": {"type": "object", "required": ["incident_id"]},
+                        "output_schema": {"type": "object", "required": ["status"]},
+                    }
+                ],
+            },
+        )
+
+        self.assertTrue(contract["id"].startswith("aic_"))
+        self.assertEqual(contract["tools"][0]["name"], "incident_lookup")
+
+        run = self.store.create_ai_run_trace(
+            "usr_test_actor",
+            {
+                "contract_id": contract["id"],
+                "status": "completed",
+                "input": {"incident_id": "inc_1", "summary": "Checkout is slow", "api_key": "sk-live-secret"},
+                "output": {"risk_level": "high", "recommended_action": "page the on-call", "debug_token": "token-value"},
+                "tool_calls": [{"name": "incident_lookup", "arguments": {"incident_id": "inc_1", "password": "secret"}}],
+                "validation_result": {"valid": True},
+                "latency_ms": 42,
+            },
+        )
+
+        self.assertEqual(run["input"]["api_key"], "[REDACTED]")
+        self.assertEqual(run["output"]["debug_token"], "[REDACTED]")
+        self.assertEqual(run["tool_calls"][0]["arguments"]["password"], "[REDACTED]")
+        self.assertEqual(self.store.get_ai_run_trace(run["id"])["status"], "completed")
+        self.assertIn("ai_runs", self.store.diagnostics()["metrics"])
+
+    def test_ai_contract_creation_requires_admin_permission_placeholder(self) -> None:
+        viewer = ActorContext(actor_id="usr_viewer", role="Viewer")
+        with self.assertRaises(PermissionDenied):
+            require_permission(viewer, permission_for_request("POST", "/v1/ai/contracts"))
+
+        operator = ActorContext(actor_id="usr_operator", role="Operator")
+        require_permission(operator, permission_for_request("POST", "/v1/ai/runs"))
+
+    def test_worker_noop_job_completes_without_model_call(self) -> None:
+        result = ControlledSkillExecutor().execute(
+            {"node_id": "noop-node", "agent_id": "agt_1"},
+            {"name": "worker-noop"},
+            {"id": "mdl_1", "provider": "local"},
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["output"]["job"], "noop")
+        self.assertEqual(result["output"]["node_id"], "noop-node")
 
     def test_duplicate_user_email_conflicts(self) -> None:
         self.store.create_user("usr_test_actor", {"email": "admin@example.com", "name": "Admin"})

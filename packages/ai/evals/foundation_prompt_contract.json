@@ -1,0 +1,30 @@
+{
+  "name": "incident_triage",
+  "version": "v1",
+  "description": "Golden fixture for validating the foundation AI prompt/tool contract boundary.",
+  "input": {
+    "incident_id": "inc_000001",
+    "severity": "high",
+    "summary": "Checkout latency exceeded the SLO for 12 minutes.",
+    "api_key": "fixture-secret-never-log"
+  },
+  "expected_redacted_input": {
+    "incident_id": "inc_000001",
+    "severity": "high",
+    "summary": "Checkout latency exceeded the SLO for 12 minutes.",
+    "api_key": "[REDACTED]"
+  },
+  "expected_output_schema": {
+    "type": "object",
+    "required": ["risk_level", "recommended_action"],
+    "properties": {
+      "risk_level": {
+        "type": "string",
+        "enum": ["low", "medium", "high"]
+      },
+      "recommended_action": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -20,6 +20,7 @@ The first backend slice lives in `services/foundation-service`. It is a Python s
 - workflow definitions with versioned node/edge models
 - workflow run execution records with ordered step runs and manual status transitions
 - runtime task outbox, local agent worker, controlled skill adapter, and fake model gateway boundary
+- AI prompt/tool contracts with redacted run tracing and an eval fixture pattern
 - test cases, suites, runs, reports, and quality gates
 - audit events for create/link actions
 
@@ -139,6 +140,14 @@ The old `X-Actor-ID` / `X-Actor-Role` headers are deprecated compatibility heade
 ### Agent Worker
 
 The first real worker process lives in `services/agent-worker`. It uses the foundation API boundary only: claim runtime tasks, heartbeat with the claimed `attempt_token`, call a controlled built-in skill adapter, call the fake model gateway by model provider reference, and callback completion/failure. The worker never reads the credential or secret tables directly, and raw model keys do not enter runtime task, worker output, or audit payloads.
+
+The worker also supports a deterministic `worker-noop` skill path for smoke testing queue, lease, callback, and result propagation without model calls.
+
+### AI Contract Slice
+
+The foundation service exposes `/v1/ai/contracts` for typed prompt/tool contracts and `/v1/ai/runs` for execution traces. Contract creation is Admin-only; run trace recording follows the existing Operator boundary. Trace inputs, outputs, validation payloads, tool calls, and errors are recursively redacted before storage so token, secret, password, key, and authorization-like fields do not persist in diagnostics or API responses.
+
+The initial golden fixture lives at `packages/ai/evals/foundation_prompt_contract.json`.
 
 Run the foundation service with auth enabled, create a service identity as an Admin, then exchange the one-time `service_token` for a short-lived worker token:
 
