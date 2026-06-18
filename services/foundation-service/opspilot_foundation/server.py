@@ -47,6 +47,8 @@ class FoundationHandler(BaseHTTPRequestHandler):
             "/v1/agents": self.store.list_agents,
             "/v1/skills": self.store.list_skills,
             "/v1/model-providers": self.store.list_model_providers,
+            "/v1/ai/contracts": self.store.list_ai_prompt_contracts,
+            "/v1/ai/runs": self.store.list_ai_run_traces,
             "/v1/workflows": self.store.list_workflows,
             "/v1/workflow-runs": self.store.list_workflow_runs,
             "/v1/runtime/tasks": self.store.list_runtime_tasks,
@@ -105,6 +107,12 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if len(parts) == 4 and parts[:2] == ["v1", "workflows"] and parts[3] == "runs":
             self._call(lambda: self.store.list_workflow_runs(parts[2]))
+            return
+        if len(parts) == 4 and parts[:3] == ["v1", "ai", "contracts"]:
+            self._call(lambda: self.store.get_ai_prompt_contract(parts[3]))
+            return
+        if len(parts) == 4 and parts[:3] == ["v1", "ai", "runs"]:
+            self._call(lambda: self.store.get_ai_run_trace(parts[3]))
             return
         if path == "/readyz":
             self._readyz()
@@ -181,6 +189,12 @@ class FoundationHandler(BaseHTTPRequestHandler):
             return
         if path == "/v1/model-providers":
             self._call(lambda: self.store.create_model_provider(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/ai/contracts":
+            self._call(lambda: self.store.create_ai_prompt_contract(actor_id, body), HTTPStatus.CREATED)
+            return
+        if path == "/v1/ai/runs":
+            self._call(lambda: self.store.create_ai_run_trace(actor_id, body), HTTPStatus.CREATED)
             return
         if path == "/v1/workflows":
             self._call(lambda: self.store.create_workflow(actor_id, body), HTTPStatus.CREATED)

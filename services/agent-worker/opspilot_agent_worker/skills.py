@@ -13,6 +13,16 @@ class ControlledSkillExecutor:
 
     def execute(self, task: dict[str, Any], skill: dict[str, Any] | None, provider: dict[str, Any] | None) -> dict[str, Any]:
         skill_name = str((skill or {}).get("name", "")).strip().lower()
+        if skill_name in {"noop", "no-op", "worker-noop"}:
+            return {
+                "status": "completed",
+                "output": {
+                    "worker": "opspilot-local-agent-worker",
+                    "job": "noop",
+                    "node_id": task.get("node_id", ""),
+                    "agent_id": task.get("agent_id", ""),
+                },
+            }
         if "fail" in skill_name:
             return {"status": "failed", "error": "controlled skill requested failure", "retry": True}
 

@@ -1590,6 +1590,94 @@ paths:
       responses:
         "200":
           description: Deleted model provider
+  /v1/ai/contracts:
+    get:
+      summary: List AI prompt/tool contracts
+      responses:
+        "200":
+          description: AI contracts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AIPromptContract"
+    post:
+      summary: Create AI prompt/tool contract
+      description: Admin-owned registry entry for a typed prompt contract, output schema, allowed tools, timeout, and retry policy.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AIPromptContractCreate"
+      responses:
+        "201":
+          description: Created AI contract
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AIPromptContract"
+  /v1/ai/contracts/{contractID}:
+    get:
+      summary: Get AI prompt/tool contract
+      parameters:
+        - name: contractID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: AI contract
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AIPromptContract"
+  /v1/ai/runs:
+    get:
+      summary: List redacted AI run traces
+      responses:
+        "200":
+          description: AI run traces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AIRunTrace"
+    post:
+      summary: Record redacted AI run trace
+      description: Stores validated AI execution metadata after recursively redacting token, secret, password, key, and authorization-like fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AIRunTraceCreate"
+      responses:
+        "201":
+          description: Created AI run trace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AIRunTrace"
+  /v1/ai/runs/{runID}:
+    get:
+      summary: Get redacted AI run trace
+      parameters:
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: AI run trace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AIRunTrace"
   /v1/workflows:
     get:
       summary: List workflow definitions
@@ -3045,6 +3133,111 @@ components:
     ModelProvider:
       allOf:
         - $ref: "#/components/schemas/ModelProviderCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    AIToolContract:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        input_schema:
+          type: object
+          additionalProperties: true
+        output_schema:
+          type: object
+          additionalProperties: true
+    AIPromptContractCreate:
+      type: object
+      required: [name, version, input_schema, output_schema, prompt_template]
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        model:
+          type: string
+        input_schema:
+          type: object
+          additionalProperties: true
+        output_schema:
+          type: object
+          additionalProperties: true
+        prompt_template:
+          type: string
+        timeout_seconds:
+          type: integer
+          minimum: 1
+        retry_policy:
+          type: object
+          additionalProperties: true
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/AIToolContract"
+        status:
+          enum: [active, deprecated]
+    AIPromptContract:
+      allOf:
+        - $ref: "#/components/schemas/AIPromptContractCreate"
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    AIRunTraceCreate:
+      type: object
+      required: [contract_id, input]
+      properties:
+        contract_id:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        status:
+          enum: [queued, completed, failed]
+        model_provider_id:
+          type: string
+        model:
+          type: string
+        latency_ms:
+          type: integer
+          minimum: 0
+        tool_calls:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        validation_result:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+    AIRunTrace:
+      allOf:
+        - $ref: "#/components/schemas/AIRunTraceCreate"
         - type: object
           required: [id, status, created_at, updated_at]
           properties:
