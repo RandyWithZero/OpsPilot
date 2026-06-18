@@ -16,7 +16,7 @@ test("web console scaffold vertical slice", async ({ page }) => {
   await page.getByLabel("验收标准").fill("Responsive shell, form states, and smoke coverage are visible.");
   await page.getByRole("button", { name: "生成请求" }).click();
 
-  await expect(page.getByText("Playwright Smoke Scaffold")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Playwright Smoke Scaffold" })).toBeVisible();
   await page.getByRole("button", { name: "错误态" }).click();
   await expect(page.getByText("提交失败")).toBeVisible();
 });
