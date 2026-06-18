@@ -4,6 +4,7 @@ const DEV_HEADERS_STORAGE_KEY = "opspilot_auth_dev_headers";
 const navGroups = [
   { label: "工作台", items: [["dashboard", "运营总览"], ["bigscreen", "态势大屏"], ["tasks", "任务队列"]] },
   { label: "项目资产", items: [["projects", "项目管理"], ["assets", "资产管理"], ["environments", "环境管理"], ["files", "文件中心"]] },
+  { label: "AI 开发", items: [["scaffold", "脚手架生成"]] },
   { label: "运维流程", items: [["workflows", "流程编排"], ["workflowRuns", "流程运行"]] },
   { label: "测试质量", items: [["testCases", "测试用例"], ["testSuites", "测试套件"], ["testRuns", "测试运行"], ["reports", "测试报告"], ["qualityGates", "质量门禁"]] },
   { label: "集成配置", items: [["gitlabProfiles", "GitLab 集成"], ["vcsOperations", "VCS 操作"], ["vcsWebhooks", "Webhook 事件"], ["modelProviders", "模型供应商"]] },
@@ -94,6 +95,9 @@ const state = {
   workflowVersions: {},
   workflowRuns: [],
   runtimeTasks: [],
+  scaffoldRequests: [],
+  scaffoldStatus: "idle",
+  scaffoldError: "",
   workflowBuilder: null,
   auditEvents: [],
 };
@@ -236,6 +240,19 @@ const seed = {
   runtimeTasks: [
     { id: "wrt_mock_release_1", workflow_run_id: "wfr_mock_release_1", workflow_step_run_id: "wfs_mock_agent", workflow_id: "wfl_mock_release", workflow_version_id: "wfv_mock_release_v1", node_id: "agent-check", agent_id: "agt_mock_ops", skill_id: "skl_mock_release", model_provider_id: "mdl_mock_deepseek", status: "running", attempt: 1, max_attempts: 2, timeout_seconds: 900, input_summary: { binding_names: ["project_id", "environment_id", "max_attempts"], project_id: "prj_mock_core" }, output: { summary: "正在复核 QA 报告和环境容量。" }, error: "", claimed_at: "2026-06-04T08:23:05Z", created_at: "2026-06-04T08:23:00Z", updated_at: "2026-06-04T08:24:00Z" },
     { id: "wrt_mock_release_0", workflow_run_id: "wfr_mock_release_239", workflow_step_run_id: "wfs_mock_agent_failed", workflow_id: "wfl_mock_release", workflow_version_id: "wfv_mock_release_v1", node_id: "agent-check", agent_id: "agt_mock_ops", skill_id: "skl_mock_release", model_provider_id: "mdl_mock_deepseek", status: "failed", attempt: 1, max_attempts: 1, timeout_seconds: 300, input_summary: { binding_names: ["asset_id", "timeout_seconds"], asset_id: "ast_mock_vm" }, output: {}, error: "Connection refused: qa-runner-03:22", created_at: "2026-06-04T06:11:00Z", updated_at: "2026-06-04T06:22:00Z", completed_at: "2026-06-04T06:22:00Z" },
+  ],
+  scaffoldRequests: [
+    {
+      id: "scf_mock_ops",
+      name: "OpsPilot AI 开发脚手架",
+      owner: "Frontend Engineer",
+      target: "web-api-worker-ai",
+      priority: "high",
+      status: "ready",
+      summary: "包含响应式 Web Shell、API/domain/worker/AI 边界、测试自动化和安全默认值。",
+      acceptance: "UI 有加载/空/错误/移动态；后端有健康检查、校验、鉴权占位；AI 合约可评估。",
+      created_at: "2026-06-18T12:12:37Z",
+    },
   ],
   auditEvents: [
     { id: "aud_mock_1", actor_id: "system", action: "project.created", resource_type: "project", resource_id: "prj_mock_core", occurred_at: "2026-06-04T07:21:00Z", metadata: { key: "OPS" } },
@@ -500,6 +517,7 @@ async function loadData(forceToast = false) {
     state.workflowVersions = workflowVersions;
     state.workflowRuns = workflowRuns;
     state.runtimeTasks = runtimeTasks.map(sanitizeRuntimeTask);
+    state.scaffoldRequests = state.scaffoldRequests.length ? state.scaffoldRequests : [];
     state.auditEvents = auditEvents;
     if (forceToast) toast("基础服务数据已刷新。");
   } catch (error) {
@@ -542,6 +560,7 @@ async function loadData(forceToast = false) {
     state.workflowVersions = clone(seed.workflowVersions);
     state.workflowRuns = clone(seed.workflowRuns);
     state.runtimeTasks = clone(seed.runtimeTasks).map(sanitizeRuntimeTask);
+    state.scaffoldRequests = state.scaffoldRequests.length ? state.scaffoldRequests : clone(seed.scaffoldRequests);
     state.auditEvents = clone(seed.auditEvents);
     if (forceToast) toast("基础服务不可用，已切换本地模拟数据。");
   }
@@ -691,6 +710,7 @@ function render() {
   if (state.route === "dashboard") renderDashboard();
   if (state.route === "bigscreen") renderBigscreen();
   if (state.route === "tasks") renderTasks();
+  if (state.route === "scaffold") renderScaffoldStudio();
   if (state.route === "identity") renderResource("identity");
   if (state.route === "projects") renderResource("projects");
   if (state.route === "assets") renderAssetWorkbench();
@@ -1106,6 +1126,204 @@ function renderWorkflowRuns() {
       renderWorkflowRuns();
     });
   });
+}
+
+function renderScaffoldStudio() {
+  const requests = filteredScaffoldRequests();
+  const latest = requests[0] || state.scaffoldRequests[0];
+  content.innerHTML = `
+    <div class="page-head scaffold-head">
+      <div>
+        <p class="eyebrow">AI 开发脚手架</p>
+        <h1>从需求到可执行垂直切片</h1>
+        <p class="muted">把产品目标转成前端、API、Worker、AI 合约和测试验收清单，作为 AI 代理协作的单页入口。</p>
+      </div>
+      <div class="scaffold-head-actions">
+        <button class="ghost-button" data-scaffold-action="simulate-loading">加载态</button>
+        <button class="ghost-button" data-scaffold-action="simulate-error">错误态</button>
+      </div>
+    </div>
+    ${permissionBanner()}
+    ${state.scaffoldStatus === "loading" ? scaffoldLoadingState() : ""}
+    ${state.scaffoldError ? scaffoldErrorState() : ""}
+    <div class="scaffold-hero">
+      <section class="scaffold-form-panel">
+        <div class="section-title">
+          <p class="eyebrow">Vertical Slice Form</p>
+          <h2>创建脚手架请求</h2>
+          <p class="muted">表单会生成一个 typed request preview；真实 API 接入后可直接替换提交处理。</p>
+        </div>
+        <form id="scaffold-form" class="scaffold-form" novalidate>
+          <label>项目名称<input name="name" value="AI 项目开发脚手架" required maxlength="80" /></label>
+          <label>负责人<input name="owner" value="${escapeAttr(state.user || state.actorId || "Frontend Engineer")}" required maxlength="80" /></label>
+          <div class="form-grid-2">
+            <label>目标范围<select name="target">
+              ${selectedOptions(["web-api-worker-ai", "web-only", "api-worker-ai", "docs-automation"], "web-api-worker-ai")}
+            </select></label>
+            <label>优先级<select name="priority">${selectedOptions(["high", "medium", "low"], "high")}</select></label>
+          </div>
+          <label>业务目标<textarea name="summary" required minlength="12">搭建适合 AI 代理协作开发的全栈项目脚手架，UI 精致、后端高效、测试自动化、安全边界清晰。</textarea></label>
+          <label>验收标准<textarea name="acceptance" required minlength="12">包含响应式 shell、设计 tokens、示例表单、加载/空/错误/移动端状态、Playwright 冒烟路径，以及后端/AI 合约对接点。</textarea></label>
+          <div id="scaffold-form-error" class="auth-error hidden" role="alert"></div>
+          <div class="action-row">
+            <button class="primary-button" type="submit">生成请求</button>
+            <button class="ghost-button" type="button" data-scaffold-action="clear-requests">清空示例</button>
+          </div>
+        </form>
+      </section>
+      <aside class="scaffold-preview-panel" aria-label="脚手架请求预览">
+        <div class="section-title">
+          <p class="eyebrow">Contract Preview</p>
+          <h2>类型化请求</h2>
+        </div>
+        ${latest ? scaffoldContractPreview(latest) : scaffoldEmptyState()}
+      </aside>
+    </div>
+    <div class="scaffold-state-grid">
+      ${scaffoldStateCard("Responsive shell", "ready", "侧边导航、顶栏、移动端堆叠和按钮状态已经纳入页面。")}
+      ${scaffoldStateCard("Design tokens", "ready", "使用 CSS variables 管理颜色、间距、阴影和状态色。")}
+      ${scaffoldStateCard("API contract", state.apiOnline ? "ready" : "mock", state.apiOnline ? "基础服务在线，可替换为真实提交 endpoint。" : "当前以本地模拟数据运行，避免阻塞后端切片。")}
+      ${scaffoldStateCard("Smoke path", "ready", "新增 Playwright spec 与 Node smoke check 覆盖登录、表单和状态视图。")}
+    </div>
+    <section class="ops-grid scaffold-results">
+      <div class="table-wrap">
+        ${requests.length ? scaffoldTable(requests) : scaffoldEmptyState("暂无脚手架请求", "提交表单后会在这里看到一条本地 vertical-slice 记录。")}
+      </div>
+      <aside class="panel stack-panel">
+        <h2>协作边界</h2>
+        ${listItems([
+          "Frontend: shell、tokens、组件、表单、状态和浏览器 smoke。",
+          "Backend: validation、auth placeholder、typed module 和 worker/API 合约。",
+          "AI: prompt/tool contract、redacted tracing 和 eval fixture。",
+          "QA: lint/test/build/smoke 作为合并前证据。",
+        ])}
+      </aside>
+    </section>
+  `;
+  bindScaffoldStudio();
+}
+
+function filteredScaffoldRequests() {
+  const query = [state.query, state.filters.localQuery].filter(Boolean).join(" ").toLowerCase();
+  return state.scaffoldRequests.filter((request) => {
+    const text = JSON.stringify(request).toLowerCase();
+    return !query || query.split(/\s+/).every((token) => text.includes(token));
+  });
+}
+
+function bindScaffoldStudio() {
+  const form = $("#scaffold-form");
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form).entries());
+    const validation = validateScaffoldRequest(data);
+    const error = $("#scaffold-form-error");
+    if (validation) {
+      error.textContent = validation;
+      error.classList.remove("hidden");
+      return;
+    }
+    error.classList.add("hidden");
+    state.scaffoldStatus = "loading";
+    state.scaffoldError = "";
+    renderScaffoldStudio();
+    setTimeout(() => {
+      state.scaffoldRequests = [{
+        id: `scf_${Date.now().toString(36)}`,
+        name: data.name.trim(),
+        owner: data.owner.trim(),
+        target: data.target,
+        priority: data.priority,
+        status: "draft",
+        summary: data.summary.trim(),
+        acceptance: data.acceptance.trim(),
+        created_at: new Date().toISOString(),
+      }, ...state.scaffoldRequests];
+      state.scaffoldStatus = "idle";
+      toast("脚手架请求已生成。");
+      renderScaffoldStudio();
+    }, 420);
+  });
+  content.querySelectorAll("[data-scaffold-action]").forEach((button) => {
+    button.addEventListener("click", () => handleScaffoldAction(button.dataset.scaffoldAction));
+  });
+}
+
+function handleScaffoldAction(action) {
+  if (action === "simulate-loading") {
+    state.scaffoldStatus = "loading";
+    state.scaffoldError = "";
+    renderScaffoldStudio();
+    setTimeout(() => {
+      state.scaffoldStatus = "idle";
+      renderScaffoldStudio();
+    }, 700);
+  }
+  if (action === "simulate-error") {
+    state.scaffoldStatus = "idle";
+    state.scaffoldError = "示例错误：后端 scaffold endpoint 尚未启用，已保留本地草稿。";
+    renderScaffoldStudio();
+  }
+  if (action === "clear-requests") {
+    state.scaffoldRequests = [];
+    state.scaffoldStatus = "idle";
+    state.scaffoldError = "";
+    renderScaffoldStudio();
+  }
+}
+
+function validateScaffoldRequest(data) {
+  if (!String(data.name || "").trim()) return "请输入项目名称。";
+  if (!String(data.owner || "").trim()) return "请输入负责人。";
+  if (String(data.summary || "").trim().length < 12) return "业务目标至少 12 个字符。";
+  if (String(data.acceptance || "").trim().length < 12) return "验收标准至少 12 个字符。";
+  return "";
+}
+
+function scaffoldContractPreview(request) {
+  return `${jsonBlock({
+    id: request.id,
+    name: request.name,
+    owner: request.owner,
+    target: request.target,
+    priority: request.priority,
+    status: request.status,
+    contracts: ["web.shell", "api.validation", "worker.job", "ai.tool.eval"],
+    redaction: "secrets, tokens, credential refs",
+  })}
+  <dl class="mini-kv scaffold-kv">
+    <dt>目标</dt><dd>${escapeHtml(request.summary)}</dd>
+    <dt>验收</dt><dd>${escapeHtml(request.acceptance)}</dd>
+  </dl>`;
+}
+
+function scaffoldTable(requests) {
+  return `<table class="data-table scaffold-table"><thead><tr><th>请求</th><th>范围</th><th>优先级</th><th>状态</th><th>创建时间</th></tr></thead><tbody>${requests.map((request) => `<tr>
+    <td>${titleCell(request.id, request.name, request.summary)}</td>
+    <td>${escapeHtml(request.target)}</td>
+    <td>${statusPill(request.priority)}</td>
+    <td>${statusPill(request.status)}</td>
+    <td>${date(request.created_at)}</td>
+  </tr>`).join("")}</tbody></table>`;
+}
+
+function scaffoldLoadingState() {
+  return `<section class="panel scaffold-status" role="status" aria-live="polite">
+    <span class="skeleton-line wide"></span><span class="skeleton-line"></span><span class="skeleton-line short"></span>
+  </section>`;
+}
+
+function scaffoldErrorState() {
+  return `<section class="permission-denied panel"><strong>提交失败</strong><span>${escapeHtml(state.scaffoldError)}</span></section>`;
+}
+
+function scaffoldEmptyState(title = "暂无可预览请求", help = "填写左侧表单生成第一条脚手架请求。") {
+  return `<div class="empty-state scaffold-empty"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(help)}</span></div>`;
+}
+
+function scaffoldStateCard(label, tone, help) {
+  const className = tone === "ready" ? "ok" : tone === "mock" ? "warn" : "";
+  return `<section class="panel scaffold-state-card"><h3>${escapeHtml(label)} <span class="pill ${className}">${escapeHtml(tone)}</span></h3><p class="muted">${escapeHtml(help)}</p></section>`;
 }
 
 function renderResource(type) {
@@ -3873,7 +4091,7 @@ function linkedProjects() {
 }
 
 function countFor(key) {
-  return { dashboard: "", bigscreen: "", tasks: "", identity: state.users.length, projects: state.projects.length, assets: state.assets.length, environments: state.environments.length, gitlabProfiles: state.gitlabProfiles.length, vcsOperations: state.vcsOperations.length, vcsWebhooks: state.vcsWebhooks.length, files: state.files.length, testCases: state.testCases.length, testSuites: state.testSuites.length, testRuns: state.testRuns.length, reports: state.reports.length, qualityGates: state.qualityGates.length, agents: state.agents.length, skills: state.skills.length, credentials: state.credentials.filter((row) => row.provider === "model_provider").length, modelProviders: state.modelProviders.length, workflows: state.workflows.length, workflowRuns: state.workflowRuns.length }[key] || "";
+  return { dashboard: "", bigscreen: "", tasks: "", scaffold: state.scaffoldRequests.length, identity: state.users.length, projects: state.projects.length, assets: state.assets.length, environments: state.environments.length, gitlabProfiles: state.gitlabProfiles.length, vcsOperations: state.vcsOperations.length, vcsWebhooks: state.vcsWebhooks.length, files: state.files.length, testCases: state.testCases.length, testSuites: state.testSuites.length, testRuns: state.testRuns.length, reports: state.reports.length, qualityGates: state.qualityGates.length, agents: state.agents.length, skills: state.skills.length, credentials: state.credentials.filter((row) => row.provider === "model_provider").length, modelProviders: state.modelProviders.length, workflows: state.workflows.length, workflowRuns: state.workflowRuns.length }[key] || "";
 }
 
 function collectionFor(type) {
