@@ -38,6 +38,7 @@ node apps/web-console/check-live-empty.js
 node apps/web-console/check-credential-sanitization.js
 node apps/web-console/check-integration-routes.js
 ```
+
 # OpsPilot Web Console
 
 Static browser console for the foundation service.

@@ -12,8 +12,12 @@ test("web console scaffold vertical slice", async ({ page }) => {
 
   await page.getByLabel("项目名称").fill("Playwright Smoke Scaffold");
   await page.getByLabel("负责人").fill("Frontend Engineer");
-  await page.getByLabel("业务目标").fill("Build one polished AI development scaffold vertical slice.");
-  await page.getByLabel("验收标准").fill("Responsive shell, form states, and smoke coverage are visible.");
+  await page
+    .getByLabel("业务目标")
+    .fill("Build one polished AI development scaffold vertical slice.");
+  await page
+    .getByLabel("验收标准")
+    .fill("Responsive shell, form states, and smoke coverage are visible.");
   await page.getByRole("button", { name: "生成请求" }).click();
 
   await expect(page.getByRole("button", { name: "Playwright Smoke Scaffold" })).toBeVisible();
